@@ -1,0 +1,13 @@
+project_id = "vavcekxackaoztvrsduq"
+
+[functions.create-admin]
+verify_jwt = false
+
+[functions.manage-super-admins]
+verify_jwt = false
+
+[functions.create-super-admin]
+verify_jwt = false
+
+[functions.create-tenant-admin]
+verify_jwt = false

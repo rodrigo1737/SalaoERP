@@ -1,0 +1,247 @@
+@tailwind base;
+@tailwind components;
+@tailwind utilities;
+
+@import '@fontsource/playfair-display/400.css';
+@import '@fontsource/playfair-display/500.css';
+@import '@fontsource/playfair-display/600.css';
+@import '@fontsource/playfair-display/700.css';
+@import '@fontsource/inter/300.css';
+@import '@fontsource/inter/400.css';
+@import '@fontsource/inter/500.css';
+@import '@fontsource/inter/600.css';
+
+/* MultiSoluction ERP Design System */
+@layer base {
+  :root {
+    /* Core Brand Colors - Elegant Blue & Gold */
+    --background: 210 25% 98%;
+    --foreground: 215 20% 15%;
+
+    --card: 0 0% 100%;
+    --card-foreground: 215 20% 15%;
+
+    --popover: 0 0% 100%;
+    --popover-foreground: 215 20% 15%;
+
+    /* Primary - Professional Blue */
+    --primary: 215 70% 50%;
+    --primary-foreground: 0 0% 100%;
+    --primary-soft: 215 60% 95%;
+    --primary-glow: 215 75% 60%;
+
+    /* Secondary - Cool Neutral */
+    --secondary: 210 20% 94%;
+    --secondary-foreground: 215 20% 25%;
+
+    /* Muted - Soft Gray Cool */
+    --muted: 210 15% 92%;
+    --muted-foreground: 215 10% 45%;
+
+    /* Accent - Gold */
+    --accent: 38 75% 55%;
+    --accent-foreground: 215 20% 15%;
+    --accent-soft: 38 60% 92%;
+
+    /* Status Colors */
+    --success: 142 55% 45%;
+    --success-foreground: 0 0% 100%;
+    --success-soft: 142 40% 92%;
+
+    --warning: 38 92% 50%;
+    --warning-foreground: 215 20% 15%;
+    --warning-soft: 38 70% 92%;
+
+    --destructive: 0 72% 51%;
+    --destructive-foreground: 0 0% 100%;
+    --destructive-soft: 0 50% 95%;
+
+    --info: 210 70% 55%;
+    --info-foreground: 0 0% 100%;
+    --info-soft: 210 50% 95%;
+
+    /* Appointment Status Colors */
+    --status-scheduled: 210 60% 55%;
+    --status-confirmed: 142 55% 45%;
+    --status-in-progress: 38 92% 50%;
+    --status-completed: 260 50% 55%;
+    --status-cancelled: 0 60% 55%;
+
+    /* UI Elements */
+    --border: 210 20% 88%;
+    --input: 210 20% 88%;
+    --ring: 215 70% 50%;
+
+    --radius: 0.75rem;
+
+    /* Sidebar */
+    --sidebar-background: 215 35% 12%;
+    --sidebar-foreground: 210 20% 92%;
+    --sidebar-primary: 215 70% 50%;
+    --sidebar-primary-foreground: 0 0% 100%;
+    --sidebar-accent: 215 30% 18%;
+    --sidebar-accent-foreground: 210 20% 92%;
+    --sidebar-border: 215 25% 20%;
+    --sidebar-ring: 215 70% 50%;
+
+    /* Gradients */
+    --gradient-primary: linear-gradient(135deg, hsl(215 70% 50%) 0%, hsl(215 75% 60%) 100%);
+    --gradient-accent: linear-gradient(135deg, hsl(38 75% 55%) 0%, hsl(45 80% 60%) 100%);
+    --gradient-hero: linear-gradient(135deg, hsl(215 70% 50%) 0%, hsl(38 75% 55%) 100%);
+    --gradient-card: linear-gradient(180deg, hsl(0 0% 100%) 0%, hsl(210 25% 98%) 100%);
+    --gradient-sidebar: linear-gradient(180deg, hsl(215 35% 12%) 0%, hsl(215 30% 8%) 100%);
+
+    /* Shadows */
+    --shadow-sm: 0 1px 2px 0 hsl(215 20% 15% / 0.03);
+    --shadow-md: 0 4px 6px -1px hsl(215 20% 15% / 0.05), 0 2px 4px -2px hsl(215 20% 15% / 0.05);
+    --shadow-lg: 0 10px 15px -3px hsl(215 20% 15% / 0.08), 0 4px 6px -4px hsl(215 20% 15% / 0.05);
+    --shadow-xl: 0 20px 25px -5px hsl(215 20% 15% / 0.1), 0 8px 10px -6px hsl(215 20% 15% / 0.08);
+    --shadow-glow: 0 0 20px hsl(215 70% 50% / 0.15);
+    --shadow-gold: 0 4px 14px hsl(38 75% 55% / 0.25);
+
+    /* Typography */
+    --font-display: 'Playfair Display', serif;
+    --font-body: 'Inter', sans-serif;
+  }
+
+  .dark {
+    --background: 215 20% 8%;
+    --foreground: 210 20% 92%;
+
+    --card: 215 20% 12%;
+    --card-foreground: 210 20% 92%;
+
+    --popover: 215 20% 12%;
+    --popover-foreground: 210 20% 92%;
+
+    --primary: 215 65% 55%;
+    --primary-foreground: 0 0% 100%;
+    --primary-soft: 215 35% 20%;
+
+    --secondary: 215 20% 18%;
+    --secondary-foreground: 210 20% 92%;
+
+    --muted: 215 20% 18%;
+    --muted-foreground: 210 10% 55%;
+
+    --accent: 38 70% 50%;
+    --accent-foreground: 0 0% 100%;
+
+    --destructive: 0 62% 45%;
+    --destructive-foreground: 0 0% 100%;
+
+    --border: 215 20% 20%;
+    --input: 215 20% 20%;
+    --ring: 215 65% 55%;
+
+    --sidebar-background: 215 20% 6%;
+    --sidebar-foreground: 210 20% 92%;
+    --sidebar-primary: 215 65% 55%;
+    --sidebar-primary-foreground: 0 0% 100%;
+    --sidebar-accent: 215 20% 12%;
+    --sidebar-accent-foreground: 210 20% 92%;
+    --sidebar-border: 215 20% 15%;
+    --sidebar-ring: 215 65% 55%;
+  }
+}
+
+@layer base {
+  * {
+    @apply border-border;
+  }
+
+  html {
+    scroll-behavior: smooth;
+  }
+
+  body {
+    @apply bg-background text-foreground font-body antialiased;
+  }
+
+  h1, h2, h3, h4, h5, h6 {
+    @apply font-display;
+  }
+}
+
+@layer components {
+  .glass-card {
+    @apply bg-card/80 backdrop-blur-sm border border-border/50;
+  }
+
+  .gradient-text {
+    @apply bg-clip-text text-transparent;
+    background-image: var(--gradient-hero);
+  }
+
+  .status-badge {
+    @apply inline-flex items-center px-2.5 py-0.5 rounded-full text-xs font-medium;
+  }
+
+  .status-scheduled {
+    @apply bg-info-soft text-info;
+  }
+
+  .status-confirmed {
+    @apply bg-success-soft text-success;
+  }
+
+  .status-in-progress {
+    @apply bg-warning-soft text-warning;
+  }
+
+  .status-completed {
+    @apply bg-primary-soft text-primary;
+  }
+
+  .status-cancelled {
+    @apply bg-destructive-soft text-destructive;
+  }
+}
+
+@layer utilities {
+  .animate-fade-in {
+    animation: fadeIn 0.3s ease-out;
+  }
+
+  .animate-slide-up {
+    animation: slideUp 0.4s ease-out;
+  }
+
+  .animate-scale-in {
+    animation: scaleIn 0.2s ease-out;
+  }
+
+  @keyframes fadeIn {
+    from { opacity: 0; }
+    to { opacity: 1; }
+  }
+
+  @keyframes slideUp {
+    from { opacity: 0; transform: translateY(10px); }
+    to { opacity: 1; transform: translateY(0); }
+  }
+
+  @keyframes scaleIn {
+    from { opacity: 0; transform: scale(0.95); }
+    to { opacity: 1; transform: scale(1); }
+  }
+
+  .scrollbar-thin {
+    scrollbar-width: thin;
+    scrollbar-color: hsl(var(--muted)) transparent;
+  }
+
+  .scrollbar-thin::-webkit-scrollbar {
+    width: 6px;
+    height: 6px;
+  }
+
+  .scrollbar-thin::-webkit-scrollbar-track {
+    background: transparent;
+  }
+
+  .scrollbar-thin::-webkit-scrollbar-thumb {
+    background-color: hsl(var(--muted));
+    border-radius: 3px;
+  }
+}
