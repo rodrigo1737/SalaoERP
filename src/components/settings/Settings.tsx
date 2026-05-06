@@ -7,7 +7,7 @@ import { Card, CardContent, CardDescription, CardHeader, CardTitle } from '@/com
 import { Label } from '@/components/ui/label';
 import { Input } from '@/components/ui/input';
 import { Button } from '@/components/ui/button';
-import { useState } from 'react';
+import { useEffect, useState } from 'react';
 import { supabase } from '@/integrations/supabase/client';
 import { useTenantSettings } from '@/contexts/TenantSettingsContext';
 import { toast } from 'sonner';
@@ -21,6 +21,11 @@ export function Settings() {
   const [workStart, setWorkStart] = useState<number>(settings?.working_hours_start ?? 8);
   const [workEnd,   setWorkEnd]   = useState<number>(settings?.working_hours_end   ?? 20);
   const [savingHours, setSavingHours] = useState(false);
+
+  useEffect(() => {
+    setWorkStart(settings?.working_hours_start ?? 8);
+    setWorkEnd(settings?.working_hours_end ?? 20);
+  }, [settings?.working_hours_start, settings?.working_hours_end]);
 
   const handleSaveHours = async () => {
     if (workStart >= workEnd) { toast.error('Horário de início deve ser anterior ao de encerramento.'); return; }

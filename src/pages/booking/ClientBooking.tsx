@@ -33,6 +33,7 @@ interface Service {
   duration_minutes: number;
   default_price: number;
   price_type: string;
+  break_time_minutes?: number;
 }
 
 interface Appointment {
@@ -41,6 +42,12 @@ interface Appointment {
   start_time: string;
   end_time: string;
   status: string;
+}
+
+interface ServiceProfessional {
+  service_id: string;
+  professional_id: string;
+  duration_minutes: number | null;
 }
 
 type BookingStep = 'service' | 'professional' | 'datetime' | 'confirm';
@@ -53,7 +60,9 @@ const ClientBooking: React.FC = () => {
   const [step, setStep] = useState<BookingStep>('service');
   const [services, setServices] = useState<Service[]>([]);
   const [professionals, setProfessionals] = useState<Professional[]>([]);
+  const [serviceProfessionals, setServiceProfessionals] = useState<ServiceProfessional[]>([]);
   const [existingAppointments, setExistingAppointments] = useState<Appointment[]>([]);
+  const [workingHours, setWorkingHours] = useState({ start: 8, end: 20 });
   const [loading, setLoading] = useState(true);
   const [submitting, setSubmitting] = useState(false);
 
@@ -76,7 +85,7 @@ const ClientBooking: React.FC = () => {
       // Fetch services available for online booking
       const { data: servData } = await supabase
         .from('services')
-        .select('id, name, description, category, duration_minutes, default_price, price_type')
+        .select('id, name, description, category, duration_minutes, break_time_minutes, default_price, price_type')
         .eq('tenant_id', tenant.id)
         .eq('is_active', true)
         .eq('allow_online_booking', true)
@@ -96,6 +105,28 @@ const ClientBooking: React.FC = () => {
 
       if (profData) {
         setProfessionals(profData);
+      }
+
+      const { data: serviceProfessionalData } = await supabase
+        .from('service_professionals')
+        .select('service_id, professional_id, duration_minutes')
+        .eq('tenant_id', tenant.id);
+
+      if (serviceProfessionalData) {
+        setServiceProfessionals(serviceProfessionalData);
+      }
+
+      const { data: settingsData } = await supabase
+        .from('tenant_settings')
+        .select('working_hours_start, working_hours_end')
+        .eq('tenant_id', tenant.id)
+        .maybeSingle();
+
+      if (settingsData?.working_hours_start != null && settingsData?.working_hours_end != null) {
+        setWorkingHours({
+          start: settingsData.working_hours_start,
+          end: settingsData.working_hours_end,
+        });
       }
 
       setLoading(false);
@@ -159,8 +190,8 @@ const ClientBooking: React.FC = () => {
     if (!selectedDate || !selectedProfessional || !selectedService) return [];
 
     const slots: string[] = [];
-    const startHour = 8; // 08:00
-    const endHour = 20; // 20:00
+    const startHour = workingHours.start;
+    const endHour = workingHours.end;
     const slotInterval = 30; // 30 min intervals
 
     const now = new Date();
@@ -169,10 +200,15 @@ const ClientBooking: React.FC = () => {
     for (let hour = startHour; hour < endHour; hour++) {
       for (let minute = 0; minute < 60; minute += slotInterval) {
         const slotStart = setMinutes(setHours(selectedDate, hour), minute);
-        const slotEnd = addMinutes(slotStart, selectedService.duration_minutes);
+        const configuredDuration = serviceProfessionals.find(sp =>
+          sp.service_id === selectedService.id && sp.professional_id === selectedProfessional.id
+        )?.duration_minutes;
+        const duration = configuredDuration || selectedService.duration_minutes;
+        const slotEnd = addMinutes(slotStart, duration + (selectedService.break_time_minutes || 0));
+        const workdayEnd = setMinutes(setHours(selectedDate, endHour), 0);
 
         // Skip past times for today
-        if (isSelectedToday && isBefore(slotStart, now)) {
+        if ((isSelectedToday && isBefore(slotStart, now)) || slotEnd > workdayEnd) {
           continue;
         }
 
@@ -195,10 +231,23 @@ const ClientBooking: React.FC = () => {
     }
 
     return slots;
-  }, [selectedDate, selectedProfessional, selectedService, existingAppointments]);
+  }, [selectedDate, selectedProfessional, selectedService, existingAppointments, serviceProfessionals, workingHours]);
+
+  const professionalsForSelectedService = useMemo(() => {
+    if (!selectedService) return professionals;
+    const linkedProfessionalIds = serviceProfessionals
+      .filter(sp => sp.service_id === selectedService.id)
+      .map(sp => sp.professional_id);
+
+    if (linkedProfessionalIds.length === 0) return professionals;
+    return professionals.filter(prof => linkedProfessionalIds.includes(prof.id));
+  }, [professionals, selectedService, serviceProfessionals]);
 
   const handleSelectService = (service: Service) => {
     setSelectedService(service);
+    setSelectedProfessional(null);
+    setSelectedDate(undefined);
+    setSelectedTime(null);
     setStep('professional');
   };
 
@@ -223,7 +272,30 @@ const ClientBooking: React.FC = () => {
     try {
       const [hours, minutes] = selectedTime.split(':').map(Number);
       const startTime = setMinutes(setHours(selectedDate, hours), minutes);
-      const endTime = addMinutes(startTime, selectedService.duration_minutes);
+      const configuredDuration = serviceProfessionals.find(sp =>
+        sp.service_id === selectedService.id && sp.professional_id === selectedProfessional.id
+      )?.duration_minutes;
+      const duration = configuredDuration || selectedService.duration_minutes;
+      const totalBlockedMinutes = duration + (selectedService.break_time_minutes || 0);
+      const endTime = addMinutes(startTime, totalBlockedMinutes);
+
+      const { data: conflicts } = await supabase
+        .from('appointments')
+        .select('id')
+        .eq('tenant_id', tenant.id)
+        .eq('professional_id', selectedProfessional.id)
+        .in('status', ['scheduled', 'confirmed', 'in_progress', 'pre_scheduled'])
+        .lt('start_time', endTime.toISOString())
+        .gt('end_time', startTime.toISOString());
+
+      if (conflicts && conflicts.length > 0) {
+        toast.error('Horário indisponível', {
+          description: 'Outro agendamento foi criado neste intervalo. Escolha outro horário.',
+        });
+        await fetchAppointments();
+        setSubmitting(false);
+        return;
+      }
 
       const { error } = await supabase.from('appointments').insert({
         tenant_id: tenant.id,
@@ -378,7 +450,7 @@ const ClientBooking: React.FC = () => {
           </CardHeader>
           <CardContent>
             <div className="grid gap-3 sm:grid-cols-2">
-              {professionals.map(prof => (
+              {professionalsForSelectedService.map(prof => (
                 <button
                   key={prof.id}
                   onClick={() => handleSelectProfessional(prof)}
@@ -395,6 +467,11 @@ const ClientBooking: React.FC = () => {
                   <ArrowRight className="h-5 w-5 text-muted-foreground" />
                 </button>
               ))}
+              {professionalsForSelectedService.length === 0 && (
+                <p className="text-center text-muted-foreground py-8 sm:col-span-2">
+                  Nenhum profissional disponível para este serviço.
+                </p>
+              )}
             </div>
           </CardContent>
         </Card>
@@ -505,7 +582,11 @@ const ClientBooking: React.FC = () => {
                 </div>
                 <div className="flex justify-between">
                   <span className="text-muted-foreground">Duração:</span>
-                  <span className="font-medium">{selectedService.duration_minutes} minutos</span>
+                  <span className="font-medium">
+                    {(serviceProfessionals.find(sp =>
+                      sp.service_id === selectedService.id && sp.professional_id === selectedProfessional.id
+                    )?.duration_minutes || selectedService.duration_minutes)} minutos
+                  </span>
                 </div>
                 <div className="border-t pt-3 flex justify-between">
                   <span className="text-muted-foreground">Valor:</span>

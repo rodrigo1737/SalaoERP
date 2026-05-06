@@ -49,11 +49,16 @@ export const ClientAuthProvider: React.FC<{ children: React.ReactNode; tenantId?
 
   const fetchClientAccount = useCallback(async (userId: string) => {
     try {
-      const { data, error } = await supabase
+      let query = supabase
         .from('client_accounts')
         .select('*')
-        .eq('user_id', userId)
-        .maybeSingle();
+        .eq('user_id', userId);
+
+      if (tenantId) {
+        query = query.eq('tenant_id', tenantId);
+      }
+
+      const { data, error } = await query.maybeSingle();
 
       if (error) {
         console.error('Error fetching client account:', error);
@@ -65,7 +70,7 @@ export const ClientAuthProvider: React.FC<{ children: React.ReactNode; tenantId?
       console.error('Error in fetchClientAccount:', error);
       return null;
     }
-  }, []);
+  }, [tenantId]);
 
   const refreshClientAccount = useCallback(async () => {
     if (user) {
@@ -200,6 +205,7 @@ export const ClientAuthProvider: React.FC<{ children: React.ReactNode; tenantId?
           .from('client_accounts')
           .select('id')
           .eq('user_id', authData.user.id)
+          .eq('tenant_id', signupTenantId)
           .single();
 
         if (accountData) {

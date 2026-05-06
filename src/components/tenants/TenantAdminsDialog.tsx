@@ -21,6 +21,7 @@ import { toast } from 'sonner';
 import { Users, Key, Loader2, Eye, EyeOff, CheckCircle2 } from 'lucide-react';
 import { format } from 'date-fns';
 import { ptBR } from 'date-fns/locale';
+import { getSupabaseErrorMessage } from '@/lib/supabaseErrors';
 
 interface Tenant {
   id: string;
@@ -59,17 +60,15 @@ export function TenantAdminsDialog({ tenant, open, onOpenChange }: TenantAdminsD
         body: { action: 'list', tenantId: tenant.id }
       });
 
-      if (error) throw error;
-      
-      if (data?.error) {
-        toast.error(data.error);
+      if (error || data?.error) {
+        toast.error(await getSupabaseErrorMessage(error, data, 'Erro ao carregar administradores'));
         return;
       }
 
       setAdmins(data?.admins || []);
     } catch (error) {
       console.error('Error fetching admins:', error);
-      toast.error('Erro ao carregar administradores');
+      toast.error(await getSupabaseErrorMessage(error, undefined, 'Erro ao carregar administradores'));
     } finally {
       setLoading(false);
     }
@@ -95,15 +94,14 @@ export function TenantAdminsDialog({ tenant, open, onOpenChange }: TenantAdminsD
       const { data, error } = await supabase.functions.invoke('manage-tenant-admins', {
         body: { 
           action: 'reset_password', 
+          tenantId: tenant?.id,
           userId: selectedAdmin.id, 
           newPassword 
         }
       });
 
-      if (error) throw error;
-      
-      if (data?.error) {
-        toast.error(data.error);
+      if (error || data?.error) {
+        toast.error(await getSupabaseErrorMessage(error, data, 'Erro ao alterar senha'));
         return;
       }
 
@@ -111,7 +109,7 @@ export function TenantAdminsDialog({ tenant, open, onOpenChange }: TenantAdminsD
       toast.success('Senha alterada com sucesso!');
     } catch (error) {
       console.error('Error resetting password:', error);
-      toast.error('Erro ao alterar senha');
+      toast.error(await getSupabaseErrorMessage(error, undefined, 'Erro ao alterar senha'));
     } finally {
       setResettingPassword(false);
     }

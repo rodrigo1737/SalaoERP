@@ -39,14 +39,15 @@ interface MenuItem {
   label: string;
   icon: React.ComponentType<{ className?: string }>;
   adminOnly?: boolean;
+  permission?: string;
   children?: MenuItem[];
 }
 
 // Salon-specific menu items (not shown for super admins)
 const salonMenuItems: MenuItem[] = [
   { id: 'dashboard', label: 'Dashboard', icon: Home, adminOnly: true },
-  { id: 'agenda', label: 'Agenda', icon: Calendar, adminOnly: false },
-  { id: 'clients', label: 'Clientes', icon: Users, adminOnly: true },
+  { id: 'agenda', label: 'Agenda', icon: Calendar, adminOnly: false, permission: 'view_schedule' },
+  { id: 'clients', label: 'Clientes', icon: Users, adminOnly: true, permission: 'view_clients' },
   { id: 'professionals', label: 'Profissionais', icon: UserCircle, adminOnly: true },
   { id: 'services', label: 'Serviços', icon: Scissors, adminOnly: true },
   { id: 'products', label: 'Produtos', icon: ShoppingBag, adminOnly: true },
@@ -61,9 +62,9 @@ const salonMenuItems: MenuItem[] = [
       { id: 'stock-movements', label: 'Movimentações', icon: ArrowRightLeft, adminOnly: true },
     ]
   },
-  { id: 'cashier', label: 'Caixa', icon: DollarSign, adminOnly: true },
+  { id: 'cashier', label: 'Caixa', icon: DollarSign, adminOnly: true, permission: 'manage_cash_flow' },
   { id: 'reports', label: 'Relatórios', icon: BarChart3, adminOnly: true },
-  { id: 'commissions', label: 'Comissões', icon: DollarSign, adminOnly: false },
+  { id: 'commissions', label: 'Comissões', icon: DollarSign, adminOnly: false, permission: 'view_commissions' },
 ];
 
 // Super Admin specific menu items
@@ -77,7 +78,7 @@ export function Sidebar({ currentPage, onNavigate }: SidebarProps) {
   const [mobileOpen, setMobileOpen] = useState(false);
   const [expandedMenus, setExpandedMenus] = useState<string[]>(['stock']); // Stock expanded by default
   const navigate = useNavigate();
-  const { user, userRole, isSuperAdmin, currentTenant, signOut } = useAuth();
+  const { user, userRole, isSuperAdmin, currentTenant, signOut, hasPermission } = useAuth();
   const { settings: tenantSettings } = useTenantSettings();
 
   const handleLogout = async () => {
@@ -101,6 +102,17 @@ export function Sidebar({ currentPage, onNavigate }: SidebarProps) {
   const NavContent = () => {
     // Use super admin menu for super admins, salon menu for others
     const menuItems = isSuperAdmin ? superAdminMenuItems : salonMenuItems;
+
+    const canSeeItem = (item: MenuItem) => {
+      if (isSuperAdmin) return true;
+      if (userRole === 'admin') return true;
+      if (item.id === 'settings') return true;
+      if (item.adminOnly && !item.permission) return false;
+      if (item.permission) {
+        return hasPermission(item.permission) || (item.permission === 'view_schedule' && hasPermission('edit_schedule'));
+      }
+      return !item.adminOnly;
+    };
 
     return (
       <div className="flex flex-col h-full">
@@ -159,10 +171,7 @@ export function Sidebar({ currentPage, onNavigate }: SidebarProps) {
 
         {/* Navigation */}
         <nav className="flex-1 py-6 px-3 space-y-1 overflow-y-auto scrollbar-thin">
-          {(isSuperAdmin 
-            ? menuItems 
-            : menuItems.filter((item: MenuItem) => !item.adminOnly || userRole === 'admin')
-          ).map((item) => {
+          {(isSuperAdmin ? menuItems : menuItems.filter(canSeeItem)).map((item) => {
             const Icon = item.icon;
             const isActive = currentPage === item.id || isChildActive(item);
             const hasChildren = item.children && item.children.length > 0;
@@ -221,7 +230,7 @@ export function Sidebar({ currentPage, onNavigate }: SidebarProps) {
                         className="overflow-hidden"
                       >
                         <div className="ml-4 pl-4 border-l border-sidebar-border/50 mt-1 space-y-1">
-                          {item.children!.filter(child => !child.adminOnly || userRole === 'admin').map((child) => {
+                          {item.children!.filter(canSeeItem).map((child) => {
                             const ChildIcon = child.icon;
                             const isChildActive = currentPage === child.id;
                             

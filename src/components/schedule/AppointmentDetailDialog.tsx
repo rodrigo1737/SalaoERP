@@ -80,6 +80,7 @@ interface AppointmentDetailDialogProps {
   professionals: Professional[];
   services: Service[];
   isAdmin: boolean;
+  canEditAppointment: boolean;
   onUpdateStatus: (status: Appointment['status']) => void;
   onSave: (data: { 
     total_value: number; 
@@ -111,6 +112,7 @@ export function AppointmentDetailDialog({
   professionals,
   services,
   isAdmin,
+  canEditAppointment,
   onUpdateStatus,
   onSave,
   onOpenCloseBill,
@@ -320,7 +322,7 @@ export function AppointmentDetailDialog({
 
   if (!appointment) return null;
 
-  const canEdit = appointment.status !== 'completed' && appointment.status !== 'cancelled';
+  const canEdit = canEditAppointment && appointment.status !== 'completed' && appointment.status !== 'cancelled';
   const totalValue = serviceRows.reduce((sum, row) => sum + (parseFloat(row.value) || 0), 0);
 
   return (

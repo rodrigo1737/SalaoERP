@@ -73,14 +73,16 @@ export const AuthProvider: React.FC<{ children: React.ReactNode }> = ({ children
         .eq('id', userId)
         .maybeSingle();
 
-      if (profileData?.tenant_id) {
-        setTenantId(profileData.tenant_id);
+      const profileTenantId = profileData?.tenant_id ?? null;
+
+      if (profileTenantId) {
+        setTenantId(profileTenantId);
         
         // Fetch tenant info including subscription_due_date
         const { data: tenantData } = await supabase
           .from('tenants')
           .select('id, name, status, subscription_due_date')
-          .eq('id', profileData.tenant_id)
+          .eq('id', profileTenantId)
           .maybeSingle();
 
         if (tenantData) {
@@ -112,11 +114,18 @@ export const AuthProvider: React.FC<{ children: React.ReactNode }> = ({ children
       }
 
       // Fetch user role
-      const { data: roleData } = await supabase
+      let roleQuery = supabase
         .from('user_roles')
         .select('role')
-        .eq('user_id', userId)
-        .maybeSingle();
+        .eq('user_id', userId);
+
+      if (profileTenantId) {
+        roleQuery = roleQuery.eq('tenant_id', profileTenantId);
+      } else if (!isSuper) {
+        roleQuery = roleQuery.is('tenant_id', null);
+      }
+
+      const { data: roleData } = await roleQuery.maybeSingle();
 
       if (roleData) {
         setUserRole(roleData.role as UserRole);
@@ -125,21 +134,34 @@ export const AuthProvider: React.FC<{ children: React.ReactNode }> = ({ children
       }
 
       // Fetch permissions
-      const { data: permData } = await supabase
+      let permQuery = supabase
         .from('user_permissions')
         .select('permission')
         .eq('user_id', userId);
+
+      if (profileTenantId) {
+        permQuery = permQuery.eq('tenant_id', profileTenantId);
+      } else if (!isSuper) {
+        permQuery = permQuery.is('tenant_id', null);
+      }
+
+      const { data: permData } = await permQuery;
 
       if (permData) {
         setUserPermissions(permData.map(p => p.permission));
       }
 
       // Fetch professional linked to this user
-      const { data: profData } = await supabase
+      let profQuery = supabase
         .from('professionals')
         .select('id, name, nickname')
-        .eq('user_id', userId)
-        .maybeSingle();
+        .eq('user_id', userId);
+
+      if (profileTenantId) {
+        profQuery = profQuery.eq('tenant_id', profileTenantId);
+      }
+
+      const { data: profData } = await profQuery.maybeSingle();
 
       if (profData) {
         setCurrentProfessional(profData);

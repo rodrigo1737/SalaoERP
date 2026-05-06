@@ -350,7 +350,11 @@ export const StockProvider: React.FC<{ children: ReactNode }> = ({ children }) =
     }
 
     // Delete existing and insert new
-    await supabase.from('service_products').delete().eq('service_id', serviceId);
+    await supabase
+      .from('service_products')
+      .delete()
+      .eq('service_id', serviceId)
+      .eq('tenant_id', tenantId);
 
     if (items.length > 0) {
       await supabase.from('service_products').insert(

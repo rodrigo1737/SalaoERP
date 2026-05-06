@@ -101,9 +101,11 @@ export function Commissions() {
   const isAdmin = userRole === 'admin';
 
   // Filter commissions - professionals only see their own
-  const visibleCommissions = isAdmin || !currentProfessional
+  const visibleCommissions = isAdmin
     ? commissions
-    : commissions.filter(c => c.professional_id === currentProfessional.id);
+    : currentProfessional
+      ? commissions.filter(c => c.professional_id === currentProfessional.id)
+      : [];
 
   // Apply period filter
   const periodFilteredCommissions = useMemo(() => {
@@ -121,9 +123,11 @@ export function Commissions() {
   });
 
   // Filter professionals for display - professionals only see themselves
-  const visibleProfessionals = isAdmin || !currentProfessional
+  const visibleProfessionals = isAdmin
     ? professionals
-    : professionals.filter(p => p.id === currentProfessional.id);
+    : currentProfessional
+      ? professionals.filter(p => p.id === currentProfessional.id)
+      : [];
 
   // Group by professional using period-filtered commissions
   const commissionsByProfessional = visibleProfessionals.map(prof => {

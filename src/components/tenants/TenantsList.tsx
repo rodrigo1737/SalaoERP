@@ -33,6 +33,7 @@ import { Plus, Pencil, Building2, Users, AlertTriangle, CheckCircle, Lock, Eye, 
 import { TenantAdminsDialog } from './TenantAdminsDialog';
 import { format } from 'date-fns';
 import { ptBR } from 'date-fns/locale';
+import { getSupabaseErrorMessage } from '@/lib/supabaseErrors';
 
 interface Tenant {
   id: string;
@@ -174,10 +175,8 @@ export function TenantsList() {
         body: { action: 'add', email }
       });
 
-      if (error) throw error;
-      
-      if (data?.error) {
-        toast.error(data.error);
+      if (error || data?.error) {
+        toast.error(await getSupabaseErrorMessage(error, data, 'Erro ao adicionar super admin'));
         return;
       }
 
@@ -187,7 +186,7 @@ export function TenantsList() {
       fetchSuperAdmins();
     } catch (error) {
       console.error('Error adding super admin:', error);
-      toast.error('Erro ao adicionar super admin');
+      toast.error(await getSupabaseErrorMessage(error, undefined, 'Erro ao adicionar super admin'));
     } finally {
       setAddingSuperAdmin(false);
     }
@@ -203,10 +202,8 @@ export function TenantsList() {
         body: { action: 'remove', email }
       });
 
-      if (error) throw error;
-      
-      if (data?.error) {
-        toast.error(data.error);
+      if (error || data?.error) {
+        toast.error(await getSupabaseErrorMessage(error, data, 'Erro ao remover super admin'));
         return;
       }
 
@@ -214,7 +211,7 @@ export function TenantsList() {
       fetchSuperAdmins();
     } catch (error) {
       console.error('Error removing super admin:', error);
-      toast.error('Erro ao remover super admin');
+      toast.error(await getSupabaseErrorMessage(error, undefined, 'Erro ao remover super admin'));
     }
   };
 
@@ -324,10 +321,8 @@ export function TenantsList() {
         }
       });
 
-      if (error) throw error;
-      
-      if (data?.error) {
-        toast.error(data.error);
+      if (error || data?.error) {
+        toast.error(await getSupabaseErrorMessage(error, data, 'Erro ao criar administrador'));
         return;
       }
 
@@ -339,7 +334,7 @@ export function TenantsList() {
       toast.success('Administrador criado com sucesso!');
     } catch (error) {
       console.error('Error creating tenant admin:', error);
-      toast.error('Erro ao criar administrador');
+      toast.error(await getSupabaseErrorMessage(error, undefined, 'Erro ao criar administrador'));
     } finally {
       setCreatingAdmin(false);
     }

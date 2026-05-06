@@ -12,6 +12,7 @@ import { Dialog, DialogContent, DialogDescription, DialogHeader, DialogTitle, Di
 import { useToast } from '@/hooks/use-toast';
 import { ArrowLeft, UserPlus, Shield, Loader2, Trash2, Edit } from 'lucide-react';
 import { validatePassword, getPasswordRequirementsMessage } from '@/lib/passwordValidation';
+import { getSupabaseErrorMessage } from '@/lib/supabaseErrors';
 
 interface Professional {
   id: string;
@@ -31,7 +32,7 @@ const PERMISSIONS = [
 
 const Admin: React.FC = () => {
   const navigate = useNavigate();
-  const { userRole, loading: authLoading } = useAuth();
+  const { userRole, tenantId, loading: authLoading } = useAuth();
   const { toast } = useToast();
   
   const [professionals, setProfessionals] = useState<Professional[]>([]);
@@ -60,18 +61,25 @@ const Admin: React.FC = () => {
   }, [userRole, authLoading, navigate, toast]);
 
   useEffect(() => {
-    if (userRole === 'admin') {
+    if (userRole === 'admin' && tenantId) {
       fetchProfessionals();
     }
-  }, [userRole]);
+  }, [userRole, tenantId]);
 
   const fetchProfessionals = async () => {
+    if (!tenantId) {
+      setProfessionals([]);
+      setLoading(false);
+      return;
+    }
+
     try {
       // Get all profiles with professional role
       const { data: rolesData, error: rolesError } = await supabase
         .from('user_roles')
         .select('user_id')
-        .eq('role', 'professional');
+        .eq('role', 'professional')
+        .eq('tenant_id', tenantId);
 
       if (rolesError) throw rolesError;
 
@@ -87,7 +95,8 @@ const Admin: React.FC = () => {
       const { data: profilesData, error: profilesError } = await supabase
         .from('profiles')
         .select('*')
-        .in('id', professionalIds);
+        .in('id', professionalIds)
+        .eq('tenant_id', tenantId);
 
       if (profilesError) throw profilesError;
 
@@ -95,7 +104,8 @@ const Admin: React.FC = () => {
       const { data: permissionsData, error: permissionsError } = await supabase
         .from('user_permissions')
         .select('user_id, permission')
-        .in('user_id', professionalIds);
+        .in('user_id', professionalIds)
+        .eq('tenant_id', tenantId);
 
       if (permissionsError) throw permissionsError;
 
@@ -124,6 +134,15 @@ const Admin: React.FC = () => {
   };
 
   const handleAddProfessional = async () => {
+    if (!tenantId) {
+      toast({
+        variant: "destructive",
+        title: "Erro",
+        description: "Tenant não identificado",
+      });
+      return;
+    }
+
     if (!newProfessional.email || !newProfessional.password || !newProfessional.fullName) {
       toast({
         variant: "destructive",
@@ -147,46 +166,18 @@ const Admin: React.FC = () => {
     setIsSubmitting(true);
 
     try {
-      // Create user via Supabase Auth
-      const { data: authData, error: authError } = await supabase.auth.signUp({
-        email: newProfessional.email,
-        password: newProfessional.password,
-        options: {
-          emailRedirectTo: `${window.location.origin}/`,
-          data: {
-            full_name: newProfessional.fullName,
-          },
+      const { data, error } = await supabase.functions.invoke('create-professional-access', {
+        body: {
+          tenantId,
+          email: newProfessional.email,
+          password: newProfessional.password,
+          fullName: newProfessional.fullName,
+          permissions: newProfessional.permissions,
         },
       });
 
-      if (authError) throw authError;
-
-      if (!authData.user) {
-        throw new Error('Usuário não foi criado');
-      }
-
-      // Add professional role
-      const { error: roleError } = await supabase
-        .from('user_roles')
-        .insert({
-          user_id: authData.user.id,
-          role: 'professional',
-        });
-
-      if (roleError) throw roleError;
-
-      // Add permissions
-      if (newProfessional.permissions.length > 0) {
-        const permissionsToInsert = newProfessional.permissions.map(permission => ({
-          user_id: authData.user!.id,
-          permission: permission as 'view_schedule' | 'edit_schedule' | 'view_clients' | 'view_commissions' | 'manage_cash_flow',
-        }));
-
-        const { error: permError } = await supabase
-          .from('user_permissions')
-          .insert(permissionsToInsert);
-
-        if (permError) throw permError;
+      if (error || data?.error) {
+        throw new Error(await getSupabaseErrorMessage(error, data, "Não foi possível adicionar o profissional"));
       }
 
       toast({
@@ -204,10 +195,11 @@ const Admin: React.FC = () => {
       fetchProfessionals();
     } catch (error: any) {
       console.error('Error adding professional:', error);
+      const message = await getSupabaseErrorMessage(error, undefined, "Não foi possível adicionar o profissional");
       toast({
         variant: "destructive",
         title: "Erro ao adicionar",
-        description: error.message || "Não foi possível adicionar o profissional",
+        description: message,
       });
     } finally {
       setIsSubmitting(false);
@@ -224,13 +216,15 @@ const Admin: React.FC = () => {
       await supabase
         .from('user_permissions')
         .delete()
-        .eq('user_id', selectedProfessional.id);
+        .eq('user_id', selectedProfessional.id)
+        .eq('tenant_id', tenantId);
 
       // Add new permissions
       if (selectedProfessional.permissions.length > 0) {
         const permissionsToInsert = selectedProfessional.permissions.map(permission => ({
           user_id: selectedProfessional.id,
           permission: permission as 'view_schedule' | 'edit_schedule' | 'view_clients' | 'view_commissions' | 'manage_cash_flow',
+          tenant_id: tenantId,
         }));
 
         const { error } = await supabase
@@ -269,7 +263,8 @@ const Admin: React.FC = () => {
       const { error } = await supabase
         .from('user_roles')
         .delete()
-        .eq('user_id', professional.id);
+        .eq('user_id', professional.id)
+        .eq('tenant_id', tenantId);
 
       if (error) throw error;
 

@@ -1,0 +1,13 @@
+project_id = "salaoerp"
+
+[functions.create-tenant-admin]
+verify_jwt = true
+
+[functions.create-professional-access]
+verify_jwt = true
+
+[functions.manage-tenant-admins]
+verify_jwt = true
+
+[functions.manage-super-admins]
+verify_jwt = true

@@ -88,6 +88,7 @@ const ClientAppointments: React.FC = () => {
           professional:professionals(name, nickname, photo_url)
         `)
         .eq('client_user_id', user.id)
+        .eq('tenant_id', tenant.id)
         .order('start_time', { ascending: false });
 
       if (error) {
@@ -118,6 +119,7 @@ const ClientAppointments: React.FC = () => {
       .from('appointments')
       .update({ status: 'cancelled' })
       .eq('id', appointmentId)
+      .eq('tenant_id', tenant.id)
       .eq('client_user_id', user?.id);
 
     if (error) {

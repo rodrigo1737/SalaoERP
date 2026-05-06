@@ -57,6 +57,7 @@ import { useStableData } from '@/context/StableDataContext';
 import { useAuth } from '@/contexts/AuthContext';
 import { supabase } from '@/integrations/supabase/client';
 import { validatePassword, getPasswordRequirementsMessage } from '@/lib/passwordValidation';
+import { getSupabaseErrorMessage } from '@/lib/supabaseErrors';
 
 const professionalTypes = [
   { value: 'owner', label: 'Proprietário' },
@@ -227,42 +228,33 @@ export function ProfessionalsList() {
 
       // Create user account if access is enabled
       if (createAccess && formEmail && formPassword && !editingProfessional?.user_id) {
-        const { data: authData, error: authError } = await supabase.auth.signUp({
-          email: formEmail,
-          password: formPassword,
-          options: {
-            emailRedirectTo: `${window.location.origin}/`,
-            data: {
-              full_name: formName,
-            },
-          },
-        });
-
-        if (authError) {
-          toast({ variant: "destructive", title: "Erro ao criar usuário", description: authError.message });
+        if (!tenantId) {
+          toast({ variant: "destructive", title: "Erro", description: "Tenant não identificado" });
           setIsSubmitting(false);
           return;
         }
 
-        userId = authData.user?.id;
+        const { data, error } = await supabase.functions.invoke('create-professional-access', {
+          body: {
+            tenantId,
+            email: formEmail,
+            password: formPassword,
+            fullName: formName,
+            permissions: ['view_schedule', 'view_commissions'],
+          },
+        });
 
-        if (userId && tenantId) {
-          // Add professional role with tenant_id
-          await supabase.from('user_roles').insert({
-            user_id: userId,
-            role: 'professional',
-            tenant_id: tenantId,
+        if (error || data?.error) {
+          toast({
+            variant: "destructive",
+            title: "Erro ao criar usuário",
+            description: await getSupabaseErrorMessage(error, data, "Não foi possível criar o acesso"),
           });
-
-          // Add permissions for schedule and commissions with tenant_id
-          await supabase.from('user_permissions').insert([
-            { user_id: userId, permission: 'view_schedule', tenant_id: tenantId },
-            { user_id: userId, permission: 'view_commissions', tenant_id: tenantId },
-          ]);
-
-          // Update profile with tenant_id
-          await supabase.from('profiles').update({ tenant_id: tenantId }).eq('id', userId);
+          setIsSubmitting(false);
+          return;
         }
+
+        userId = data?.userId;
       }
 
       if (editingProfessional) {

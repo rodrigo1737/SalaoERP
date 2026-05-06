@@ -31,7 +31,7 @@ const BookingLayout: React.FC = () => {
         // Fetch tenant by booking slug
         const { data: tenantData, error: tenantError } = await supabase
           .from('tenants')
-          .select('id, name, booking_slug')
+          .select('id, name, booking_slug, subscription_due_date')
           .eq('booking_slug', slug)
           .eq('status', 'active')
           .maybeSingle();
@@ -47,6 +47,19 @@ const BookingLayout: React.FC = () => {
           setError('Salão não encontrado ou indisponível');
           setLoading(false);
           return;
+        }
+
+        if (tenantData.subscription_due_date) {
+          const today = new Date();
+          today.setHours(0, 0, 0, 0);
+          const dueDate = new Date(tenantData.subscription_due_date);
+          dueDate.setHours(0, 0, 0, 0);
+
+          if (dueDate < today) {
+            setError('Agendamento online indisponível no momento');
+            setLoading(false);
+            return;
+          }
         }
 
         // Fetch tenant settings for logo/colors

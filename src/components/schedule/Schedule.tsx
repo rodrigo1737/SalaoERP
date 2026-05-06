@@ -101,9 +101,11 @@ export function Schedule() {
     timeSlots.push(`${String(hour).padStart(2, '0')}:30`);
   }
   const { registerSale, registerServiceConsumption } = useStock();
-  const { userRole, currentProfessional, loading: authLoading } = useAuth();
+  const { userRole, currentProfessional, loading: authLoading, hasPermission } = useAuth();
   const { toast } = useToast();
   const isAdmin = userRole === 'admin';
+  const canViewSchedule = isAdmin || hasPermission('view_schedule') || hasPermission('edit_schedule');
+  const canEditSchedule = isAdmin || hasPermission('edit_schedule');
   
   // Filter professionals - if user is a professional, show only their column
   const visibleProfessionals = isAdmin 
@@ -189,6 +191,7 @@ export function Schedule() {
   };
 
   const handleSlotClick = (time: string, professionalId: string) => {
+    if (!canEditSchedule) return;
     // Allow creating new appointment on any slot (even if there are existing appointments)
     setSelectedSlot({ time, professionalId });
     setFormClient('');
@@ -199,6 +202,7 @@ export function Schedule() {
   };
 
   const handleCreateAppointment = async () => {
+    if (!canEditSchedule) return;
     if (!selectedSlot || !formClient || !formService || !formTime) return;
 
     const client = clients.find(c => c.id === formClient);
@@ -230,6 +234,7 @@ export function Schedule() {
   };
 
   const handleUpdateStatus = async (newStatus: Appointment['status']) => {
+    if (!canEditSchedule) return;
     if (!selectedAppointment) return;
     await updateAppointment(selectedAppointment.id, { status: newStatus, total_value: parseFloat(editValue) || selectedAppointment.total_value });
     setSelectedAppointment({ ...selectedAppointment, status: newStatus });
@@ -295,13 +300,16 @@ export function Schedule() {
     };
     
     // Complete appointment with proper payment method
-    await completeAppointment(selectedAppointment.id, paymentMethodMap[selectedPaymentMethod]);
+    const transactionId = await completeAppointment(selectedAppointment.id, paymentMethodMap[selectedPaymentMethod], {
+      total_value: totalValue,
+      notes,
+    });
     
     // ETAPA 3: Baixa automática de estoque para produtos vendidos
     const productItems = billItems.filter(item => item.type === 'product' && item.productId);
     for (const item of productItems) {
       if (item.productId) {
-        await registerSale(item.productId, item.quantity, item.unitPrice);
+        await registerSale(item.productId, item.quantity, item.unitPrice, transactionId || undefined);
       }
     }
     
@@ -358,6 +366,17 @@ export function Schedule() {
         <h1 className="text-3xl font-display font-bold text-foreground mb-4">Agenda</h1>
         <Card className="p-12 text-center">
           <p className="text-muted-foreground">Cadastre profissionais para visualizar a agenda</p>
+        </Card>
+      </div>
+    );
+  }
+
+  if (!canViewSchedule) {
+    return (
+      <div className="p-6 lg:p-8">
+        <h1 className="text-3xl font-display font-bold text-foreground mb-4">Agenda</h1>
+        <Card className="p-12 text-center">
+          <p className="text-muted-foreground">Você não tem permissão para visualizar a agenda.</p>
         </Card>
       </div>
     );
@@ -437,12 +456,12 @@ export function Schedule() {
                           key={professional.id}
                           className={cn(
                             "relative border-l border-border/50 min-h-[48px]",
-                            !hasAppointmentsStarting && "hover:bg-primary/5 cursor-pointer transition-colors"
+                            !hasAppointmentsStarting && canEditSchedule && "hover:bg-primary/5 cursor-pointer transition-colors"
                           )}
-                          onClick={() => !hasAppointmentsStarting && handleSlotClick(time, professional.id)}
+                          onClick={() => !hasAppointmentsStarting && canEditSchedule && handleSlotClick(time, professional.id)}
                         >
                           {/* Thin clickable strip for new appointment - only show when there are appointments */}
-                          {hasAppointmentsStarting && (
+                          {hasAppointmentsStarting && canEditSchedule && (
                             <div 
                               className="absolute right-0 top-0 bottom-0 w-4 hover:bg-primary/20 cursor-pointer transition-colors z-20 flex items-center justify-center group border-l border-dashed border-transparent hover:border-primary/30"
                               onClick={(e) => {
@@ -615,8 +634,10 @@ export function Schedule() {
         professionals={professionals}
         services={services}
         isAdmin={isAdmin}
+        canEditAppointment={canEditSchedule}
         onUpdateStatus={handleUpdateStatus}
         onSave={async (data) => {
+          if (!canEditSchedule) return;
           if (!selectedAppointment) return;
           await updateAppointment(selectedAppointment.id, {
             total_value: data.total_value,

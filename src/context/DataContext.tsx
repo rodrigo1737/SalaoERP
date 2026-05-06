@@ -84,7 +84,7 @@ export interface Appointment {
   service_id?: string;
   start_time: string;
   end_time: string;
-  status: 'scheduled' | 'confirmed' | 'in_progress' | 'completed' | 'cancelled';
+  status: 'pre_scheduled' | 'scheduled' | 'confirmed' | 'in_progress' | 'completed' | 'cancelled';
   notes?: string;
   total_value?: number;
   booking_source?: 'admin' | 'online';
@@ -173,7 +173,7 @@ interface DataContextType {
   updateAppointment: (id: string, data: Partial<Appointment>) => Promise<void>;
   deleteAppointment: (id: string) => Promise<void>;
   refundAppointment: (id: string) => Promise<void>;
-  completeAppointment: (id: string, paymentMethod: string) => Promise<void>;
+  completeAppointment: (id: string, paymentMethod: string, overrides?: Partial<Appointment>) => Promise<string | null>;
   // Cash
   openCashSession: (openingBalance: number) => Promise<CashSession | null>;
   closeCashSession: (closingBalance: number, notes?: string) => Promise<void>;
@@ -233,49 +233,59 @@ export const DataProvider: React.FC<{ children: ReactNode }> = ({ children }) =>
 
   // ── fetch helpers (ITEM 8: date filter; ITEM 9: join via supabase) ──
   const fetchClients = async () => {
+    if (!tenantId) return [];
     const { data } = await supabase
       .from('clients')
       .select('*')
+      .eq('tenant_id', tenantId)
       .is('deleted_at', null)
       .order('name');
     return (data as Client[]) ?? [];
   };
 
   const fetchProfessionals = async () => {
+    if (!tenantId) return [];
     const { data } = await supabase
       .from('professionals')
       .select('*')
+      .eq('tenant_id', tenantId)
       .is('deleted_at', null)
       .order('nickname');
     return (data as Professional[]) ?? [];
   };
 
   const fetchServices = async () => {
+    if (!tenantId) return [];
     // ITEM 8: buscar todos os serviços (inclusive inativos) para não quebrar histórico
     const { data } = await supabase
       .from('services')
       .select('*')
+      .eq('tenant_id', tenantId)
       .is('deleted_at', null)
       .order('name');
     return (data as Service[]) ?? [];
   };
 
   const fetchProducts = async () => {
+    if (!tenantId) return [];
     const { data } = await supabase
       .from('products')
       .select('*')
+      .eq('tenant_id', tenantId)
       .is('deleted_at', null)
       .order('name');
     return (data as Product[]) ?? [];
   };
 
   const fetchAppointments = async () => {
+    if (!tenantId) return [];
     // ITEM 8: limite últimos 90 dias + futuros para não carregar o banco inteiro
     const since = new Date();
     since.setDate(since.getDate() - 90);
     const { data } = await supabase
       .from('appointments')
       .select('*')
+      .eq('tenant_id', tenantId)
       .gte('start_time', since.toISOString())
       .is('deleted_at', null)
       .order('start_time', { ascending: false });
@@ -283,36 +293,55 @@ export const DataProvider: React.FC<{ children: ReactNode }> = ({ children }) =>
   };
 
   const fetchCash = async () => {
+    if (!tenantId) return [];
     const { data } = await supabase
       .from('cash_sessions')
       .select('*')
+      .eq('tenant_id', tenantId)
       .order('opened_at', { ascending: false })
       .limit(50);
     return (data as CashSession[]) ?? [];
   };
 
   const fetchTransactions = async () => {
+    if (!tenantId) return [];
     const since = new Date();
     since.setDate(since.getDate() - 90);
     const { data } = await supabase
       .from('transactions')
       .select('*')
+      .eq('tenant_id', tenantId)
       .gte('created_at', since.toISOString())
       .order('created_at', { ascending: false });
     return (data as Transaction[]) ?? [];
   };
 
   const fetchCommissions = async () => {
+    if (!tenantId) return [];
     const { data } = await supabase
       .from('commissions')
       .select('*')
+      .eq('tenant_id', tenantId)
       .order('created_at', { ascending: false });
     return (data as Commission[]) ?? [];
   };
 
   // ── full initial load ──
   const fetchData = async () => {
-    if (!user) { setLoading(false); return; }
+    if (!user || !tenantId) {
+      setClients([]);
+      setProfessionals([]);
+      setServices([]);
+      setProducts([]);
+      setAppointments([]);
+      setCashSessions([]);
+      setTransactions([]);
+      setCommissions([]);
+      setCurrentCashSession(null);
+      setLoading(false);
+      return;
+    }
+    setLoading(true);
     try {
       const [
         clientsData,
@@ -407,15 +436,15 @@ export const DataProvider: React.FC<{ children: ReactNode }> = ({ children }) =>
     }
     const channel = supabase
       .channel('db-changes')
-      .on('postgres_changes', { event: '*', schema: 'public', table: 'appointments' },
+      .on('postgres_changes', { event: '*', schema: 'public', table: 'appointments', filter: `tenant_id=eq.${tenantId}` },
         () => refreshData(['appointments']))
-      .on('postgres_changes', { event: '*', schema: 'public', table: 'clients' },
+      .on('postgres_changes', { event: '*', schema: 'public', table: 'clients', filter: `tenant_id=eq.${tenantId}` },
         () => refreshData(['clients']))
-      .on('postgres_changes', { event: '*', schema: 'public', table: 'transactions' },
+      .on('postgres_changes', { event: '*', schema: 'public', table: 'transactions', filter: `tenant_id=eq.${tenantId}` },
         () => refreshData(['transactions', 'cash']))
-      .on('postgres_changes', { event: '*', schema: 'public', table: 'commissions' },
+      .on('postgres_changes', { event: '*', schema: 'public', table: 'commissions', filter: `tenant_id=eq.${tenantId}` },
         () => refreshData(['commissions']))
-      .on('postgres_changes', { event: '*', schema: 'public', table: 'products' },
+      .on('postgres_changes', { event: '*', schema: 'public', table: 'products', filter: `tenant_id=eq.${tenantId}` },
         () => refreshData(['products']))
       .subscribe();
     realtimeChannelRef.current = channel;
@@ -423,14 +452,14 @@ export const DataProvider: React.FC<{ children: ReactNode }> = ({ children }) =>
 
   useEffect(() => {
     fetchData();
-  }, [user]);
+  }, [user, tenantId]);
 
   useEffect(() => {
-    if (user) setupRealtime();
+    if (user && tenantId) setupRealtime();
     return () => {
       if (realtimeChannelRef.current) supabase.removeChannel(realtimeChannelRef.current);
     };
-  }, [user]);
+  }, [user, tenantId]);
 
   // ── guard helper ──
   const guardModify = (label = 'realizar esta operação') => {
@@ -462,7 +491,7 @@ export const DataProvider: React.FC<{ children: ReactNode }> = ({ children }) =>
 
   const updateClient = async (id: string, data: Partial<Client>) => {
     if (!guardModify()) return;
-    const { error } = await supabase.from('clients').update(data).eq('id', id);
+    const { error } = await supabase.from('clients').update(data).eq('id', id).eq('tenant_id', tenantId);
     if (error) { toast.error('Erro ao atualizar cliente.'); return; }
     setClients(prev => prev.map(c => c.id === id ? { ...c, ...data } : c));
     toast.success('Cliente atualizado!');
@@ -474,7 +503,8 @@ export const DataProvider: React.FC<{ children: ReactNode }> = ({ children }) =>
     const { error } = await supabase
       .from('clients')
       .update({ deleted_at: new Date().toISOString() })
-      .eq('id', id);
+      .eq('id', id)
+      .eq('tenant_id', tenantId);
     if (error) { toast.error('Erro ao remover cliente.'); return; }
     setClients(prev => prev.filter(c => c.id !== id));
     toast.success('Cliente removido.');
@@ -496,7 +526,7 @@ export const DataProvider: React.FC<{ children: ReactNode }> = ({ children }) =>
 
   const updateProfessional = async (id: string, data: Partial<Professional>) => {
     if (!guardModify()) return;
-    const { error } = await supabase.from('professionals').update(data).eq('id', id);
+    const { error } = await supabase.from('professionals').update(data).eq('id', id).eq('tenant_id', tenantId);
     if (error) { toast.error('Erro ao atualizar profissional.'); return; }
     setProfessionals(prev => prev.map(p => p.id === id ? { ...p, ...data } : p));
     toast.success('Profissional atualizado!');
@@ -507,7 +537,8 @@ export const DataProvider: React.FC<{ children: ReactNode }> = ({ children }) =>
     const { error } = await supabase
       .from('professionals')
       .update({ deleted_at: new Date().toISOString() })
-      .eq('id', id);
+      .eq('id', id)
+      .eq('tenant_id', tenantId);
     if (error) { toast.error('Erro ao remover profissional.'); return; }
     setProfessionals(prev => prev.filter(p => p.id !== id));
     toast.success('Profissional removido.');
@@ -529,7 +560,7 @@ export const DataProvider: React.FC<{ children: ReactNode }> = ({ children }) =>
 
   const updateService = async (id: string, data: Partial<Service>) => {
     if (!guardModify()) return;
-    const { error } = await supabase.from('services').update(data).eq('id', id);
+    const { error } = await supabase.from('services').update(data).eq('id', id).eq('tenant_id', tenantId);
     if (error) { toast.error('Erro ao atualizar serviço.'); return; }
     setServices(prev => prev.map(s => s.id === id ? { ...s, ...data } : s));
     toast.success('Serviço atualizado!');
@@ -540,7 +571,8 @@ export const DataProvider: React.FC<{ children: ReactNode }> = ({ children }) =>
     const { error } = await supabase
       .from('services')
       .update({ deleted_at: new Date().toISOString() })
-      .eq('id', id);
+      .eq('id', id)
+      .eq('tenant_id', tenantId);
     if (error) { toast.error('Erro ao remover serviço.'); return; }
     setServices(prev => prev.filter(s => s.id !== id));
     toast.success('Serviço removido.');
@@ -562,7 +594,7 @@ export const DataProvider: React.FC<{ children: ReactNode }> = ({ children }) =>
 
   const updateProduct = async (id: string, data: Partial<Product>) => {
     if (!guardModify()) return;
-    const { error } = await supabase.from('products').update(data).eq('id', id);
+    const { error } = await supabase.from('products').update(data).eq('id', id).eq('tenant_id', tenantId);
     if (error) { toast.error('Erro ao atualizar produto.'); return; }
     setProducts(prev => prev.map(p => p.id === id ? { ...p, ...data } : p));
     toast.success('Produto atualizado!');
@@ -573,7 +605,8 @@ export const DataProvider: React.FC<{ children: ReactNode }> = ({ children }) =>
     const { error } = await supabase
       .from('products')
       .update({ deleted_at: new Date().toISOString() })
-      .eq('id', id);
+      .eq('id', id)
+      .eq('tenant_id', tenantId);
     if (error) { toast.error('Erro ao remover produto.'); return; }
     setProducts(prev => prev.filter(p => p.id !== id));
     toast.success('Produto removido.');
@@ -638,7 +671,7 @@ export const DataProvider: React.FC<{ children: ReactNode }> = ({ children }) =>
     if (data.start_time !== undefined)      updateData.start_time = data.start_time;
     if (data.professional_id !== undefined) updateData.professional_id = data.professional_id;
     if (data.service_id !== undefined)      updateData.service_id = data.service_id;
-    const { error } = await supabase.from('appointments').update(updateData).eq('id', id);
+    const { error } = await supabase.from('appointments').update(updateData).eq('id', id).eq('tenant_id', tenantId);
     if (error) { toast.error('Erro ao atualizar agendamento.'); return; }
     setAppointments(prev => prev.map(a => {
       if (a.id !== id) return a;
@@ -654,7 +687,8 @@ export const DataProvider: React.FC<{ children: ReactNode }> = ({ children }) =>
     const { error } = await supabase
       .from('appointments')
       .update({ deleted_at: new Date().toISOString(), status: 'cancelled' })
-      .eq('id', id);
+      .eq('id', id)
+      .eq('tenant_id', tenantId);
     if (error) { toast.error('Erro ao remover agendamento.'); return; }
     setAppointments(prev => prev.filter(a => a.id !== id));
     toast.success('Agendamento removido.');
@@ -670,10 +704,11 @@ export const DataProvider: React.FC<{ children: ReactNode }> = ({ children }) =>
     await supabase.from('commissions')
       .update({ status: 'pending', paid_at: null })
       .eq('appointment_id', id)
+      .eq('tenant_id', tenantId)
       .eq('status', 'paid');
 
     // Soft-delete das comissões do agendamento
-    await supabase.from('commissions').delete().eq('appointment_id', id);
+    await supabase.from('commissions').delete().eq('appointment_id', id).eq('tenant_id', tenantId);
 
     // Cria transação de estorno em vez de deletar a original
     if (currentCashSession && appointment.total_value) {
@@ -691,26 +726,32 @@ export const DataProvider: React.FC<{ children: ReactNode }> = ({ children }) =>
       });
     }
 
-    await supabase.from('appointments').update({ status: 'cancelled' }).eq('id', id);
+    await supabase.from('appointments').update({ status: 'cancelled' }).eq('id', id).eq('tenant_id', tenantId);
     setAppointments(prev => prev.map(a => a.id === id ? { ...a, status: 'cancelled' } : a));
     await refreshData(['transactions', 'commissions']);
     toast.success('Atendimento estornado com sucesso.');
   };
 
   // ITEM 3: completeAppointment com tratamento de erros e rollback parcial
-  const completeAppointment = async (id: string, paymentMethod: string) => {
-    if (!guardModify()) return;
-    const appointment = appointments.find(a => a.id === id);
-    if (!appointment) return;
+  const completeAppointment = async (id: string, paymentMethod: string, overrides?: Partial<Appointment>) => {
+    if (!guardModify()) return null;
+    const existingAppointment = appointments.find(a => a.id === id);
+    if (!existingAppointment) return null;
+    const appointment = { ...existingAppointment, ...overrides };
 
     // 1. Atualizar status
+    const appointmentUpdate: Record<string, unknown> = { status: 'completed' };
+    if (overrides?.total_value !== undefined) appointmentUpdate.total_value = overrides.total_value;
+    if (overrides?.notes !== undefined) appointmentUpdate.notes = overrides.notes;
+
     const { error: apptError } = await supabase
       .from('appointments')
-      .update({ status: 'completed' })
-      .eq('id', id);
-    if (apptError) { toast.error('Erro ao finalizar atendimento.'); return; }
+      .update(appointmentUpdate)
+      .eq('id', id)
+      .eq('tenant_id', tenantId);
+    if (apptError) { toast.error('Erro ao finalizar atendimento.'); return null; }
 
-    setAppointments(prev => prev.map(a => a.id === id ? { ...a, status: 'completed' } : a));
+    setAppointments(prev => prev.map(a => a.id === id ? { ...a, ...overrides, status: 'completed' } : a));
 
     let transactionId: string | undefined;
 
@@ -747,6 +788,7 @@ export const DataProvider: React.FC<{ children: ReactNode }> = ({ children }) =>
         .select('commission_rate')
         .eq('service_id', appointment.service_id)
         .eq('professional_id', appointment.professional_id)
+        .eq('tenant_id', tenantId)
         .maybeSingle();
 
       // ITEM 20: aviso explícito quando usando comissão padrão
@@ -776,6 +818,7 @@ export const DataProvider: React.FC<{ children: ReactNode }> = ({ children }) =>
 
     await refreshData(['transactions', 'commissions']);
     toast.success('Atendimento finalizado!');
+    return transactionId ?? null;
   };
 
   // ── CASH ACTIONS ────────────────────────────────────────────────────────
@@ -811,7 +854,9 @@ export const DataProvider: React.FC<{ children: ReactNode }> = ({ children }) =>
       difference,
       status: 'closed',
       notes,
-    }).eq('id', currentCashSession.id);
+    })
+      .eq('id', currentCashSession.id)
+      .eq('tenant_id', tenantId);
     if (error) { toast.error('Erro ao fechar caixa.'); return; }
     await refreshData(['cash']);
     toast.success('Caixa fechado!');
@@ -859,7 +904,9 @@ export const DataProvider: React.FC<{ children: ReactNode }> = ({ children }) =>
       status: 'paid',
       paid_at: new Date().toISOString(),
       transaction_id: txData?.id,
-    }).eq('id', id);
+    })
+      .eq('id', id)
+      .eq('tenant_id', tenantId);
     setCommissions(prev => prev.map(c => c.id === id ? { ...c, status: 'paid', paid_at: new Date().toISOString() } : c));
     setTransactions(prev => [txData as Transaction, ...prev]);
     toast.success('Comissão paga!');
@@ -897,6 +944,7 @@ export const DataProvider: React.FC<{ children: ReactNode }> = ({ children }) =>
       .from('commissions')
       .update({ status: 'paid', paid_at: new Date().toISOString(), transaction_id: txData?.id })
       .eq('professional_id', professionalId)
+      .eq('tenant_id', tenantId)
       .eq('status', 'pending')
       .neq('type', 'voucher');
     setCommissions(prev => prev.map(c =>

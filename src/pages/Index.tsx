@@ -33,29 +33,46 @@ const SUPER_ADMIN_PAGES = ['super-dashboard', 'tenants'];
 const Index = () => {
   const { page } = useParams<{ page?: string }>();
   const navigate = useNavigate();
-  const { userRole, isSuperAdmin } = useAuth();
+  const { userRole, isSuperAdmin, hasPermission } = useAuth();
   const isAdmin = userRole === 'admin';
+
+  const canAccessPage = (targetPage: string) => {
+    if (isSuperAdmin) return SUPER_ADMIN_PAGES.includes(targetPage);
+    if (isAdmin) return ADMIN_PAGES.includes(targetPage);
+    if (targetPage === 'agenda') return hasPermission('view_schedule') || hasPermission('edit_schedule');
+    if (targetPage === 'clients') return hasPermission('view_clients');
+    if (targetPage === 'commissions') return hasPermission('view_commissions');
+    if (targetPage === 'cashier') return hasPermission('manage_cash_flow');
+    if (targetPage === 'settings') return true;
+    return PROFESSIONAL_PAGES.includes(targetPage);
+  };
+
+  const getDefaultPage = () => {
+    if (isSuperAdmin) return 'super-dashboard';
+    if (isAdmin) return 'dashboard';
+    if (canAccessPage('agenda')) return 'agenda';
+    if (canAccessPage('commissions')) return 'commissions';
+    return 'settings';
+  };
 
   // Redireciona para página padrão se nenhuma foi informada na URL
   useEffect(() => {
     if (!page) {
-      if (isSuperAdmin) navigate('/app/super-dashboard', { replace: true });
-      else if (isAdmin) navigate('/app/dashboard', { replace: true });
-      else navigate('/app/agenda', { replace: true });
+      navigate(`/app/${getDefaultPage()}`, { replace: true });
     }
-  }, [page, isSuperAdmin, isAdmin, navigate]);
+  }, [page, isSuperAdmin, isAdmin, navigate, hasPermission]);
 
   // Redireciona profissional que tentou acessar página de admin
   useEffect(() => {
-    if (!isSuperAdmin && !isAdmin && page && !PROFESSIONAL_PAGES.includes(page)) {
-      navigate('/app/agenda', { replace: true });
+    if (!isSuperAdmin && page && !canAccessPage(page)) {
+      navigate(`/app/${getDefaultPage()}`, { replace: true });
     }
     if (isSuperAdmin && page && !SUPER_ADMIN_PAGES.includes(page)) {
       navigate('/app/super-dashboard', { replace: true });
     }
-  }, [page, isSuperAdmin, isAdmin, navigate]);
+  }, [page, isSuperAdmin, isAdmin, navigate, hasPermission]);
 
-  const currentPage = page ?? (isSuperAdmin ? 'super-dashboard' : isAdmin ? 'dashboard' : 'agenda');
+  const currentPage = page ?? getDefaultPage();
 
   const handleNavigate = (targetPage: string) => {
     navigate(`/app/${targetPage}`);

@@ -20,6 +20,7 @@ export type Database = {
           client_id: string | null
           client_user_id: string | null
           created_at: string
+          deleted_at: string | null
           end_time: string
           id: string
           notes: string | null
@@ -35,6 +36,7 @@ export type Database = {
           client_id?: string | null
           client_user_id?: string | null
           created_at?: string
+          deleted_at?: string | null
           end_time: string
           id?: string
           notes?: string | null
@@ -50,6 +52,7 @@ export type Database = {
           client_id?: string | null
           client_user_id?: string | null
           created_at?: string
+          deleted_at?: string | null
           end_time?: string
           id?: string
           notes?: string | null
@@ -190,6 +193,13 @@ export type Database = {
             referencedRelation: "professionals"
             referencedColumns: ["id"]
           },
+          {
+            foreignKeyName: "client_accounts_tenant_id_fkey"
+            columns: ["tenant_id"]
+            isOneToOne: false
+            referencedRelation: "tenants"
+            referencedColumns: ["id"]
+          },
         ]
       }
       client_preferred_services: {
@@ -232,6 +242,7 @@ export type Database = {
         Row: {
           birth_date: string | null
           created_at: string
+          deleted_at: string | null
           email: string | null
           id: string
           name: string
@@ -244,6 +255,7 @@ export type Database = {
         Insert: {
           birth_date?: string | null
           created_at?: string
+          deleted_at?: string | null
           email?: string | null
           id?: string
           name: string
@@ -256,6 +268,7 @@ export type Database = {
         Update: {
           birth_date?: string | null
           created_at?: string
+          deleted_at?: string | null
           email?: string | null
           id?: string
           name?: string
@@ -356,6 +369,7 @@ export type Database = {
           category: string | null
           cost_price: number
           created_at: string
+          deleted_at: string | null
           description: string | null
           expiry_date: string | null
           id: string
@@ -380,6 +394,7 @@ export type Database = {
           category?: string | null
           cost_price?: number
           created_at?: string
+          deleted_at?: string | null
           description?: string | null
           expiry_date?: string | null
           id?: string
@@ -404,6 +419,7 @@ export type Database = {
           category?: string | null
           cost_price?: number
           created_at?: string
+          deleted_at?: string | null
           description?: string | null
           expiry_date?: string | null
           id?: string
@@ -444,6 +460,7 @@ export type Database = {
           commission_product: number
           commission_service: number
           created_at: string
+          deleted_at: string | null
           email: string | null
           id: string
           is_active: boolean
@@ -461,6 +478,7 @@ export type Database = {
           commission_product?: number
           commission_service?: number
           created_at?: string
+          deleted_at?: string | null
           email?: string | null
           id?: string
           is_active?: boolean
@@ -478,6 +496,7 @@ export type Database = {
           commission_product?: number
           commission_service?: number
           created_at?: string
+          deleted_at?: string | null
           email?: string | null
           id?: string
           is_active?: boolean
@@ -657,6 +676,7 @@ export type Database = {
           cost_price: number
           created_at: string
           default_price: number
+          deleted_at: string | null
           description: string | null
           duration_minutes: number
           id: string
@@ -673,6 +693,7 @@ export type Database = {
           cost_price?: number
           created_at?: string
           default_price: number
+          deleted_at?: string | null
           description?: string | null
           duration_minutes?: number
           id?: string
@@ -689,6 +710,7 @@ export type Database = {
           cost_price?: number
           created_at?: string
           default_price?: number
+          deleted_at?: string | null
           description?: string | null
           duration_minutes?: number
           id?: string
@@ -910,6 +932,8 @@ export type Database = {
           secondary_color: string | null
           tenant_id: string
           updated_at: string
+          working_hours_end: number
+          working_hours_start: number
         }
         Insert: {
           accent_color?: string | null
@@ -921,6 +945,8 @@ export type Database = {
           secondary_color?: string | null
           tenant_id: string
           updated_at?: string
+          working_hours_end?: number
+          working_hours_start?: number
         }
         Update: {
           accent_color?: string | null
@@ -932,6 +958,8 @@ export type Database = {
           secondary_color?: string | null
           tenant_id?: string
           updated_at?: string
+          working_hours_end?: number
+          working_hours_start?: number
         }
         Relationships: [
           {

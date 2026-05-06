@@ -67,6 +67,15 @@ const applyColors = (primary: string, secondary: string, accent: string) => {
   root.style.setProperty('--accent', hexToHsl(accent));
 };
 
+const normalizeSettings = (data: any): TenantSettings => ({
+  ...data,
+  primary_color: data.primary_color ?? '#1e40af',
+  secondary_color: data.secondary_color ?? '#3b82f6',
+  accent_color: data.accent_color ?? '#60a5fa',
+  working_hours_start: data.working_hours_start ?? 8,
+  working_hours_end: data.working_hours_end ?? 20,
+});
+
 export const TenantSettingsProvider: React.FC<{ children: ReactNode }> = ({ children }) => {
   const { tenantId, user } = useAuth();
   const [settings, setSettings] = useState<TenantSettings | null>(null);
@@ -74,6 +83,7 @@ export const TenantSettingsProvider: React.FC<{ children: ReactNode }> = ({ chil
 
   const fetchSettings = useCallback(async () => {
     if (!tenantId) {
+      setSettings(null);
       setLoading(false);
       return;
     }
@@ -88,8 +98,9 @@ export const TenantSettingsProvider: React.FC<{ children: ReactNode }> = ({ chil
       if (error) throw error;
 
       if (data) {
-        setSettings(data as TenantSettings);
-        applyColors(data.primary_color, data.secondary_color, data.accent_color);
+        const normalized = normalizeSettings(data);
+        setSettings(normalized);
+        applyColors(normalized.primary_color, normalized.secondary_color, normalized.accent_color);
       } else {
         setSettings(null);
       }
@@ -104,6 +115,7 @@ export const TenantSettingsProvider: React.FC<{ children: ReactNode }> = ({ chil
     if (user && tenantId) {
       fetchSettings();
     } else {
+      setSettings(null);
       setLoading(false);
     }
   }, [user, tenantId, fetchSettings]);

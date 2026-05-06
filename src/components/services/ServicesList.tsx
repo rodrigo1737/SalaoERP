@@ -140,7 +140,8 @@ export function ServicesList() {
     const { data } = await supabase
       .from('service_professionals')
       .select('*')
-      .eq('service_id', serviceId);
+      .eq('service_id', serviceId)
+      .eq('tenant_id', tenantId);
 
     const existingMap = new Map(data?.map(sp => [sp.professional_id, sp]) || []);
 
@@ -268,7 +269,11 @@ export function ServicesList() {
       const enabledCommissions = professionalCommissions.filter(pc => pc.enabled);
 
       // Delete existing and insert new
-      await supabase.from('service_professionals').delete().eq('service_id', serviceId);
+      await supabase
+        .from('service_professionals')
+        .delete()
+        .eq('service_id', serviceId)
+        .eq('tenant_id', tenantId);
 
       if (enabledCommissions.length > 0) {
         const { error } = await supabase.from('service_professionals').insert(
