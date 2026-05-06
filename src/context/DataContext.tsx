@@ -186,6 +186,7 @@ interface DataContextType {
 }
 
 const DataContext = createContext<DataContextType | undefined>(undefined);
+const SUPABASE_PAGE_SIZE = 1000;
 
 export const useData = () => {
   const context = useContext(DataContext);
@@ -235,13 +236,29 @@ export const DataProvider: React.FC<{ children: ReactNode }> = ({ children }) =>
   // ── fetch helpers (ITEM 8: date filter; ITEM 9: join via supabase) ──
   const fetchClients = async () => {
     if (!tenantId) return [];
-    const { data } = await supabase
-      .from('clients')
-      .select('*')
-      .eq('tenant_id', tenantId)
-      .is('deleted_at', null)
-      .order('name');
-    return (data as Client[]) ?? [];
+
+    const allClients: Client[] = [];
+    let from = 0;
+
+    while (true) {
+      const { data, error } = await supabase
+        .from('clients')
+        .select('*')
+        .eq('tenant_id', tenantId)
+        .is('deleted_at', null)
+        .order('name')
+        .range(from, from + SUPABASE_PAGE_SIZE - 1);
+
+      if (error) throw error;
+
+      const page = (data as Client[]) ?? [];
+      allClients.push(...page);
+
+      if (page.length < SUPABASE_PAGE_SIZE) break;
+      from += SUPABASE_PAGE_SIZE;
+    }
+
+    return allClients;
   };
 
   const fetchProfessionals = async () => {
