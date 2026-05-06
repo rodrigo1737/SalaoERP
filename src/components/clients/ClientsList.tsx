@@ -1,4 +1,4 @@
-import { useState } from 'react';
+import { useEffect, useState } from 'react';
 import { motion } from 'framer-motion';
 import {
   Plus,
@@ -74,7 +74,18 @@ export function ClientsList() {
   );
   // ITEM 10: paginação
   const totalPages = Math.max(1, Math.ceil(filteredClients.length / PAGE_SIZE));
-  const pagedClients = filteredClients.slice((page - 1) * PAGE_SIZE, page * PAGE_SIZE);
+  const currentPage = Math.min(page, totalPages);
+  const pagedClients = filteredClients.slice((currentPage - 1) * PAGE_SIZE, currentPage * PAGE_SIZE);
+
+  useEffect(() => {
+    setPage(1);
+  }, [searchQuery]);
+
+  useEffect(() => {
+    if (page > totalPages) {
+      setPage(totalPages);
+    }
+  }, [page, totalPages]);
 
   const handleDelete = async () => {
     if (!deletingClient) return;
@@ -252,11 +263,11 @@ export function ClientsList() {
       {/* Paginação */}
       {totalPages > 1 && (
         <div className="flex items-center justify-center gap-3 mt-4">
-          <Button variant="outline" size="sm" onClick={() => setPage(p => Math.max(1, p - 1))} disabled={page === 1}>
+          <Button variant="outline" size="sm" onClick={() => setPage(p => Math.max(1, p - 1))} disabled={currentPage === 1}>
             <ChevronLeft className="w-4 h-4" />
           </Button>
-          <span className="text-sm text-muted-foreground">Página {page} de {totalPages}</span>
-          <Button variant="outline" size="sm" onClick={() => setPage(p => Math.min(totalPages, p + 1))} disabled={page === totalPages}>
+          <span className="text-sm text-muted-foreground">Página {currentPage} de {totalPages}</span>
+          <Button variant="outline" size="sm" onClick={() => setPage(p => Math.min(totalPages, p + 1))} disabled={currentPage === totalPages}>
             <ChevronRight className="w-4 h-4" />
           </Button>
         </div>
