@@ -1,8 +1,9 @@
 import { useAuth } from '@/contexts/AuthContext';
 import { TenantCustomization } from './TenantCustomization';
 import { ProfileSettings } from './ProfileSettings';
+import { ClientImportSettings } from './ClientImportSettings';
 import { Tabs, TabsContent, TabsList, TabsTrigger } from '@/components/ui/tabs';
-import { Palette, User, Bell, Clock } from 'lucide-react';
+import { FileSpreadsheet, Palette, User, Bell, Clock } from 'lucide-react';
 import { Card, CardContent, CardDescription, CardHeader, CardTitle } from '@/components/ui/card';
 import { Label } from '@/components/ui/label';
 import { Input } from '@/components/ui/input';
@@ -64,6 +65,12 @@ export function Settings() {
             <TabsTrigger value="hours" className="flex items-center gap-2">
               <Clock className="w-4 h-4" />
               Horários
+            </TabsTrigger>
+          )}
+          {isAdmin && (
+            <TabsTrigger value="client-import" className="flex items-center gap-2">
+              <FileSpreadsheet className="w-4 h-4" />
+              Importar clientes
             </TabsTrigger>
           )}
           <TabsTrigger value="profile" className="flex items-center gap-2">
@@ -128,6 +135,12 @@ export function Settings() {
                 </Button>
               </CardContent>
             </Card>
+          </TabsContent>
+        )}
+
+        {isAdmin && (
+          <TabsContent value="client-import">
+            <ClientImportSettings />
           </TabsContent>
         )}
 
