@@ -89,7 +89,7 @@ const getTimeFromISO = (isoString: string) => {
 };
 
 export function Schedule() {
-  const { clients, professionals, services, products, appointments, loading, addClient, addAppointment, updateAppointment, deleteAppointment, refundAppointment, currentCashSession, completeAppointment } = useData();
+  const { clients, professionals, services, products, appointments, loading, addClient, addService, addAppointment, updateAppointment, deleteAppointment, refundAppointment, currentCashSession, completeAppointment } = useData();
   const { settings: tenantSettings } = useTenantSettings();
 
   // ITEM 13: horários configuráveis; fallback para 8–20 se tenant não configurou ainda
@@ -122,6 +122,7 @@ export function Schedule() {
   const [isAppointmentDetailOpen, setIsAppointmentDetailOpen] = useState(false);
   const [isClosingBill, setIsClosingBill] = useState(false);
   const [isAddingClient, setIsAddingClient] = useState(false);
+  const [isAddingService, setIsAddingService] = useState(false);
   const [selectedPaymentMethod, setSelectedPaymentMethod] = useState<string>('');
   const [billItems, setBillItems] = useState<BillItem[]>([]);
 
@@ -131,6 +132,10 @@ export function Schedule() {
   const [formTime, setFormTime] = useState('');
   const [newClientName, setNewClientName] = useState('');
   const [newClientPhone, setNewClientPhone] = useState('');
+  const [newServiceName, setNewServiceName] = useState('');
+  const [newServicePrice, setNewServicePrice] = useState('');
+  const [newServiceDuration, setNewServiceDuration] = useState('60');
+  const [newServiceCategory, setNewServiceCategory] = useState('Outros');
   const [editValue, setEditValue] = useState('');
   const [editDuration, setEditDuration] = useState('');
 
@@ -199,7 +204,36 @@ export function Schedule() {
     setFormService('');
     setFormNotes('');
     setFormTime(time);
+    setIsAddingClient(false);
+    setIsAddingService(false);
     setIsNewAppointmentOpen(true);
+  };
+
+  const handleQuickAddService = async () => {
+    if (!newServiceName.trim()) return;
+
+    const service = await addService({
+      name: newServiceName.trim(),
+      category: newServiceCategory || 'Outros',
+      duration_minutes: parseInt(newServiceDuration) || 60,
+      break_time_minutes: 0,
+      allow_online_booking: false,
+      description: undefined,
+      price_type: 'fixed',
+      default_price: parseFloat(newServicePrice) || 0,
+      cost_price: 0,
+      suggested_return_days: undefined,
+      is_active: true,
+    });
+
+    if (service) {
+      setFormService(service.id);
+      setIsAddingService(false);
+      setNewServiceName('');
+      setNewServicePrice('');
+      setNewServiceDuration('60');
+      setNewServiceCategory('Outros');
+    }
   };
 
   const handleCreateAppointment = async () => {
@@ -619,15 +653,41 @@ export function Schedule() {
               )}
             </div>
             <div className="space-y-2">
-              <Label>Serviço</Label>
-              <Combobox
-                options={services.map(s => ({ value: s.id, label: s.name, sublabel: `R$ ${s.default_price}` }))}
-                value={formService}
-                onValueChange={setFormService}
-                placeholder="Selecione"
-                searchPlaceholder="Buscar serviço..."
-                emptyMessage="Nenhum serviço encontrado."
-              />
+              <div className="flex items-center justify-between">
+                <Label>Serviço</Label>
+                {!isAddingService && (
+                  <Button type="button" variant="ghost" size="sm" className="h-7 text-xs" onClick={() => setIsAddingService(true)}>
+                    <Plus className="w-3 h-3 mr-1" />Novo
+                  </Button>
+                )}
+              </div>
+              {isAddingService ? (
+                <div className="p-3 rounded-lg border bg-secondary/30 space-y-2">
+                  <Input placeholder="Nome do serviço" value={newServiceName} onChange={(e) => setNewServiceName(e.target.value)} />
+                  <div className="grid grid-cols-3 gap-2">
+                    <Input placeholder="Categoria" value={newServiceCategory} onChange={(e) => setNewServiceCategory(e.target.value)} />
+                    <Input placeholder="Valor" type="number" step="0.01" min="0" value={newServicePrice} onChange={(e) => setNewServicePrice(e.target.value)} />
+                    <Input placeholder="Min" type="number" min="15" step="15" value={newServiceDuration} onChange={(e) => setNewServiceDuration(e.target.value)} />
+                  </div>
+                  <div className="flex gap-2">
+                    <Button size="sm" disabled={!newServiceName.trim()} onClick={handleQuickAddService}>
+                      <Plus className="w-3 h-3 mr-1" />Adicionar
+                    </Button>
+                    <Button size="sm" variant="ghost" onClick={() => setIsAddingService(false)}>
+                      <X className="w-3 h-3" />
+                    </Button>
+                  </div>
+                </div>
+              ) : (
+                <Combobox
+                  options={services.map(s => ({ value: s.id, label: s.name, sublabel: `R$ ${s.default_price}` }))}
+                  value={formService}
+                  onValueChange={setFormService}
+                  placeholder="Selecione"
+                  searchPlaceholder="Buscar serviço..."
+                  emptyMessage="Nenhum serviço encontrado."
+                />
+              )}
             </div>
             <div className="space-y-2">
               <Label>Observações</Label>
