@@ -49,6 +49,21 @@ import { useAuth } from '@/contexts/AuthContext';
 
 const PAGE_SIZE = 20;
 
+const normalizeDateInputValue = (value?: string) => {
+  if (!value) return '';
+  return value.slice(0, 10);
+};
+
+const formatDateOnly = (value?: string) => {
+  const normalized = normalizeDateInputValue(value);
+  if (!normalized) return '';
+
+  const [year, month, day] = normalized.split('-');
+  if (!year || !month || !day) return normalized;
+
+  return `${day}/${month}/${year}`;
+};
+
 export function ClientsList() {
   const { clients, addClient, updateClient, deleteClient } = useStableData();
   const { tenantId } = useAuth();
@@ -109,7 +124,7 @@ export function ClientsList() {
     setFormName(client.name);
     setFormPhone(client.phone || '');
     setFormEmail(client.email || '');
-    setFormBirthDate(client.birth_date || '');
+    setFormBirthDate(normalizeDateInputValue(client.birth_date));
     setFormNotes(client.notes || '');
     setFormPhotoUrl(client.photo_url || null);
     setIsDialogOpen(true);
@@ -250,7 +265,7 @@ export function ClientsList() {
                   {client.birth_date && (
                     <div className="flex items-center gap-2 text-sm">
                       <Calendar className="w-4 h-4 text-muted-foreground" />
-                      <span>{new Date(client.birth_date).toLocaleDateString('pt-BR')}</span>
+                      <span>{formatDateOnly(client.birth_date)}</span>
                     </div>
                   )}
                 </div>
@@ -293,7 +308,7 @@ export function ClientsList() {
 
       {/* Client Dialog */}
       <Dialog open={isDialogOpen} onOpenChange={setIsDialogOpen}>
-        <DialogContent className="sm:max-w-md">
+        <DialogContent className="max-h-[90vh] overflow-y-auto sm:max-w-md">
           <DialogHeader>
             <DialogTitle className="font-display text-xl">
               {editingClient ? 'Editar Cliente' : 'Novo Cliente'}
