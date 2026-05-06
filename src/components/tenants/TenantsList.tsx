@@ -40,6 +40,7 @@ interface Tenant {
   name: string;
   cnpj: string | null;
   cpf: string | null;
+  package_type: 'salon' | 'aesthetic_clinic';
   payment_method: 'pix' | 'boleto' | 'cartao' | 'transferencia';
   subscription_due_date: string | null;
   status: 'active' | 'readonly' | 'blocked';
@@ -73,6 +74,21 @@ const statusColors: Record<string, string> = {
   blocked: 'bg-red-500/20 text-red-700',
 };
 
+const packageLabels: Record<Tenant['package_type'], string> = {
+  salon: 'Salão/Barbearia',
+  aesthetic_clinic: 'Estética e Emagrecimento',
+};
+
+const packageDescriptions: Record<Tenant['package_type'], string> = {
+  salon: 'Pacote atual para salão, barbearia e agenda padrão.',
+  aesthetic_clinic: 'Libera módulos premium como anamnese, evolução e fotos clínicas.',
+};
+
+const packageColors: Record<Tenant['package_type'], string> = {
+  salon: 'bg-blue-500/15 text-blue-700',
+  aesthetic_clinic: 'bg-purple-500/15 text-purple-700',
+};
+
 export function TenantsList() {
   const [tenants, setTenants] = useState<Tenant[]>([]);
   const [superAdmins, setSuperAdmins] = useState<SuperAdmin[]>([]);
@@ -98,6 +114,7 @@ export function TenantsList() {
     name: '',
     cnpj: '',
     cpf: '',
+    package_type: 'salon' as Tenant['package_type'],
     payment_method: 'pix' as 'pix' | 'boleto' | 'cartao' | 'transferencia',
     subscription_due_date: '',
     status: 'active' as 'active' | 'readonly' | 'blocked',
@@ -233,6 +250,7 @@ export function TenantsList() {
         name: formData.name.trim(),
         cnpj: formData.cnpj.trim() || null,
         cpf: formData.cpf.trim() || null,
+        package_type: formData.package_type,
         payment_method: formData.payment_method,
         subscription_due_date: formData.subscription_due_date || null,
         status: formData.status,
@@ -387,6 +405,7 @@ export function TenantsList() {
       name: '',
       cnpj: '',
       cpf: '',
+      package_type: 'salon',
       payment_method: 'pix',
       subscription_due_date: '',
       status: 'active',
@@ -401,6 +420,7 @@ export function TenantsList() {
       name: tenant.name,
       cnpj: tenant.cnpj || '',
       cpf: tenant.cpf || '',
+      package_type: tenant.package_type || 'salon',
       payment_method: tenant.payment_method,
       subscription_due_date: tenant.subscription_due_date || '',
       status: tenant.status,
@@ -520,6 +540,25 @@ export function TenantsList() {
                         placeholder="000.000.000-00"
                       />
                     </div>
+                  </div>
+
+                  <div className="space-y-2">
+                    <Label htmlFor="package_type">Pacote</Label>
+                    <Select
+                      value={formData.package_type}
+                      onValueChange={(value) => setFormData({ ...formData, package_type: value as Tenant['package_type'] })}
+                    >
+                      <SelectTrigger>
+                        <SelectValue />
+                      </SelectTrigger>
+                      <SelectContent>
+                        <SelectItem value="salon">Salão/Barbearia</SelectItem>
+                        <SelectItem value="aesthetic_clinic">Estética e Emagrecimento</SelectItem>
+                      </SelectContent>
+                    </Select>
+                    <p className="text-xs text-muted-foreground">
+                      {packageDescriptions[formData.package_type]}
+                    </p>
                   </div>
 
                   <div className="grid grid-cols-2 gap-4">
@@ -699,6 +738,7 @@ export function TenantsList() {
                   <TableRow>
                     <TableHead>Nome</TableHead>
                     <TableHead>CNPJ/CPF</TableHead>
+                    <TableHead>Pacote</TableHead>
                     <TableHead>Link Online</TableHead>
                     <TableHead>Pagamento</TableHead>
                     <TableHead>Vencimento</TableHead>
@@ -709,7 +749,7 @@ export function TenantsList() {
                 <TableBody>
                   {tenants.length === 0 ? (
                     <TableRow>
-                      <TableCell colSpan={7} className="text-center py-8 text-muted-foreground">
+                      <TableCell colSpan={8} className="text-center py-8 text-muted-foreground">
                         Nenhum cliente cadastrado
                       </TableCell>
                     </TableRow>
@@ -719,6 +759,11 @@ export function TenantsList() {
                         <TableCell className="font-medium">{tenant.name}</TableCell>
                         <TableCell>
                           {tenant.cnpj || tenant.cpf || '-'}
+                        </TableCell>
+                        <TableCell>
+                          <Badge className={packageColors[tenant.package_type || 'salon']}>
+                            {packageLabels[tenant.package_type || 'salon']}
+                          </Badge>
                         </TableCell>
                         <TableCell>
                           {tenant.booking_slug ? (

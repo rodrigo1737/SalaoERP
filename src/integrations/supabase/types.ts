@@ -982,6 +982,7 @@ export type Database = {
           created_at: string
           id: string
           name: string
+          package_type: string
           payment_method: Database["public"]["Enums"]["payment_method_type"]
           status: Database["public"]["Enums"]["tenant_status"]
           subscription_due_date: string | null
@@ -994,6 +995,7 @@ export type Database = {
           created_at?: string
           id?: string
           name: string
+          package_type?: string
           payment_method?: Database["public"]["Enums"]["payment_method_type"]
           status?: Database["public"]["Enums"]["tenant_status"]
           subscription_due_date?: string | null
@@ -1006,6 +1008,7 @@ export type Database = {
           created_at?: string
           id?: string
           name?: string
+          package_type?: string
           payment_method?: Database["public"]["Enums"]["payment_method_type"]
           status?: Database["public"]["Enums"]["tenant_status"]
           subscription_due_date?: string | null

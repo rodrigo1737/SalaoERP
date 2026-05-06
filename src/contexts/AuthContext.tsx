@@ -3,6 +3,7 @@ import { User, Session } from '@supabase/supabase-js';
 import { supabase } from '@/integrations/supabase/client';
 
 type UserRole = 'admin' | 'professional' | null;
+type TenantPackageType = 'salon' | 'aesthetic_clinic';
 
 interface Professional {
   id: string;
@@ -15,6 +16,7 @@ interface Tenant {
   id: string;
   name: string;
   status: 'active' | 'readonly' | 'blocked';
+  package_type: TenantPackageType;
 }
 
 interface AuthContextType {
@@ -82,7 +84,7 @@ export const AuthProvider: React.FC<{ children: React.ReactNode }> = ({ children
         // Fetch tenant info including subscription_due_date
         const { data: tenantData } = await supabase
           .from('tenants')
-          .select('id, name, status, subscription_due_date')
+          .select('id, name, status, subscription_due_date, package_type')
           .eq('id', profileTenantId)
           .maybeSingle();
 
@@ -106,7 +108,8 @@ export const AuthProvider: React.FC<{ children: React.ReactNode }> = ({ children
           setCurrentTenant({
             id: tenantData.id,
             name: tenantData.name,
-            status: effectiveStatus
+            status: effectiveStatus,
+            package_type: (tenantData.package_type as TenantPackageType) || 'salon'
           });
         }
       } else {
@@ -296,7 +299,7 @@ export const AuthProvider: React.FC<{ children: React.ReactNode }> = ({ children
     try {
       const { data: tenantData } = await supabase
         .from('tenants')
-        .select('id, name, status, subscription_due_date')
+        .select('id, name, status, subscription_due_date, package_type')
         .eq('id', tenantId)
         .maybeSingle();
 
@@ -319,7 +322,8 @@ export const AuthProvider: React.FC<{ children: React.ReactNode }> = ({ children
         setCurrentTenant({
           id: tenantData.id,
           name: tenantData.name,
-          status: effectiveStatus
+          status: effectiveStatus,
+          package_type: (tenantData.package_type as TenantPackageType) || 'salon'
         });
       }
     } catch (error) {
