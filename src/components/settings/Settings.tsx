@@ -1,7 +1,7 @@
 import { useAuth } from '@/contexts/AuthContext';
 import { TenantCustomization } from './TenantCustomization';
 import { ProfileSettings } from './ProfileSettings';
-import { ClientImportSettings } from './ClientImportSettings';
+import { RegistrationImportSettings } from './RegistrationImportSettings';
 import { Tabs, TabsContent, TabsList, TabsTrigger } from '@/components/ui/tabs';
 import { FileSpreadsheet, Palette, User, Bell, Clock } from 'lucide-react';
 import { Card, CardContent, CardDescription, CardHeader, CardTitle } from '@/components/ui/card';
@@ -68,9 +68,9 @@ export function Settings() {
             </TabsTrigger>
           )}
           {isAdmin && (
-            <TabsTrigger value="client-import" className="flex items-center gap-2">
+            <TabsTrigger value="registration-imports" className="flex items-center gap-2">
               <FileSpreadsheet className="w-4 h-4" />
-              Importar clientes
+              Importadores de cadastro
             </TabsTrigger>
           )}
           <TabsTrigger value="profile" className="flex items-center gap-2">
@@ -139,8 +139,8 @@ export function Settings() {
         )}
 
         {isAdmin && (
-          <TabsContent value="client-import">
-            <ClientImportSettings />
+          <TabsContent value="registration-imports">
+            <RegistrationImportSettings />
           </TabsContent>
         )}
 

@@ -22,25 +22,23 @@ import {
 
 type RawRow = Record<string, unknown>;
 
-type ClientImportRow = {
+type ServiceImportRow = {
   sourceRow: number;
   name: string;
-  phone: string | null;
-  email: string | null;
-  birth_date: string | null;
-  created_at?: string;
-  notes: string | null;
-  duplicateKeys: string[];
+  description: string | null;
+  category: string | null;
+  default_price: number;
+  duplicateKey: string;
 };
 
-type ExistingClient = {
+type ExistingService = {
   name: string;
-  phone: string | null;
-  email: string | null;
+  category: string | null;
 };
 
-const REQUIRED_HEADERS = ['Cliente'];
+const REQUIRED_HEADERS = ['Serviço', 'Valor'];
 const IMPORT_BATCH_SIZE = 300;
+const PAGE_SIZE = 1000;
 
 const normalizeHeader = (value: string) =>
   value
@@ -57,45 +55,9 @@ const normalizeText = (value: string) =>
     .replace(/\s+/g, ' ')
     .trim();
 
-const asText = (value: unknown): string => {
+const asText = (value: unknown) => {
   if (value === null || value === undefined) return '';
-  if (value instanceof Date) return formatDate(value) ?? '';
   return String(value).trim();
-};
-
-const onlyDigits = (value: unknown) => asText(value).replace(/\D/g, '');
-
-const formatDate = (date: Date | null) => {
-  if (!date || Number.isNaN(date.getTime())) return null;
-  const year = date.getFullYear();
-  const month = String(date.getMonth() + 1).padStart(2, '0');
-  const day = String(date.getDate()).padStart(2, '0');
-  return `${year}-${month}-${day}`;
-};
-
-const parseDate = (value: unknown): string | null => {
-  if (value === null || value === undefined || value === '') return null;
-
-  if (value instanceof Date) {
-    return formatDate(value);
-  }
-
-  if (typeof value === 'number' && Number.isFinite(value)) {
-    const excelEpoch = Date.UTC(1899, 11, 30);
-    return formatDate(new Date(excelEpoch + value * 86400000));
-  }
-
-  const text = asText(value);
-  if (!text) return null;
-
-  const brazilianDate = text.match(/^(\d{1,2})\/(\d{1,2})\/(\d{2,4})$/);
-  if (brazilianDate) {
-    const [, day, month, rawYear] = brazilianDate;
-    const year = rawYear.length === 2 ? `20${rawYear}` : rawYear;
-    return formatDate(new Date(Number(year), Number(month) - 1, Number(day)));
-  }
-
-  return formatDate(new Date(text));
 };
 
 const getField = (row: RawRow, header: string) => {
@@ -104,104 +66,73 @@ const getField = (row: RawRow, header: string) => {
   return key ? row[key] : '';
 };
 
-const buildDuplicateKeys = (row: Pick<ClientImportRow, 'name' | 'phone' | 'email'>) => {
-  const keys: string[] = [];
-  if (row.email) keys.push(`email:${row.email}`);
-  if (row.phone) keys.push(`name_phone:${normalizeText(row.name)}:${row.phone}`);
-  if (!row.email && !row.phone) keys.push(`name:${normalizeText(row.name)}`);
-  return keys;
+const parseMoney = (value: unknown) => {
+  if (typeof value === 'number' && Number.isFinite(value)) return value;
+
+  const text = asText(value);
+  if (!text) return 0;
+
+  const normalized = text
+    .replace(/[^\d,.-]/g, '')
+    .replace(/\.(?=\d{3}(?:\D|$))/g, '')
+    .replace(',', '.');
+  const parsed = Number(normalized);
+
+  return Number.isFinite(parsed) ? parsed : 0;
 };
 
-const buildNotes = (row: RawRow) => {
-  const noteParts: string[] = ['Importado via planilha XLSX.'];
-  const sourceFields = [
-    ['Código antigo', 'Código'],
-    ['Sexo', 'Sexo'],
-    ['Como conheceu', 'Como Conheceu'],
-    ['CPF', 'CPF'],
-    ['RG', 'RG'],
-    ['Telefone original', 'Telefone'],
-    ['Celular original', 'Celular'],
-    ['CEP', 'CEP'],
-    ['Endereço', 'Endereço'],
-    ['Número', 'Número'],
-    ['Bairro', 'Bairro'],
-    ['Cidade', 'Cidade'],
-    ['Estado', 'Estado'],
-    ['Complemento', 'Complemento'],
-    ['Profissão', 'Profissão'],
-    ['Cadastro original', 'Cadastrado'],
-    ['Observação original', 'Obs'],
-  ];
-
-  sourceFields.forEach(([label, header]) => {
-    const value = asText(getField(row, header));
-    if (value) noteParts.push(`${label}: ${value}`);
-  });
-
-  return noteParts.join('\n');
-};
+const buildDuplicateKey = (name: string, category: string | null) =>
+  `${normalizeText(name)}:${normalizeText(category || 'Outros')}`;
 
 const parseImportRows = (rows: RawRow[]) => {
-  const validRows: ClientImportRow[] = [];
+  const validRows: ServiceImportRow[] = [];
   const invalidRows: number[] = [];
   const internalKeys = new Set<string>();
   let duplicatedInFile = 0;
 
   rows.forEach((row, index) => {
-    const name = asText(getField(row, 'Cliente')).replace(/\s+/g, ' ').trim();
+    const name = asText(getField(row, 'Serviço')).replace(/\s+/g, ' ').trim();
+    const price = parseMoney(getField(row, 'Valor'));
+
     if (!name) {
       invalidRows.push(index + 2);
       return;
     }
 
-    const mobile = onlyDigits(getField(row, 'Celular'));
-    const phone = mobile || onlyDigits(getField(row, 'Telefone')) || null;
-    const email = asText(getField(row, 'E-mail')).toLowerCase() || null;
-    const birthDate = parseDate(getField(row, 'Aniversário'));
-    const createdAtDate = parseDate(getField(row, 'Cadastrado'));
-    const importRow: ClientImportRow = {
-      sourceRow: index + 2,
-      name,
-      phone,
-      email,
-      birth_date: birthDate,
-      created_at: createdAtDate ? `${createdAtDate}T12:00:00-03:00` : undefined,
-      notes: buildNotes(row),
-      duplicateKeys: [],
-    };
+    const description = asText(getField(row, 'Descrição')) || null;
+    const category = asText(getField(row, 'Categoria')) || 'Outros';
+    const duplicateKey = buildDuplicateKey(name, category);
 
-    importRow.duplicateKeys = buildDuplicateKeys(importRow);
-    const isDuplicateInFile = importRow.duplicateKeys.some((key) => internalKeys.has(key));
-    if (isDuplicateInFile) {
+    if (internalKeys.has(duplicateKey)) {
       duplicatedInFile += 1;
       return;
     }
 
-    importRow.duplicateKeys.forEach((key) => internalKeys.add(key));
-    validRows.push(importRow);
+    internalKeys.add(duplicateKey);
+    validRows.push({
+      sourceRow: index + 2,
+      name,
+      description,
+      category,
+      default_price: price,
+      duplicateKey,
+    });
   });
 
   return { validRows, invalidRows, duplicatedInFile };
 };
 
-const buildExistingKeys = (clients: ExistingClient[]) => {
+const buildExistingKeys = (services: ExistingService[]) => {
   const keys = new Set<string>();
-  clients.forEach((client) => {
-    buildDuplicateKeys({
-      name: client.name,
-      phone: client.phone?.replace(/\D/g, '') || null,
-      email: client.email?.toLowerCase() || null,
-    }).forEach((key) => keys.add(key));
-  });
+  services.forEach((service) => keys.add(buildDuplicateKey(service.name, service.category)));
   return keys;
 };
 
-export function ClientImportSettings() {
+export function ServiceImportSettings() {
   const { tenantId, currentTenant, canModify } = useAuth();
   const { refreshData } = useData();
   const [fileName, setFileName] = useState('');
-  const [rows, setRows] = useState<ClientImportRow[]>([]);
+  const [rows, setRows] = useState<ServiceImportRow[]>([]);
   const [invalidCount, setInvalidCount] = useState(0);
   const [duplicatedInFile, setDuplicatedInFile] = useState(0);
   const [parsing, setParsing] = useState(false);
@@ -237,7 +168,7 @@ export function ClientImportSettings() {
       );
 
       if (missingHeaders.length > 0) {
-        toast.error(`A planilha precisa conter a coluna: ${missingHeaders.join(', ')}`);
+        toast.error(`A planilha precisa conter as colunas: ${missingHeaders.join(', ')}`);
         return;
       }
 
@@ -245,42 +176,41 @@ export function ClientImportSettings() {
       setRows(parsed.validRows);
       setInvalidCount(parsed.invalidRows.length);
       setDuplicatedInFile(parsed.duplicatedInFile);
-      toast.success(`${parsed.validRows.length} clientes prontos para validação.`);
+      toast.success(`${parsed.validRows.length} serviços prontos para validação.`);
     } catch (error) {
-      console.error('Erro ao ler planilha:', error);
+      console.error('Erro ao ler planilha de serviços:', error);
       toast.error('Não foi possível ler a planilha XLSX.');
     } finally {
       setParsing(false);
     }
   };
 
-  const fetchExistingClients = async () => {
+  const fetchExistingServices = async () => {
     if (!tenantId) return [];
 
-    const allClients: ExistingClient[] = [];
+    const allServices: ExistingService[] = [];
     let from = 0;
-    const pageSize = 1000;
 
     while (true) {
       const { data, error } = await supabase
-        .from('clients')
-        .select('name, phone, email')
+        .from('services')
+        .select('name, category')
         .eq('tenant_id', tenantId)
         .is('deleted_at', null)
-        .range(from, from + pageSize - 1);
+        .range(from, from + PAGE_SIZE - 1);
 
       if (error) throw error;
-      allClients.push(...(data ?? []));
-      if (!data || data.length < pageSize) break;
-      from += pageSize;
+      allServices.push(...(data ?? []));
+      if (!data || data.length < PAGE_SIZE) break;
+      from += PAGE_SIZE;
     }
 
-    return allClients;
+    return allServices;
   };
 
   const handleImport = async () => {
     if (!tenantId) {
-      toast.error('Entre em uma conta de cliente para importar os cadastros.');
+      toast.error('Entre em uma conta de cliente para importar os serviços.');
       return;
     }
 
@@ -299,13 +229,13 @@ export function ClientImportSettings() {
     setLastResult(null);
 
     try {
-      const existingKeys = buildExistingKeys(await fetchExistingClients());
-      const rowsToImport = rows.filter((row) => !row.duplicateKeys.some((key) => existingKeys.has(key)));
+      const existingKeys = buildExistingKeys(await fetchExistingServices());
+      const rowsToImport = rows.filter((row) => !existingKeys.has(row.duplicateKey));
       const skippedExisting = rows.length - rowsToImport.length;
 
       if (rowsToImport.length === 0) {
-        setLastResult(`Nenhum cliente importado. ${skippedExisting} já existiam neste cliente.`);
-        toast.info('Todos os clientes da planilha já existem neste cliente.');
+        setLastResult(`Nenhum serviço importado. ${skippedExisting} já existiam neste cliente.`);
+        toast.info('Todos os serviços da planilha já existem neste cliente.');
         return;
       }
 
@@ -314,27 +244,31 @@ export function ClientImportSettings() {
         const batch = rowsToImport.slice(index, index + IMPORT_BATCH_SIZE).map((row) => ({
           tenant_id: tenantId,
           name: row.name,
-          phone: row.phone,
-          email: row.email,
-          birth_date: row.birth_date,
-          created_at: row.created_at,
-          notes: row.notes,
+          description: row.description,
+          category: row.category,
+          default_price: row.default_price,
+          duration_minutes: 60,
+          break_time_minutes: 0,
+          allow_online_booking: false,
+          price_type: 'fixed' as const,
+          cost_price: 0,
+          is_active: true,
         }));
 
-        const { error } = await supabase.from('clients').insert(batch);
+        const { error } = await supabase.from('services').insert(batch);
         if (error) throw error;
 
         imported += batch.length;
         setProgress(Math.round((imported / rowsToImport.length) * 100));
       }
 
-      await refreshData(['clients']);
-      const result = `${imported} clientes importados para ${currentTenant?.name ?? 'o cliente logado'}. ${skippedExisting} já existiam e foram ignorados.`;
+      await refreshData(['services']);
+      const result = `${imported} serviços importados para ${currentTenant?.name ?? 'o cliente logado'}. ${skippedExisting} já existiam e foram ignorados.`;
       setLastResult(result);
       toast.success(result);
     } catch (error) {
-      console.error('Erro ao importar clientes:', error);
-      toast.error(error instanceof Error ? error.message : 'Erro ao importar clientes.');
+      console.error('Erro ao importar serviços:', error);
+      toast.error(error instanceof Error ? error.message : 'Erro ao importar serviços.');
     } finally {
       setImporting(false);
     }
@@ -345,7 +279,7 @@ export function ClientImportSettings() {
       <CardHeader>
         <CardTitle className="flex items-center gap-2">
           <FileSpreadsheet className="h-5 w-5" />
-          Importação de Clientes
+          Importação de Serviços
         </CardTitle>
         <CardDescription>
           Importe uma planilha XLSX para o cliente logado: {currentTenant?.name ?? 'não identificado'}
@@ -354,9 +288,9 @@ export function ClientImportSettings() {
       <CardContent className="space-y-6">
         <div className="grid gap-4 md:grid-cols-[1fr_auto] md:items-end">
           <div className="space-y-2">
-            <Label htmlFor="client-xlsx">Planilha XLSX</Label>
+            <Label htmlFor="service-xlsx">Planilha XLSX</Label>
             <Input
-              id="client-xlsx"
+              id="service-xlsx"
               type="file"
               accept=".xlsx,.xls"
               onChange={handleFileChange}
@@ -368,7 +302,7 @@ export function ClientImportSettings() {
             disabled={parsing || importing || rows.length === 0 || !tenantId || !canModify()}
           >
             <Upload className="mr-2 h-4 w-4" />
-            {importing ? 'Importando...' : 'Importar clientes'}
+            {importing ? 'Importando...' : 'Importar serviços'}
           </Button>
         </div>
 
@@ -386,7 +320,7 @@ export function ClientImportSettings() {
             <p className="font-medium">{duplicatedInFile}</p>
           </div>
           <div className="rounded-md border p-3">
-            <p className="text-muted-foreground">Linhas sem nome</p>
+            <p className="text-muted-foreground">Linhas sem serviço</p>
             <p className="font-medium">{invalidCount}</p>
           </div>
         </div>
@@ -405,10 +339,9 @@ export function ClientImportSettings() {
               <TableHeader>
                 <TableRow>
                   <TableHead>Linha</TableHead>
-                  <TableHead>Nome</TableHead>
-                  <TableHead>Telefone</TableHead>
-                  <TableHead>E-mail</TableHead>
-                  <TableHead>Aniversário</TableHead>
+                  <TableHead>Serviço</TableHead>
+                  <TableHead>Categoria</TableHead>
+                  <TableHead>Valor</TableHead>
                 </TableRow>
               </TableHeader>
               <TableBody>
@@ -416,9 +349,10 @@ export function ClientImportSettings() {
                   <TableRow key={`${row.sourceRow}-${row.name}`}>
                     <TableCell>{row.sourceRow}</TableCell>
                     <TableCell>{row.name}</TableCell>
-                    <TableCell>{row.phone ?? '-'}</TableCell>
-                    <TableCell>{row.email ?? '-'}</TableCell>
-                    <TableCell>{row.birth_date ?? '-'}</TableCell>
+                    <TableCell>{row.category ?? '-'}</TableCell>
+                    <TableCell>
+                      {row.default_price.toLocaleString('pt-BR', { style: 'currency', currency: 'BRL' })}
+                    </TableCell>
                   </TableRow>
                 ))}
               </TableBody>

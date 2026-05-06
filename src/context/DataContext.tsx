@@ -275,13 +275,28 @@ export const DataProvider: React.FC<{ children: ReactNode }> = ({ children }) =>
   const fetchServices = async () => {
     if (!tenantId) return [];
     // ITEM 8: buscar todos os serviços (inclusive inativos) para não quebrar histórico
-    const { data } = await supabase
-      .from('services')
-      .select('*')
-      .eq('tenant_id', tenantId)
-      .is('deleted_at', null)
-      .order('name');
-    return (data as Service[]) ?? [];
+    const allServices: Service[] = [];
+    let from = 0;
+
+    while (true) {
+      const { data, error } = await supabase
+        .from('services')
+        .select('*')
+        .eq('tenant_id', tenantId)
+        .is('deleted_at', null)
+        .order('name')
+        .range(from, from + SUPABASE_PAGE_SIZE - 1);
+
+      if (error) throw error;
+
+      const page = (data as Service[]) ?? [];
+      allServices.push(...page);
+
+      if (page.length < SUPABASE_PAGE_SIZE) break;
+      from += SUPABASE_PAGE_SIZE;
+    }
+
+    return allServices;
   };
 
   const fetchProducts = async () => {
