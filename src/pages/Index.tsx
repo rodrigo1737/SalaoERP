@@ -9,6 +9,7 @@ import { ClientsList } from '@/components/clients/ClientsList';
 import { ProfessionalsList } from '@/components/professionals/ProfessionalsList';
 import { ServicesList } from '@/components/services/ServicesList';
 import { ProductsList } from '@/components/products/ProductsList';
+import { AestheticsModule } from '@/components/aesthetics/AestheticsModule';
 import { Commissions } from '@/components/commissions/Commissions';
 import { Cashier } from '@/components/cashier/Cashier';
 import { Reports } from '@/components/reports/Reports';
@@ -25,7 +26,7 @@ import { PurchaseEntry } from '@/components/stock/PurchaseEntry';
 import { StockMovements } from '@/components/stock/StockMovements';
 
 // Páginas válidas por perfil
-const ADMIN_PAGES = ['dashboard', 'agenda', 'clients', 'professionals', 'services', 'products',
+const ADMIN_PAGES = ['dashboard', 'agenda', 'clients', 'professionals', 'services', 'products', 'aesthetics',
   'suppliers', 'purchase', 'stock-movements', 'commissions', 'reports', 'cashier', 'settings'];
 const PROFESSIONAL_PAGES = ['agenda', 'commissions', 'settings'];
 const SUPER_ADMIN_PAGES = ['super-dashboard', 'tenants'];
@@ -33,11 +34,14 @@ const SUPER_ADMIN_PAGES = ['super-dashboard', 'tenants'];
 const Index = () => {
   const { page } = useParams<{ page?: string }>();
   const navigate = useNavigate();
-  const { userRole, isSuperAdmin, hasPermission } = useAuth();
+  const { userRole, isSuperAdmin, hasPermission, currentTenant } = useAuth();
   const isAdmin = userRole === 'admin';
 
   const canAccessPage = (targetPage: string) => {
     if (isSuperAdmin) return SUPER_ADMIN_PAGES.includes(targetPage);
+    if (targetPage === 'aesthetics') {
+      return isAdmin && currentTenant?.package_type === 'aesthetic_clinic';
+    }
     if (isAdmin) return ADMIN_PAGES.includes(targetPage);
     if (targetPage === 'agenda') return hasPermission('view_schedule') || hasPermission('edit_schedule');
     if (targetPage === 'clients') return hasPermission('view_clients');
@@ -60,7 +64,7 @@ const Index = () => {
     if (!page) {
       navigate(`/app/${getDefaultPage()}`, { replace: true });
     }
-  }, [page, isSuperAdmin, isAdmin, navigate, hasPermission]);
+  }, [page, isSuperAdmin, isAdmin, navigate, hasPermission, currentTenant?.package_type]);
 
   // Redireciona profissional que tentou acessar página de admin
   useEffect(() => {
@@ -70,7 +74,7 @@ const Index = () => {
     if (isSuperAdmin && page && !SUPER_ADMIN_PAGES.includes(page)) {
       navigate('/app/super-dashboard', { replace: true });
     }
-  }, [page, isSuperAdmin, isAdmin, navigate, hasPermission]);
+  }, [page, isSuperAdmin, isAdmin, navigate, hasPermission, currentTenant?.package_type]);
 
   const currentPage = page ?? getDefaultPage();
 
@@ -91,6 +95,7 @@ const Index = () => {
       case 'professionals':    return <ProfessionalsList />;
       case 'services':         return <ServicesList />;
       case 'products':         return <ProductsList />;
+      case 'aesthetics':       return <AestheticsModule />;
       case 'suppliers':        return <SuppliersList />;
       case 'purchase':         return <PurchaseEntry />;
       case 'stock-movements':  return <StockMovements />;
