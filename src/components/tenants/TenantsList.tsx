@@ -595,7 +595,7 @@ export function TenantsList() {
                           type="button"
                           variant="outline"
                           size="icon"
-                          onClick={() => window.open(getBookingUrl(formData.booking_slug), '_blank')}
+                          onClick={() => window.open(getBookingUrl(formData.booking_slug), '_blank', 'noopener,noreferrer')}
                           title="Abrir link"
                         >
                           <ExternalLink className="w-4 h-4" />
@@ -737,7 +737,7 @@ export function TenantsList() {
                                 variant="ghost"
                                 size="sm"
                                 className="h-7 w-7 p-0"
-                                onClick={() => window.open(getBookingUrl(tenant.booking_slug!), '_blank')}
+                                onClick={() => window.open(getBookingUrl(tenant.booking_slug!), '_blank', 'noopener,noreferrer')}
                                 title="Abrir link"
                               >
                                 <ExternalLink className="w-3 h-3" />

@@ -1,6 +1,16 @@
 import { corsHeaders, jsonResponse } from "../_shared/cors.ts";
 import { getAdminClient, requireSuperAdmin } from "../_shared/admin.ts";
 
+function getPasswordErrors(password: string) {
+  const errors = [];
+  if (password.length < 8) errors.push("Mínimo 8 caracteres");
+  if (!/[A-Z]/.test(password)) errors.push("Uma letra maiúscula");
+  if (!/[a-z]/.test(password)) errors.push("Uma letra minúscula");
+  if (!/[0-9]/.test(password)) errors.push("Um número");
+  if (!/[^A-Za-z0-9]/.test(password)) errors.push("Um caractere especial");
+  return errors;
+}
+
 Deno.serve(async (req) => {
   if (req.method === "OPTIONS") {
     return new Response(null, { headers: corsHeaders });
@@ -49,6 +59,14 @@ Deno.serve(async (req) => {
     if (action === "reset_password") {
       if (!tenantId || !userId || !newPassword) {
         return jsonResponse({ error: "tenantId, userId and newPassword are required" }, 400);
+      }
+
+      const passwordErrors = getPasswordErrors(String(newPassword));
+      if (passwordErrors.length > 0) {
+        return jsonResponse({
+          error: "A nova senha não atende aos requisitos.",
+          details: passwordErrors,
+        }, 400);
       }
 
       const { data: role, error: roleError } = await supabaseAdmin

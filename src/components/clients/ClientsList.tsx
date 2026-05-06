@@ -45,11 +45,13 @@ import { useToast } from '@/hooks/use-toast';
 import { Client } from '@/context/DataContext';
 import { useStableData } from '@/context/StableDataContext';
 import { ClientPhotoUpload } from './ClientPhotoUpload';
+import { useAuth } from '@/contexts/AuthContext';
 
 const PAGE_SIZE = 20;
 
 export function ClientsList() {
   const { clients, addClient, updateClient, deleteClient } = useStableData();
+  const { tenantId } = useAuth();
   const { toast } = useToast();
   const [searchQuery, setSearchQuery] = useState('');
   const [isDialogOpen, setIsDialogOpen] = useState(false);
@@ -295,6 +297,7 @@ export function ClientsList() {
               <ClientPhotoUpload
                 currentPhotoUrl={formPhotoUrl}
                 clientName={formName || 'Cliente'}
+                tenantId={tenantId || ''}
                 onPhotoChange={setFormPhotoUrl}
                 size="lg"
               />

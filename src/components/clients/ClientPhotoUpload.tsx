@@ -8,6 +8,7 @@ import { toast } from 'sonner';
 interface ClientPhotoUploadProps {
   currentPhotoUrl?: string | null;
   clientName: string;
+  tenantId: string;
   onPhotoChange: (url: string | null) => void;
   size?: 'sm' | 'md' | 'lg';
 }
@@ -15,6 +16,7 @@ interface ClientPhotoUploadProps {
 export function ClientPhotoUpload({ 
   currentPhotoUrl, 
   clientName, 
+  tenantId,
   onPhotoChange,
   size = 'md' 
 }: ClientPhotoUploadProps) {
@@ -37,6 +39,10 @@ export function ClientPhotoUpload({
   const handleFileSelect = async (event: React.ChangeEvent<HTMLInputElement>) => {
     const file = event.target.files?.[0];
     if (!file) return;
+    if (!tenantId) {
+      toast.error('Tenant nao identificado para enviar a foto');
+      return;
+    }
 
     // Validate file type
     if (!file.type.startsWith('image/')) {
@@ -60,12 +66,12 @@ export function ClientPhotoUpload({
       // Generate unique filename
       const fileExt = file.name.split('.').pop();
       const fileName = `${Date.now()}-${Math.random().toString(36).substring(7)}.${fileExt}`;
-      const filePath = `clients/${fileName}`;
+      const filePath = `${tenantId}/clients/${fileName}`;
 
       // Upload to Supabase Storage
       const { error: uploadError } = await supabase.storage
         .from('client-photos')
-        .upload(filePath, file, { upsert: true });
+        .upload(filePath, file, { upsert: false });
 
       if (uploadError) throw uploadError;
 

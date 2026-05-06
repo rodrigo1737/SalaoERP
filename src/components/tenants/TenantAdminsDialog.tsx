@@ -22,6 +22,7 @@ import { Users, Key, Loader2, Eye, EyeOff, CheckCircle2 } from 'lucide-react';
 import { format } from 'date-fns';
 import { ptBR } from 'date-fns/locale';
 import { getSupabaseErrorMessage } from '@/lib/supabaseErrors';
+import { validatePassword } from '@/lib/passwordValidation';
 
 interface Tenant {
   id: string;
@@ -86,6 +87,14 @@ export function TenantAdminsDialog({ tenant, open, onOpenChange }: TenantAdminsD
   const handleResetPassword = async () => {
     if (!selectedAdmin || !newPassword) {
       toast.error('Preencha a nova senha');
+      return;
+    }
+
+    const passwordValidation = validatePassword(newPassword);
+    if (!passwordValidation.valid) {
+      toast.error('A nova senha não atende aos requisitos.', {
+        description: passwordValidation.errors.join(', '),
+      });
       return;
     }
 

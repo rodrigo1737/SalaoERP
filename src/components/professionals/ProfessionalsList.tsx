@@ -182,7 +182,7 @@ export function ProfessionalsList() {
 
       const { error: uploadError } = await supabase.storage
         .from('professional-photos')
-        .upload(filePath, photoFile, { upsert: true });
+        .upload(filePath, photoFile, { upsert: false });
 
       if (uploadError) {
         console.error('Upload error:', uploadError);

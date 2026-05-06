@@ -42,7 +42,12 @@ export function ProfileSettings() {
     if (!currentPassword) { toast.error('Informe a senha atual.'); return; }
     if (newPassword !== confirmPassword) { toast.error('As senhas não coincidem.'); return; }
     const validation = validatePassword(newPassword);
-    if (!validation.isValid) { toast.error(getPasswordRequirementsMessage(validation)); return; }
+    if (!validation.valid) {
+      toast.error('A nova senha não atende aos requisitos.', {
+        description: validation.errors.join(', ') || getPasswordRequirementsMessage(),
+      });
+      return;
+    }
 
     setSavingPw(true);
     try {

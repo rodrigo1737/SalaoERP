@@ -130,11 +130,11 @@ const ClientSignup: React.FC = () => {
     try {
       const fileExt = file.name.split('.').pop();
       const fileName = `${Date.now()}-${Math.random().toString(36).substring(7)}.${fileExt}`;
-      const filePath = `clients/${fileName}`;
+      const filePath = `${tenant.id}/clients/${fileName}`;
 
       const { error: uploadError } = await supabase.storage
         .from('client-photos')
-        .upload(filePath, file, { upsert: true });
+        .upload(filePath, file, { upsert: false });
 
       if (uploadError) throw uploadError;
 
@@ -430,11 +430,11 @@ const ClientSignup: React.FC = () => {
                 />
                 <span className="text-sm text-muted-foreground">
                   Li e aceito os{' '}
-                  <Link to="../termos" className="text-primary hover:underline" target="_blank">
+                  <Link to="../termos" className="text-primary hover:underline" target="_blank" rel="noopener noreferrer">
                     Termos de Uso
                   </Link>{' '}
                   e a{' '}
-                  <Link to="../privacidade" className="text-primary hover:underline" target="_blank">
+                  <Link to="../privacidade" className="text-primary hover:underline" target="_blank" rel="noopener noreferrer">
                     Política de Privacidade
                   </Link>
                 </span>

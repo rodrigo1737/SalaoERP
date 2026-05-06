@@ -316,7 +316,7 @@ export function AppointmentDetailDialog({
     if (appointment?.client?.phone) {
       const phone = appointment.client.phone.replace(/\D/g, '');
       const formattedPhone = phone.startsWith('55') ? phone : `55${phone}`;
-      window.open(`https://wa.me/${formattedPhone}`, '_blank');
+      window.open(`https://wa.me/${formattedPhone}`, '_blank', 'noopener,noreferrer');
     }
   };
 

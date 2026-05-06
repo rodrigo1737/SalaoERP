@@ -2,7 +2,7 @@ type ErrorPayload = {
   error?: string;
   message?: string;
   msg?: string;
-  details?: string;
+  details?: string | string[];
   hint?: string;
 };
 
@@ -14,7 +14,8 @@ const stringifyPayload = (payload: unknown): string | null => {
   if (typeof payload === 'object') {
     const data = payload as ErrorPayload;
     const message = data.error || data.message || data.msg;
-    const extras = [data.details, data.hint].filter(Boolean);
+    const details = Array.isArray(data.details) ? data.details.join(', ') : data.details;
+    const extras = [details, data.hint].filter(Boolean);
 
     if (message && extras.length > 0) return `${message} (${extras.join(' ')})`;
     if (message) return message;

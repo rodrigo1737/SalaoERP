@@ -56,7 +56,10 @@ Deno.serve(async (req) => {
 
     const results = await Promise.all(writes);
     const writeError = results.find((result) => result.error)?.error;
-    if (writeError) return jsonResponse({ error: writeError.message }, 400);
+    if (writeError) {
+      await supabaseAdmin.auth.admin.deleteUser(userId);
+      return jsonResponse({ error: writeError.message }, 400);
+    }
 
     if (selectedPermissions.length > 0) {
       const { error: permissionsError } = await supabaseAdmin
@@ -70,7 +73,10 @@ Deno.serve(async (req) => {
           { onConflict: "user_id,tenant_id,permission" },
         );
 
-      if (permissionsError) return jsonResponse({ error: permissionsError.message }, 400);
+      if (permissionsError) {
+        await supabaseAdmin.auth.admin.deleteUser(userId);
+        return jsonResponse({ error: permissionsError.message }, 400);
+      }
     }
 
     return jsonResponse({ success: true, userId });

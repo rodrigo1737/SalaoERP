@@ -44,7 +44,10 @@ Deno.serve(async (req) => {
 
     const results = await Promise.all(writes);
     const error = results.find((result) => result.error)?.error;
-    if (error) return jsonResponse({ error: error.message }, 400);
+    if (error) {
+      await supabaseAdmin.auth.admin.deleteUser(userId);
+      return jsonResponse({ error: error.message }, 400);
+    }
 
     return jsonResponse({ success: true, userId });
   } catch (error) {
