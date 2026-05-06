@@ -1,4 +1,4 @@
-import { useState } from 'react';
+import { useEffect, useState } from 'react';
 import { useStableData } from '@/context/StableDataContext';
 import { useStock } from '@/context/StockContext';
 import { Card, CardContent, CardHeader, CardTitle } from '@/components/ui/card';
@@ -56,6 +56,11 @@ import {
 } from 'lucide-react';
 import { toast } from 'sonner';
 import { Product } from '@/context/DataContext';
+import {
+  CadastroPageSize,
+  ListViewControls,
+  resolvePageSize,
+} from '@/components/common/ListViewControls';
 
 const productCategories = [
   'Cabelos',
@@ -72,7 +77,7 @@ const productCategories = [
   'Outros',
 ];
 
-const PAGE_SIZE = 20;
+const DEFAULT_PAGE_SIZE: CadastroPageSize = 20;
 
 export function ProductsList() {
   const { products, addProduct, updateProduct, deleteProduct, loading } = useStableData();
@@ -88,6 +93,7 @@ export function ProductsList() {
   const [stockReason, setStockReason] = useState('');
   const [deletingProduct, setDeletingProduct] = useState<Product | null>(null);
   const [page, setPage] = useState(1);
+  const [pageSize, setPageSize] = useState<CadastroPageSize>(DEFAULT_PAGE_SIZE);
 
   const [formData, setFormData] = useState({
     name: '',
@@ -112,11 +118,24 @@ export function ProductsList() {
     return matchesSearch && matchesType;
   });
 
-  const pagedProducts = filteredProducts.slice((page - 1) * PAGE_SIZE, page * PAGE_SIZE);
-  const totalPages = Math.max(1, Math.ceil(filteredProducts.length / PAGE_SIZE));
+  const resolvedPageSize = resolvePageSize(pageSize, filteredProducts.length);
+  const pagedProducts = pageSize === 'all'
+    ? filteredProducts
+    : filteredProducts.slice((page - 1) * resolvedPageSize, page * resolvedPageSize);
+  const totalPages = Math.max(1, Math.ceil(filteredProducts.length / resolvedPageSize));
   const lowStockProducts = products.filter(p => p.stock_quantity <= (p.min_stock || 5) && p.is_active);
   const totalStockValue = products.reduce((sum, p) => sum + (p.stock_quantity * p.cost_price), 0);
   const totalSaleValue = products.reduce((sum, p) => sum + (p.stock_quantity * p.sale_price), 0);
+
+  useEffect(() => {
+    setPage(1);
+  }, [searchQuery, filterType, pageSize]);
+
+  useEffect(() => {
+    if (page > totalPages) {
+      setPage(totalPages);
+    }
+  }, [page, totalPages]);
 
   const resetForm = () => {
     setFormData({
@@ -556,6 +575,13 @@ export function ProductsList() {
         </Select>
       </div>
 
+      <ListViewControls
+        pageSize={pageSize}
+        onPageSizeChange={setPageSize}
+        totalItems={filteredProducts.length}
+        shownItems={pagedProducts.length}
+      />
+
       {/* Products Table */}
       <Card>
         <CardContent className="p-0">
@@ -733,7 +759,7 @@ export function ProductsList() {
       </AlertDialog>
 
       {/* Paginação */}
-      {totalPages > 1 && (
+      {pageSize !== 'all' && totalPages > 1 && (
         <div className="flex items-center justify-center gap-3 mt-4">
           <Button variant="outline" size="sm" onClick={() => setPage(p => Math.max(1, p - 1))} disabled={page === 1}>
             <ChevronLeft className="w-4 h-4" />

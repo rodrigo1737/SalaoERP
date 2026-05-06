@@ -59,6 +59,14 @@ import {
   TabsTrigger,
 } from '@/components/ui/tabs';
 import {
+  Table,
+  TableBody,
+  TableCell,
+  TableHead,
+  TableHeader,
+  TableRow,
+} from '@/components/ui/table';
+import {
   Tooltip,
   TooltipContent,
   TooltipProvider,
@@ -71,6 +79,12 @@ import { useStock } from '@/context/StockContext';
 import { useAuth } from '@/contexts/AuthContext';
 import { supabase } from '@/integrations/supabase/client';
 import { ServiceProductsEditor } from './ServiceProductsEditor';
+import {
+  CadastroPageSize,
+  CadastroViewMode,
+  ListViewControls,
+  resolvePageSize,
+} from '@/components/common/ListViewControls';
 
 const serviceCategories = ['Cabelo', 'Unhas', 'Estética', 'Maquiagem', 'Outros'];
 
@@ -94,7 +108,7 @@ interface ServiceProductItem {
   notes?: string;
 }
 
-const PAGE_SIZE = 20;
+const DEFAULT_PAGE_SIZE: CadastroPageSize = 20;
 
 export function ServicesList() {
   const { services, professionals, addService, updateService, deleteService, refreshData } = useStableData();
@@ -109,6 +123,8 @@ export function ServicesList() {
   const [activeTab, setActiveTab] = useState('service');
   const [deletingService, setDeletingService] = useState<Service | null>(null);
   const [page, setPage] = useState(1);
+  const [viewMode, setViewMode] = useState<CadastroViewMode>('cards');
+  const [pageSize, setPageSize] = useState<CadastroPageSize>(DEFAULT_PAGE_SIZE);
 
   // Form state - Service tab
   const [formName, setFormName] = useState('');
@@ -176,8 +192,11 @@ export function ServicesList() {
     return matchesSearch && matchesCategory;
   });
 
-  const pagedServices = filteredServices.slice((page - 1) * PAGE_SIZE, page * PAGE_SIZE);
-  const totalPages = Math.max(1, Math.ceil(filteredServices.length / PAGE_SIZE));
+  const resolvedPageSize = resolvePageSize(pageSize, filteredServices.length);
+  const pagedServices = pageSize === 'all'
+    ? filteredServices
+    : filteredServices.slice((page - 1) * resolvedPageSize, page * resolvedPageSize);
+  const totalPages = Math.max(1, Math.ceil(filteredServices.length / resolvedPageSize));
 
   const groupedServices = pagedServices.reduce((acc, service) => {
     const cat = service.category || 'Outros';
@@ -327,6 +346,16 @@ export function ServicesList() {
     return priceTypes.find(p => p.value === type)?.label || 'Fixo';
   };
 
+  useEffect(() => {
+    setPage(1);
+  }, [searchQuery, categoryFilter, pageSize, viewMode]);
+
+  useEffect(() => {
+    if (page > totalPages) {
+      setPage(totalPages);
+    }
+  }, [page, totalPages]);
+
   return (
     <div className="p-6 lg:p-8 space-y-6">
       {/* Header */}
@@ -372,13 +401,22 @@ export function ServicesList() {
         </Select>
       </div>
 
+      <ListViewControls
+        viewMode={viewMode}
+        onViewModeChange={setViewMode}
+        pageSize={pageSize}
+        onPageSizeChange={setPageSize}
+        totalItems={filteredServices.length}
+        shownItems={pagedServices.length}
+      />
+
       {/* Services by Category */}
       {Object.keys(groupedServices).length === 0 ? (
         <div className="text-center py-12 text-muted-foreground">
           <p>Nenhum serviço cadastrado</p>
           <p className="text-sm">Clique em "Novo Serviço" para adicionar</p>
         </div>
-      ) : (
+      ) : viewMode === 'cards' ? (
         <div className="space-y-8">
           {Object.entries(groupedServices).map(([category, categoryServices], categoryIndex) => (
             <motion.div
@@ -470,10 +508,83 @@ export function ServicesList() {
             </motion.div>
           ))}
         </div>
+      ) : (
+        <Card className="overflow-hidden">
+          <Table>
+            <TableHeader>
+              <TableRow>
+                <TableHead>Serviço</TableHead>
+                <TableHead className="hidden md:table-cell">Categoria</TableHead>
+                <TableHead className="hidden md:table-cell">Duração</TableHead>
+                {viewMode === 'detailed' && (
+                  <>
+                    <TableHead className="hidden lg:table-cell">Preço</TableHead>
+                    <TableHead className="hidden lg:table-cell">Online</TableHead>
+                    <TableHead className="hidden xl:table-cell">Status</TableHead>
+                  </>
+                )}
+                <TableHead className="text-right">Ações</TableHead>
+              </TableRow>
+            </TableHeader>
+            <TableBody>
+              {pagedServices.map((service) => (
+                <TableRow key={service.id} className={!service.is_active ? 'opacity-60' : ''}>
+                  <TableCell>
+                    <div className="min-w-0">
+                      <p className="truncate font-medium">{service.name}</p>
+                      {viewMode === 'compact' && (
+                        <p className="text-xs text-muted-foreground md:hidden">
+                          {service.category || 'Outros'} · {formatCurrency(service.default_price)}
+                        </p>
+                      )}
+                    </div>
+                  </TableCell>
+                  <TableCell className="hidden md:table-cell">{service.category || 'Outros'}</TableCell>
+                  <TableCell className="hidden md:table-cell">
+                    {service.duration_minutes} min
+                    {service.break_time_minutes > 0 ? ` + ${service.break_time_minutes}` : ''}
+                  </TableCell>
+                  {viewMode === 'detailed' && (
+                    <>
+                      <TableCell className="hidden font-medium lg:table-cell">
+                        {service.price_type === 'starting_at' && 'A partir de '}
+                        {formatCurrency(service.default_price)}
+                      </TableCell>
+                      <TableCell className="hidden lg:table-cell">
+                        {service.allow_online_booking ? 'Sim' : 'Não'}
+                      </TableCell>
+                      <TableCell className="hidden xl:table-cell">
+                        <Badge variant={service.is_active ? 'success' : 'secondary'}>
+                          {service.is_active ? 'Ativo' : 'Inativo'}
+                        </Badge>
+                      </TableCell>
+                    </>
+                  )}
+                  <TableCell className="text-right">
+                    <div className="flex justify-end gap-1">
+                      <Button variant="ghost" size="icon" onClick={() => openEditService(service)} title="Editar serviço">
+                        <Edit2 className="h-4 w-4" />
+                      </Button>
+                      <Button
+                        variant="ghost"
+                        size="icon"
+                        className="text-destructive hover:bg-destructive/10 hover:text-destructive"
+                        onClick={() => setDeletingService(service)}
+                        title="Excluir serviço"
+                      >
+                        <Trash2 className="h-4 w-4" />
+                      </Button>
+                    </div>
+                  </TableCell>
+                </TableRow>
+              ))}
+            </TableBody>
+          </Table>
+        </Card>
       )}
 
       {/* Paginação */}
-      {totalPages > 1 && (
+      {pageSize !== 'all' && totalPages > 1 && (
         <div className="flex items-center justify-center gap-3 mt-4">
           <Button variant="outline" size="sm" onClick={() => setPage(p => Math.max(1, p - 1))} disabled={page === 1}>
             <ChevronLeft className="w-4 h-4" />

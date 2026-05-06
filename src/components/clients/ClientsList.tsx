@@ -41,13 +41,27 @@ import {
   DropdownMenuTrigger,
 } from '@/components/ui/dropdown-menu';
 import { Avatar, AvatarFallback, AvatarImage } from '@/components/ui/avatar';
+import {
+  Table,
+  TableBody,
+  TableCell,
+  TableHead,
+  TableHeader,
+  TableRow,
+} from '@/components/ui/table';
 import { useToast } from '@/hooks/use-toast';
 import { Client } from '@/context/DataContext';
 import { useStableData } from '@/context/StableDataContext';
 import { ClientPhotoUpload } from './ClientPhotoUpload';
 import { useAuth } from '@/contexts/AuthContext';
+import {
+  CadastroPageSize,
+  CadastroViewMode,
+  ListViewControls,
+  resolvePageSize,
+} from '@/components/common/ListViewControls';
 
-const PAGE_SIZE = 20;
+const DEFAULT_PAGE_SIZE: CadastroPageSize = 20;
 
 const normalizeDateInputValue = (value?: string) => {
   if (!value) return '';
@@ -74,6 +88,8 @@ export function ClientsList() {
   const [isSubmitting, setIsSubmitting] = useState(false);
   const [deletingClient, setDeletingClient] = useState<Client | null>(null);
   const [page, setPage] = useState(1);
+  const [viewMode, setViewMode] = useState<CadastroViewMode>('cards');
+  const [pageSize, setPageSize] = useState<CadastroPageSize>(DEFAULT_PAGE_SIZE);
 
   // Form state
   const [formName, setFormName] = useState('');
@@ -88,13 +104,16 @@ export function ClientsList() {
     (client.phone && client.phone.includes(searchQuery))
   );
   // ITEM 10: paginação
-  const totalPages = Math.max(1, Math.ceil(filteredClients.length / PAGE_SIZE));
+  const resolvedPageSize = resolvePageSize(pageSize, filteredClients.length);
+  const totalPages = Math.max(1, Math.ceil(filteredClients.length / resolvedPageSize));
   const currentPage = Math.min(page, totalPages);
-  const pagedClients = filteredClients.slice((currentPage - 1) * PAGE_SIZE, currentPage * PAGE_SIZE);
+  const pagedClients = pageSize === 'all'
+    ? filteredClients
+    : filteredClients.slice((currentPage - 1) * resolvedPageSize, currentPage * resolvedPageSize);
 
   useEffect(() => {
     setPage(1);
-  }, [searchQuery]);
+  }, [searchQuery, pageSize, viewMode]);
 
   useEffect(() => {
     if (page > totalPages) {
@@ -185,13 +204,24 @@ export function ClientsList() {
       </div>
 
       {/* Search */}
-      <div className="relative">
-        <Search className="absolute left-3 top-1/2 -translate-y-1/2 w-5 h-5 text-muted-foreground" />
-        <Input
-          placeholder="Buscar por nome ou telefone..."
-          className="pl-10"
-          value={searchQuery}
-          onChange={(e) => setSearchQuery(e.target.value)}
+      <div className="space-y-4">
+        <div className="relative">
+          <Search className="absolute left-3 top-1/2 -translate-y-1/2 w-5 h-5 text-muted-foreground" />
+          <Input
+            placeholder="Buscar por nome ou telefone..."
+            className="pl-10"
+            value={searchQuery}
+            onChange={(e) => setSearchQuery(e.target.value)}
+          />
+        </div>
+
+        <ListViewControls
+          viewMode={viewMode}
+          onViewModeChange={setViewMode}
+          pageSize={pageSize}
+          onPageSizeChange={setPageSize}
+          totalItems={filteredClients.length}
+          shownItems={pagedClients.length}
         />
       </div>
 
@@ -201,7 +231,7 @@ export function ClientsList() {
           <p>Nenhum cliente cadastrado</p>
           <p className="text-sm">Clique em "Novo Cliente" para adicionar</p>
         </div>
-      ) : (
+      ) : viewMode === 'cards' ? (
         <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 gap-4">
           {pagedClients.map((client, index) => (
             <motion.div
@@ -273,10 +303,79 @@ export function ClientsList() {
             </motion.div>
           ))}
         </div>
+      ) : (
+        <Card className="overflow-hidden">
+          <Table>
+            <TableHeader>
+              <TableRow>
+                <TableHead>Cliente</TableHead>
+                <TableHead className="hidden md:table-cell">Telefone</TableHead>
+                {viewMode === 'detailed' && (
+                  <>
+                    <TableHead className="hidden lg:table-cell">E-mail</TableHead>
+                    <TableHead className="hidden lg:table-cell">Nascimento</TableHead>
+                    <TableHead className="hidden xl:table-cell">Cadastro</TableHead>
+                  </>
+                )}
+                <TableHead className="text-right">Ações</TableHead>
+              </TableRow>
+            </TableHeader>
+            <TableBody>
+              {pagedClients.map((client) => (
+                <TableRow key={client.id}>
+                  <TableCell>
+                    <div className="flex items-center gap-3">
+                      <Avatar className="h-9 w-9">
+                        <AvatarImage src={client.photo_url || undefined} alt={client.name} />
+                        <AvatarFallback>{client.name.charAt(0)}</AvatarFallback>
+                      </Avatar>
+                      <div className="min-w-0">
+                        <p className="truncate font-medium">{client.name}</p>
+                        {viewMode === 'compact' && client.phone && (
+                          <p className="truncate text-xs text-muted-foreground md:hidden">{client.phone}</p>
+                        )}
+                      </div>
+                    </div>
+                  </TableCell>
+                  <TableCell className="hidden md:table-cell">{client.phone || '-'}</TableCell>
+                  {viewMode === 'detailed' && (
+                    <>
+                      <TableCell className="hidden max-w-[260px] truncate lg:table-cell">
+                        {client.email || '-'}
+                      </TableCell>
+                      <TableCell className="hidden lg:table-cell">
+                        {client.birth_date ? formatDateOnly(client.birth_date) : '-'}
+                      </TableCell>
+                      <TableCell className="hidden xl:table-cell">
+                        {new Date(client.created_at).toLocaleDateString('pt-BR')}
+                      </TableCell>
+                    </>
+                  )}
+                  <TableCell className="text-right">
+                    <div className="flex justify-end gap-1">
+                      <Button variant="ghost" size="icon" onClick={() => openEditClient(client)} title="Editar cliente">
+                        <Edit2 className="h-4 w-4" />
+                      </Button>
+                      <Button
+                        variant="ghost"
+                        size="icon"
+                        className="text-destructive hover:bg-destructive/10 hover:text-destructive"
+                        onClick={() => setDeletingClient(client)}
+                        title="Excluir cliente"
+                      >
+                        <Trash2 className="h-4 w-4" />
+                      </Button>
+                    </div>
+                  </TableCell>
+                </TableRow>
+              ))}
+            </TableBody>
+          </Table>
+        </Card>
       )}
 
       {/* Paginação */}
-      {totalPages > 1 && (
+      {pageSize !== 'all' && totalPages > 1 && (
         <div className="flex items-center justify-center gap-3 mt-4">
           <Button variant="outline" size="sm" onClick={() => setPage(p => Math.max(1, p - 1))} disabled={currentPage === 1}>
             <ChevronLeft className="w-4 h-4" />

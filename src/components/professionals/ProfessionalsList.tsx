@@ -1,4 +1,4 @@
-import { useState, useRef } from 'react';
+import { useEffect, useState, useRef } from 'react';
 import { motion } from 'framer-motion';
 import {
   Plus,
@@ -12,6 +12,7 @@ import {
   Trash2,
   ChevronLeft,
   ChevronRight,
+  Search,
 } from 'lucide-react';
 import { Card } from '@/components/ui/card';
 import { Button } from '@/components/ui/button';
@@ -51,6 +52,14 @@ import {
   AlertDialogTitle,
 } from '@/components/ui/alert-dialog';
 import { Avatar, AvatarImage, AvatarFallback } from '@/components/ui/avatar';
+import {
+  Table,
+  TableBody,
+  TableCell,
+  TableHead,
+  TableHeader,
+  TableRow,
+} from '@/components/ui/table';
 import { useToast } from '@/hooks/use-toast';
 import { Professional } from '@/context/DataContext';
 import { useStableData } from '@/context/StableDataContext';
@@ -58,6 +67,12 @@ import { useAuth } from '@/contexts/AuthContext';
 import { supabase } from '@/integrations/supabase/client';
 import { validatePassword, getPasswordRequirementsMessage } from '@/lib/passwordValidation';
 import { getSupabaseErrorMessage } from '@/lib/supabaseErrors';
+import {
+  CadastroPageSize,
+  CadastroViewMode,
+  ListViewControls,
+  resolvePageSize,
+} from '@/components/common/ListViewControls';
 
 const professionalTypes = [
   { value: 'owner', label: 'Proprietário' },
@@ -79,7 +94,7 @@ const specialtyTypes = [
   { value: 'outro', label: 'Outro' },
 ];
 
-const PAGE_SIZE = 20;
+const DEFAULT_PAGE_SIZE: CadastroPageSize = 20;
 
 export function ProfessionalsList() {
   const { professionals, addProfessional, updateProfessional, deleteProfessional } = useStableData();
@@ -106,6 +121,24 @@ export function ProfessionalsList() {
   const [isUploadingPhoto, setIsUploadingPhoto] = useState(false);
   const [deletingProfessional, setDeletingProfessional] = useState<Professional | null>(null);
   const [page, setPage] = useState(1);
+  const [searchQuery, setSearchQuery] = useState('');
+  const [viewMode, setViewMode] = useState<CadastroViewMode>('cards');
+  const [pageSize, setPageSize] = useState<CadastroPageSize>(DEFAULT_PAGE_SIZE);
+
+  const filteredProfessionals = professionals.filter((professional) => {
+    const query = searchQuery.toLowerCase();
+    return (
+      professional.name.toLowerCase().includes(query) ||
+      professional.nickname.toLowerCase().includes(query) ||
+      professional.email?.toLowerCase().includes(query) ||
+      professional.specialty?.toLowerCase().includes(query)
+    );
+  });
+  const resolvedPageSize = resolvePageSize(pageSize, filteredProfessionals.length);
+  const pagedProfessionals = pageSize === 'all'
+    ? filteredProfessionals
+    : filteredProfessionals.slice((page - 1) * resolvedPageSize, page * resolvedPageSize);
+  const totalPages = Math.max(1, Math.ceil(filteredProfessionals.length / resolvedPageSize));
 
   const openNewProfessional = () => {
     setEditingProfessional(null);
@@ -123,6 +156,16 @@ export function ProfessionalsList() {
     setPhotoPreview(null);
     setIsDialogOpen(true);
   };
+
+  useEffect(() => {
+    setPage(1);
+  }, [searchQuery, pageSize, viewMode]);
+
+  useEffect(() => {
+    if (page > totalPages) {
+      setPage(totalPages);
+    }
+  }, [page, totalPages]);
 
   const openEditProfessional = (professional: Professional) => {
     setEditingProfessional(professional);
@@ -330,15 +373,36 @@ export function ProfessionalsList() {
         </Button>
       </div>
 
+      <div className="space-y-4">
+        <div className="relative">
+          <Search className="absolute left-3 top-1/2 h-5 w-5 -translate-y-1/2 text-muted-foreground" />
+          <Input
+            placeholder="Buscar por nome, apelido, email ou especialidade..."
+            className="pl-10"
+            value={searchQuery}
+            onChange={(e) => setSearchQuery(e.target.value)}
+          />
+        </div>
+
+        <ListViewControls
+          viewMode={viewMode}
+          onViewModeChange={setViewMode}
+          pageSize={pageSize}
+          onPageSizeChange={setPageSize}
+          totalItems={filteredProfessionals.length}
+          shownItems={pagedProfessionals.length}
+        />
+      </div>
+
       {/* Professionals Grid */}
-      {professionals.length === 0 ? (
+      {filteredProfessionals.length === 0 ? (
         <div className="text-center py-12 text-muted-foreground">
           <p>Nenhum profissional cadastrado</p>
           <p className="text-sm">Clique em "Novo Profissional" para adicionar</p>
         </div>
-      ) : (
+      ) : viewMode === 'cards' ? (
         <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 gap-4">
-          {professionals.slice((page - 1) * PAGE_SIZE, page * PAGE_SIZE).map((professional, index) => (
+          {pagedProfessionals.map((professional, index) => (
             <motion.div
               key={professional.id}
               initial={{ opacity: 0, y: 20 }}
@@ -412,18 +476,93 @@ export function ProfessionalsList() {
             </motion.div>
           ))}
         </div>
+      ) : (
+        <Card className="overflow-hidden">
+          <Table>
+            <TableHeader>
+              <TableRow>
+                <TableHead>Profissional</TableHead>
+                <TableHead className="hidden md:table-cell">Especialidade</TableHead>
+                <TableHead className="hidden lg:table-cell">Agenda</TableHead>
+                {viewMode === 'detailed' && (
+                  <>
+                    <TableHead className="hidden lg:table-cell">Email</TableHead>
+                    <TableHead className="hidden xl:table-cell">Tipo</TableHead>
+                    <TableHead className="hidden xl:table-cell">Status</TableHead>
+                  </>
+                )}
+                <TableHead className="text-right">Ações</TableHead>
+              </TableRow>
+            </TableHeader>
+            <TableBody>
+              {pagedProfessionals.map((professional) => (
+                <TableRow key={professional.id} className={!professional.is_active ? 'opacity-60' : ''}>
+                  <TableCell>
+                    <div className="flex items-center gap-3">
+                      <Avatar className="h-9 w-9">
+                        <AvatarImage src={professional.photo_url || undefined} alt={professional.name} />
+                        <AvatarFallback>{professional.nickname.charAt(0)}</AvatarFallback>
+                      </Avatar>
+                      <div className="min-w-0">
+                        <p className="truncate font-medium">{professional.name}</p>
+                        <p className="truncate text-xs text-muted-foreground">{professional.nickname}</p>
+                      </div>
+                    </div>
+                  </TableCell>
+                  <TableCell className="hidden md:table-cell">
+                    {specialtyTypes.find(s => s.value === professional.specialty)?.label || professional.specialty || '-'}
+                  </TableCell>
+                  <TableCell className="hidden lg:table-cell">
+                    {professional.has_schedule ? 'Com agenda' : 'Sem agenda'}
+                  </TableCell>
+                  {viewMode === 'detailed' && (
+                    <>
+                      <TableCell className="hidden max-w-[240px] truncate lg:table-cell">
+                        {professional.email || '-'}
+                      </TableCell>
+                      <TableCell className="hidden xl:table-cell">
+                        {professionalTypes.find(t => t.value === professional.type)?.label || professional.type}
+                      </TableCell>
+                      <TableCell className="hidden xl:table-cell">
+                        <Badge variant={professional.is_active ? 'success' : 'secondary'}>
+                          {professional.is_active ? 'Ativo' : 'Inativo'}
+                        </Badge>
+                      </TableCell>
+                    </>
+                  )}
+                  <TableCell className="text-right">
+                    <div className="flex justify-end gap-1">
+                      <Button variant="ghost" size="icon" onClick={() => openEditProfessional(professional)} title="Editar profissional">
+                        <Edit2 className="h-4 w-4" />
+                      </Button>
+                      <Button
+                        variant="ghost"
+                        size="icon"
+                        className="text-destructive hover:bg-destructive/10 hover:text-destructive"
+                        onClick={() => setDeletingProfessional(professional)}
+                        title="Excluir profissional"
+                      >
+                        <Trash2 className="h-4 w-4" />
+                      </Button>
+                    </div>
+                  </TableCell>
+                </TableRow>
+              ))}
+            </TableBody>
+          </Table>
+        </Card>
       )}
 
       {/* Paginação */}
-      {Math.ceil(professionals.length / PAGE_SIZE) > 1 && (
+      {pageSize !== 'all' && totalPages > 1 && (
         <div className="flex items-center justify-center gap-3 mt-4">
           <Button variant="outline" size="sm" onClick={() => setPage(p => Math.max(1, p - 1))} disabled={page === 1}>
             <ChevronLeft className="w-4 h-4" />
           </Button>
           <span className="text-sm text-muted-foreground">
-            Página {page} de {Math.ceil(professionals.length / PAGE_SIZE)}
+            Página {page} de {totalPages}
           </span>
-          <Button variant="outline" size="sm" onClick={() => setPage(p => Math.min(Math.ceil(professionals.length / PAGE_SIZE), p + 1))} disabled={page === Math.ceil(professionals.length / PAGE_SIZE)}>
+          <Button variant="outline" size="sm" onClick={() => setPage(p => Math.min(totalPages, p + 1))} disabled={page === totalPages}>
             <ChevronRight className="w-4 h-4" />
           </Button>
         </div>
