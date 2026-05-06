@@ -8,6 +8,7 @@ interface Professional {
   id: string;
   name: string;
   nickname: string;
+  has_schedule: boolean;
 }
 
 interface Tenant {
@@ -154,7 +155,7 @@ export const AuthProvider: React.FC<{ children: React.ReactNode }> = ({ children
       // Fetch professional linked to this user
       let profQuery = supabase
         .from('professionals')
-        .select('id, name, nickname')
+        .select('id, name, nickname, has_schedule')
         .eq('user_id', userId);
 
       if (profileTenantId) {

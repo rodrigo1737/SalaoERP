@@ -108,10 +108,11 @@ export function Schedule() {
   const canEditSchedule = isAdmin || hasPermission('edit_schedule');
   
   // Filter professionals - if user is a professional, show only their column
+  const scheduleProfessionals = professionals.filter(p => p.is_active && p.has_schedule);
   const visibleProfessionals = isAdmin 
-    ? professionals 
+    ? scheduleProfessionals
     : currentProfessional 
-      ? professionals.filter(p => p.id === currentProfessional.id)
+      ? scheduleProfessionals.filter(p => p.id === currentProfessional.id)
       : [];
   
   const [currentDate, setCurrentDate] = useState(new Date());
@@ -371,6 +372,17 @@ export function Schedule() {
     );
   }
 
+  if (scheduleProfessionals.length === 0 && isAdmin) {
+    return (
+      <div className="p-6 lg:p-8">
+        <h1 className="text-3xl font-display font-bold text-foreground mb-4">Agenda</h1>
+        <Card className="p-12 text-center">
+          <p className="text-muted-foreground">Nenhum profissional ativo está configurado para aparecer na agenda.</p>
+        </Card>
+      </div>
+    );
+  }
+
   if (!canViewSchedule) {
     return (
       <div className="p-6 lg:p-8">
@@ -384,11 +396,15 @@ export function Schedule() {
 
   // If professional user but no visible professionals (user_id not linked)
   if (visibleProfessionals.length === 0 && !isAdmin) {
+    const message = currentProfessional && !currentProfessional.has_schedule
+      ? 'Seu profissional não está configurado para aparecer na agenda. Entre em contato com o administrador.'
+      : 'Seu perfil de profissional não está vinculado corretamente. Entre em contato com o administrador.';
+
     return (
       <div className="p-6 lg:p-8">
         <h1 className="text-3xl font-display font-bold text-foreground mb-4">Agenda</h1>
         <Card className="p-12 text-center">
-          <p className="text-muted-foreground">Seu perfil de profissional não está vinculado corretamente. Entre em contato com o administrador.</p>
+          <p className="text-muted-foreground">{message}</p>
         </Card>
       </div>
     );
@@ -631,7 +647,7 @@ export function Schedule() {
         onOpenChange={setIsAppointmentDetailOpen}
         appointment={selectedAppointment}
         appointments={appointments}
-        professionals={professionals}
+        professionals={scheduleProfessionals}
         services={services}
         isAdmin={isAdmin}
         canEditAppointment={canEditSchedule}

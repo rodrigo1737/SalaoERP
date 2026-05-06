@@ -88,6 +88,7 @@ const ClientSignup: React.FC = () => {
         .select('id, name, nickname, photo_url')
         .eq('tenant_id', tenant.id)
         .eq('is_active', true)
+        .eq('has_schedule', true)
         .order('name');
 
       if (profData) {

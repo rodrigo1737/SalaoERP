@@ -26,6 +26,7 @@ export interface Professional {
   commission_service?: number;
   commission_product?: number;
   is_active: boolean;
+  has_schedule: boolean;
   photo_url?: string;
   created_at: string;
 }

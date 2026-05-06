@@ -96,6 +96,7 @@ export function ProfessionalsList() {
   const [formType, setFormType] = useState<'owner' | 'employee' | 'freelancer'>('employee');
   const [formSpecialty, setFormSpecialty] = useState('cabeleireira');
   const [formActive, setFormActive] = useState(true);
+  const [formHasSchedule, setFormHasSchedule] = useState(true);
   const [formEmail, setFormEmail] = useState('');
   const [formPassword, setFormPassword] = useState('');
   const [createAccess, setCreateAccess] = useState(false);
@@ -113,6 +114,7 @@ export function ProfessionalsList() {
     setFormType('employee');
     setFormSpecialty('cabeleireira');
     setFormActive(true);
+    setFormHasSchedule(true);
     setFormEmail('');
     setFormPassword('');
     setCreateAccess(false);
@@ -129,6 +131,7 @@ export function ProfessionalsList() {
     setFormType(professional.type);
     setFormSpecialty((professional as any).specialty || 'cabeleireira');
     setFormActive(professional.is_active);
+    setFormHasSchedule(professional.has_schedule ?? true);
     setFormEmail(professional.email || '');
     setFormPassword('');
     setCreateAccess(false);
@@ -268,6 +271,7 @@ export function ProfessionalsList() {
           specialty: formSpecialty,
           email: formEmail || undefined,
           is_active: formActive,
+          has_schedule: formHasSchedule,
           photo_url: photoUrl || undefined,
         });
         toast({ title: "Profissional atualizado", description: "Dados salvos com sucesso" });
@@ -281,6 +285,7 @@ export function ProfessionalsList() {
           email: formEmail || undefined,
           user_id: userId,
           is_active: formActive,
+          has_schedule: formHasSchedule,
         });
 
         // Then upload photo if selected
@@ -316,6 +321,7 @@ export function ProfessionalsList() {
           </h1>
           <p className="text-muted-foreground mt-1">
             {professionals.filter(p => p.is_active).length} profissionais ativos de {professionals.length}
+            {' '}({professionals.filter(p => p.is_active && p.has_schedule).length} com agenda)
           </p>
         </div>
         <Button onClick={openNewProfessional}>
@@ -357,6 +363,9 @@ export function ProfessionalsList() {
                         </Badge>
                         <Badge variant="outline" className="capitalize text-xs">
                           {specialtyTypes.find(s => s.value === professional.specialty)?.label || 'Cabeleireira'}
+                        </Badge>
+                        <Badge variant={professional.has_schedule ? 'success' : 'secondary'} className="text-xs">
+                          {professional.has_schedule ? 'Com agenda' : 'Sem agenda'}
                         </Badge>
                       </div>
                     </div>
@@ -548,6 +557,20 @@ export function ProfessionalsList() {
                 id="active"
                 checked={formActive}
                 onCheckedChange={setFormActive}
+              />
+            </div>
+
+            <div className="flex items-center justify-between p-3 rounded-lg bg-secondary/50">
+              <div className="space-y-1">
+                <Label htmlFor="hasSchedule" className="cursor-pointer">Exibir na agenda</Label>
+                <p className="text-xs text-muted-foreground">
+                  Desative para profissionais sem horários próprios, como recepção ou assistentes.
+                </p>
+              </div>
+              <Switch
+                id="hasSchedule"
+                checked={formHasSchedule}
+                onCheckedChange={setFormHasSchedule}
               />
             </div>
 

@@ -462,6 +462,7 @@ export type Database = {
           created_at: string
           deleted_at: string | null
           email: string | null
+          has_schedule: boolean
           id: string
           is_active: boolean
           name: string
@@ -480,6 +481,7 @@ export type Database = {
           created_at?: string
           deleted_at?: string | null
           email?: string | null
+          has_schedule?: boolean
           id?: string
           is_active?: boolean
           name: string
@@ -498,6 +500,7 @@ export type Database = {
           created_at?: string
           deleted_at?: string | null
           email?: string | null
+          has_schedule?: boolean
           id?: string
           is_active?: boolean
           name?: string
