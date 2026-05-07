@@ -209,8 +209,19 @@ export function Schedule() {
     setIsNewAppointmentOpen(true);
   };
 
-  const handleQuickAddService = async () => {
-    if (!newServiceName.trim()) return;
+  const canUseQuickService = isAddingService && !!newServiceName.trim();
+  const canCreateAppointment = !!formClient && !!formTime && (!!formService || canUseQuickService);
+
+  const resetQuickServiceForm = () => {
+    setIsAddingService(false);
+    setNewServiceName('');
+    setNewServicePrice('');
+    setNewServiceDuration('60');
+    setNewServiceCategory('Outros');
+  };
+
+  const createQuickService = async () => {
+    if (!newServiceName.trim()) return null;
 
     const service = await addService({
       name: newServiceName.trim(),
@@ -228,20 +239,25 @@ export function Schedule() {
 
     if (service) {
       setFormService(service.id);
-      setIsAddingService(false);
-      setNewServiceName('');
-      setNewServicePrice('');
-      setNewServiceDuration('60');
-      setNewServiceCategory('Outros');
+      resetQuickServiceForm();
     }
+
+    return service;
+  };
+
+  const handleQuickAddService = async () => {
+    await createQuickService();
   };
 
   const handleCreateAppointment = async () => {
     if (!canEditSchedule) return;
-    if (!selectedSlot || !formClient || !formService || !formTime) return;
+    if (!selectedSlot || !formClient || !formTime) return;
 
     const client = clients.find(c => c.id === formClient);
-    const service = services.find(s => s.id === formService);
+    let service = services.find(s => s.id === formService);
+    if (!service && canUseQuickService) {
+      service = await createQuickService();
+    }
     const professional = professionals.find(p => p.id === selectedSlot.professionalId);
 
     if (!client || !service || !professional) return;
@@ -673,7 +689,7 @@ export function Schedule() {
                     <Button size="sm" disabled={!newServiceName.trim()} onClick={handleQuickAddService}>
                       <Plus className="w-3 h-3 mr-1" />Adicionar
                     </Button>
-                    <Button size="sm" variant="ghost" onClick={() => setIsAddingService(false)}>
+                    <Button size="sm" variant="ghost" onClick={resetQuickServiceForm}>
                       <X className="w-3 h-3" />
                     </Button>
                   </div>
@@ -695,7 +711,7 @@ export function Schedule() {
             </div>
             <div className="flex justify-end gap-2">
               <Button variant="outline" onClick={() => setIsNewAppointmentOpen(false)}>Cancelar</Button>
-              <Button onClick={handleCreateAppointment} disabled={!formClient || !formService || !formTime}><Plus className="w-4 h-4 mr-2" />Agendar</Button>
+              <Button onClick={handleCreateAppointment} disabled={!canCreateAppointment}><Plus className="w-4 h-4 mr-2" />Agendar</Button>
             </div>
           </div>
         </DialogContent>
