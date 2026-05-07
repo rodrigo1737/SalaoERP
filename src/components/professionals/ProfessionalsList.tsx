@@ -94,6 +94,22 @@ const specialtyTypes = [
   { value: 'outro', label: 'Outro' },
 ];
 
+const DEFAULT_SCHEDULE_COLOR = '#EFF6FF';
+const scheduleColorOptions = [
+  '#EFF6FF',
+  '#F0FDF4',
+  '#FAF5FF',
+  '#FFFBEB',
+  '#FDF2F8',
+  '#ECFEFF',
+  '#FFF1F2',
+  '#EEF2FF',
+  '#F0FDFA',
+  '#FFF7ED',
+  '#FEE2E2',
+  '#DCFCE7',
+];
+
 const DEFAULT_PAGE_SIZE: CadastroPageSize = 20;
 
 export function ProfessionalsList() {
@@ -112,6 +128,7 @@ export function ProfessionalsList() {
   const [formSpecialty, setFormSpecialty] = useState('cabeleireira');
   const [formActive, setFormActive] = useState(true);
   const [formHasSchedule, setFormHasSchedule] = useState(true);
+  const [formScheduleColor, setFormScheduleColor] = useState(DEFAULT_SCHEDULE_COLOR);
   const [formEmail, setFormEmail] = useState('');
   const [formPassword, setFormPassword] = useState('');
   const [createAccess, setCreateAccess] = useState(false);
@@ -148,6 +165,7 @@ export function ProfessionalsList() {
     setFormSpecialty('cabeleireira');
     setFormActive(true);
     setFormHasSchedule(true);
+    setFormScheduleColor(DEFAULT_SCHEDULE_COLOR);
     setFormEmail('');
     setFormPassword('');
     setCreateAccess(false);
@@ -175,6 +193,7 @@ export function ProfessionalsList() {
     setFormSpecialty((professional as any).specialty || 'cabeleireira');
     setFormActive(professional.is_active);
     setFormHasSchedule(professional.has_schedule ?? true);
+    setFormScheduleColor(professional.schedule_color || DEFAULT_SCHEDULE_COLOR);
     setFormEmail(professional.email || '');
     setFormPassword('');
     setCreateAccess(false);
@@ -315,6 +334,7 @@ export function ProfessionalsList() {
           email: formEmail || undefined,
           is_active: formActive,
           has_schedule: formHasSchedule,
+          schedule_color: formScheduleColor,
           photo_url: photoUrl || undefined,
         });
         toast({ title: "Profissional atualizado", description: "Dados salvos com sucesso" });
@@ -329,6 +349,7 @@ export function ProfessionalsList() {
           user_id: userId,
           is_active: formActive,
           has_schedule: formHasSchedule,
+          schedule_color: formScheduleColor,
         });
 
         // Then upload photo if selected
@@ -431,6 +452,11 @@ export function ProfessionalsList() {
                         <Badge variant={professional.has_schedule ? 'success' : 'secondary'} className="text-xs">
                           {professional.has_schedule ? 'Com agenda' : 'Sem agenda'}
                         </Badge>
+                        <span
+                          className="h-5 w-5 rounded-full border border-border"
+                          style={{ backgroundColor: professional.schedule_color || DEFAULT_SCHEDULE_COLOR }}
+                          title="Cor na agenda"
+                        />
                       </div>
                     </div>
                   </div>
@@ -484,6 +510,7 @@ export function ProfessionalsList() {
                 <TableHead>Profissional</TableHead>
                 <TableHead className="hidden md:table-cell">Especialidade</TableHead>
                 <TableHead className="hidden lg:table-cell">Agenda</TableHead>
+                <TableHead className="hidden lg:table-cell">Cor</TableHead>
                 {viewMode === 'detailed' && (
                   <>
                     <TableHead className="hidden lg:table-cell">Email</TableHead>
@@ -514,6 +541,13 @@ export function ProfessionalsList() {
                   </TableCell>
                   <TableCell className="hidden lg:table-cell">
                     {professional.has_schedule ? 'Com agenda' : 'Sem agenda'}
+                  </TableCell>
+                  <TableCell className="hidden lg:table-cell">
+                    <span
+                      className="block h-5 w-5 rounded-full border border-border"
+                      style={{ backgroundColor: professional.schedule_color || DEFAULT_SCHEDULE_COLOR }}
+                      title={professional.schedule_color || DEFAULT_SCHEDULE_COLOR}
+                    />
                   </TableCell>
                   {viewMode === 'detailed' && (
                     <>
@@ -689,6 +723,34 @@ export function ProfessionalsList() {
               </Select>
             </div>
 
+            <div className="space-y-3">
+              <Label htmlFor="scheduleColor">Cor na agenda</Label>
+              <div className="flex items-center gap-3">
+                <Input
+                  id="scheduleColor"
+                  type="color"
+                  value={formScheduleColor}
+                  onChange={(e) => setFormScheduleColor(e.target.value.toUpperCase())}
+                  className="h-10 w-14 cursor-pointer p-1"
+                />
+                <div
+                  className="h-10 flex-1 rounded-lg border border-border"
+                  style={{ backgroundColor: formScheduleColor }}
+                />
+              </div>
+              <div className="grid grid-cols-6 gap-2">
+                {scheduleColorOptions.map((color) => (
+                  <button
+                    key={color}
+                    type="button"
+                    className="h-8 rounded-md border border-border transition-transform hover:scale-105 focus:outline-none focus:ring-2 focus:ring-primary"
+                    style={{ backgroundColor: color }}
+                    onClick={() => setFormScheduleColor(color)}
+                    aria-label={`Selecionar cor ${color}`}
+                  />
+                ))}
+              </div>
+            </div>
 
             <div className="flex items-center justify-between p-3 rounded-lg bg-secondary/50">
               <Label htmlFor="active" className="cursor-pointer">Profissional Ativo</Label>

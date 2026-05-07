@@ -469,6 +469,7 @@ export type Database = {
           nickname: string
           phone: string | null
           photo_url: string | null
+          schedule_color: string
           specialty: string | null
           tenant_id: string | null
           type: string
@@ -488,6 +489,7 @@ export type Database = {
           nickname: string
           phone?: string | null
           photo_url?: string | null
+          schedule_color?: string
           specialty?: string | null
           tenant_id?: string | null
           type?: string
@@ -507,6 +509,7 @@ export type Database = {
           nickname?: string
           phone?: string | null
           photo_url?: string | null
+          schedule_color?: string
           specialty?: string | null
           tenant_id?: string | null
           type?: string

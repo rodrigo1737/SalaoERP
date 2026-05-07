@@ -55,18 +55,17 @@ const appointmentStatusLabels: Record<string, string> = {
   cancelled: 'Cancelado',
 };
 
-// Subtle pastel colors for professional headers
 const professionalHeaderColors = [
-  'bg-blue-50 border-blue-100',
-  'bg-green-50 border-green-100',
-  'bg-purple-50 border-purple-100',
-  'bg-amber-50 border-amber-100',
-  'bg-pink-50 border-pink-100',
-  'bg-cyan-50 border-cyan-100',
-  'bg-rose-50 border-rose-100',
-  'bg-indigo-50 border-indigo-100',
-  'bg-teal-50 border-teal-100',
-  'bg-orange-50 border-orange-100',
+  '#EFF6FF',
+  '#F0FDF4',
+  '#FAF5FF',
+  '#FFFBEB',
+  '#FDF2F8',
+  '#ECFEFF',
+  '#FFF1F2',
+  '#EEF2FF',
+  '#F0FDFA',
+  '#FFF7ED',
 ];
 
 const getProfessionalColor = (index: number) => {
@@ -536,27 +535,27 @@ export function Schedule() {
         <p className="text-muted-foreground mt-1 capitalize">{formatDate(currentDate)}</p>
       </div>
 
-      <div className="grid gap-6 xl:grid-cols-[260px_minmax(0,1fr)]">
-        <div className="space-y-4">
-          <Card className="p-4 border-0 shadow-sm">
-            <div className="flex items-center justify-between mb-3">
+      <div className="grid gap-4 lg:grid-cols-[150px_minmax(0,1fr)]">
+        <div className="space-y-3">
+          <Card className="p-2 border-0 shadow-sm">
+            <div className="flex items-center justify-between mb-2">
               <Button variant="ghost" size="icon-sm" onClick={() => navigateCalendarMonth('prev')} aria-label="Mês anterior">
-                <ChevronLeft className="w-4 h-4" />
+                <ChevronLeft className="w-3 h-3" />
               </Button>
-              <p className="text-sm font-semibold capitalize">
+              <p className="text-[11px] font-semibold capitalize leading-tight text-center">
                 {currentDate.toLocaleDateString('pt-BR', { month: 'long', year: 'numeric' })}
               </p>
               <Button variant="ghost" size="icon-sm" onClick={() => navigateCalendarMonth('next')} aria-label="Próximo mês">
-                <ChevronRight className="w-4 h-4" />
+                <ChevronRight className="w-3 h-3" />
               </Button>
             </div>
 
-            <div className="grid grid-cols-7 gap-1 text-center text-xs font-semibold text-muted-foreground mb-1">
+            <div className="grid grid-cols-7 gap-0.5 text-center text-[10px] font-semibold text-muted-foreground mb-1">
               {['D', 'S', 'T', 'Q', 'Q', 'S', 'S'].map((weekday, index) => (
-                <span key={`${weekday}-${index}`} className="py-1">{weekday}</span>
+                <span key={`${weekday}-${index}`} className="py-0.5">{weekday}</span>
               ))}
             </div>
-            <div className="grid grid-cols-7 gap-1">
+            <div className="grid grid-cols-7 gap-0.5">
               {calendarDays.map((day) => {
                 const isCurrentMonth = day.getMonth() === currentDate.getMonth();
                 const isSelected = isSameCalendarDay(day, currentDate);
@@ -568,7 +567,7 @@ export function Schedule() {
                     type="button"
                     onClick={() => setCurrentDate(new Date(day))}
                     className={cn(
-                      "h-8 rounded-md text-sm transition-colors hover:bg-primary/10",
+                      "h-5 rounded text-[11px] leading-none transition-colors hover:bg-primary/10",
                       !isCurrentMonth && "text-muted-foreground/50",
                       isToday && !isSelected && "font-semibold text-primary",
                       isSelected && "bg-primary text-primary-foreground shadow-sm hover:bg-primary"
@@ -582,17 +581,17 @@ export function Schedule() {
           </Card>
 
           <Card className="border-0 shadow-sm overflow-hidden">
-            <div className="border-b border-border p-4">
-              <p className="font-semibold text-foreground">Profissionais</p>
+            <div className="border-b border-border p-3">
+              <p className="text-sm font-semibold text-foreground">Profissionais</p>
             </div>
-            <div className="p-4 space-y-3">
+            <div className="p-3 space-y-2">
               {isAdmin && (
-                <label className="flex items-center gap-2 text-sm text-foreground cursor-pointer">
+                <label className="flex items-center gap-2 text-xs text-foreground cursor-pointer">
                   <input
                     type="checkbox"
                     checked={allProfessionalsSelected}
                     onChange={() => setSelectedProfessionalIds([])}
-                    className="h-4 w-4 accent-primary"
+                    className="h-3.5 w-3.5 accent-primary"
                   />
                   Todos
                 </label>
@@ -602,12 +601,12 @@ export function Schedule() {
                 const isChecked = selectedProfessionalIds.length === 0 || selectedProfessionalIds.includes(professional.id);
 
                 return (
-                  <label key={professional.id} className="flex items-center gap-2 text-sm text-foreground cursor-pointer">
+                  <label key={professional.id} className="flex items-center gap-2 text-xs text-foreground cursor-pointer">
                     <input
                       type="checkbox"
                       checked={isChecked}
                       onChange={() => toggleProfessionalFilter(professional.id)}
-                      className="h-4 w-4 accent-primary"
+                      className="h-3.5 w-3.5 accent-primary"
                     />
                     <span className="truncate">{professional.nickname || professional.name}</span>
                   </label>
@@ -666,20 +665,24 @@ export function Schedule() {
             <Card className="border-0 shadow-lg overflow-hidden">
               <div className="overflow-x-auto">
                 <div className="min-w-[800px]">
-                  <div className="grid border-b border-border" style={{ gridTemplateColumns: `80px repeat(${visibleProfessionals.length}, minmax(180px, 1fr))` }}>
-                    <div className="p-4 bg-secondary/50 flex items-center justify-center"><Clock className="w-5 h-5 text-muted-foreground" /></div>
+                  <div className="grid border-b border-border" style={{ gridTemplateColumns: `64px repeat(${visibleProfessionals.length}, minmax(150px, 1fr))` }}>
+                    <div className="p-3 bg-secondary/50 flex items-center justify-center"><Clock className="w-4 h-4 text-muted-foreground" /></div>
                     {visibleProfessionals.map((professional, index) => (
-                      <div key={professional.id} className={cn("p-4 border-l border-border", getProfessionalColor(index))}>
-                        <div className="flex items-center gap-3">
-                          <Avatar className="w-10 h-10 shadow-sm">
+                      <div
+                        key={professional.id}
+                        className="p-3 border-l border-border"
+                        style={{ backgroundColor: professional.schedule_color || getProfessionalColor(index) }}
+                      >
+                        <div className="flex items-center gap-2">
+                          <Avatar className="w-8 h-8 shadow-sm">
                             <AvatarImage src={professional.photo_url || undefined} alt={professional.name} />
-                            <AvatarFallback className="bg-white/80 text-sm font-semibold text-foreground">
+                            <AvatarFallback className="bg-white/80 text-xs font-semibold text-foreground">
                               {(professional.nickname || professional.name || '?').charAt(0)}
                             </AvatarFallback>
                           </Avatar>
-                          <div>
-                            <p className="font-medium text-foreground">{professional.nickname || professional.name}</p>
-                            <p className="text-xs text-muted-foreground capitalize">{professional.type}</p>
+                          <div className="min-w-0">
+                            <p className="truncate text-sm font-medium text-foreground">{professional.nickname || professional.name}</p>
+                            <p className="text-[11px] text-muted-foreground capitalize">{professional.type}</p>
                           </div>
                         </div>
                       </div>
@@ -689,7 +692,7 @@ export function Schedule() {
                   <div className="max-h-[600px] overflow-y-auto scrollbar-thin">
                     {timeSlots.map((time) => {
                       return (
-                        <div key={time} className="grid border-b border-border/50 last:border-0" style={{ gridTemplateColumns: `80px repeat(${visibleProfessionals.length}, minmax(180px, 1fr))` }}>
+                        <div key={time} className="grid border-b border-border/50 last:border-0" style={{ gridTemplateColumns: `64px repeat(${visibleProfessionals.length}, minmax(150px, 1fr))` }}>
                           <div className="p-3 flex items-center justify-center bg-muted/30">
                             <span className="text-sm font-medium text-muted-foreground">{time}</span>
                           </div>
