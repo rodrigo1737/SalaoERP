@@ -1,10 +1,11 @@
 import { useState, useEffect } from 'react';
 import { motion } from 'framer-motion';
-import { 
-  ChevronLeft, 
-  ChevronRight, 
-  Plus, 
+import {
+  ChevronLeft,
+  ChevronRight,
+  Plus,
   Clock,
+  Search,
   UserPlus,
   X,
   CreditCard,
@@ -19,7 +20,7 @@ import { Card } from '@/components/ui/card';
 import { Button } from '@/components/ui/button';
 import { Badge } from '@/components/ui/badge';
 import { Avatar, AvatarImage, AvatarFallback } from '@/components/ui/avatar';
-import { 
+import {
   Dialog,
   DialogContent,
   DialogHeader,
@@ -28,7 +29,7 @@ import {
 } from '@/components/ui/dialog';
 import { Label } from '@/components/ui/label';
 import { Input } from '@/components/ui/input';
-import { 
+import {
   Select,
   SelectContent,
   SelectItem,
@@ -75,17 +76,30 @@ const getProfessionalColor = (index: number) => {
 // ITEM 13: slots gerados dinamicamente via hook abaixo, não mais constante global
 
 const formatDate = (date: Date) => {
-  return date.toLocaleDateString('pt-BR', { 
-    weekday: 'long', 
-    day: 'numeric', 
-    month: 'long', 
-    year: 'numeric' 
+  return date.toLocaleDateString('pt-BR', {
+    weekday: 'long',
+    day: 'numeric',
+    month: 'long',
+    year: 'numeric'
   });
 };
 
 const getTimeFromISO = (isoString: string) => {
   const date = new Date(isoString);
   return `${date.getHours().toString().padStart(2, '0')}:${date.getMinutes().toString().padStart(2, '0')}`;
+};
+
+const isSameCalendarDay = (first: Date, second: Date) => {
+  return first.getFullYear() === second.getFullYear()
+    && first.getMonth() === second.getMonth()
+    && first.getDate() === second.getDate();
+};
+
+const normalizeText = (value?: string | null) => {
+  return (value || '')
+    .normalize('NFD')
+    .replace(/[\u0300-\u036f]/g, '')
+    .toLowerCase();
 };
 
 export function Schedule() {
@@ -106,16 +120,13 @@ export function Schedule() {
   const isAdmin = userRole === 'admin';
   const canViewSchedule = isAdmin || hasPermission('view_schedule') || hasPermission('edit_schedule');
   const canEditSchedule = isAdmin || hasPermission('edit_schedule');
-  
-  // Filter professionals - if user is a professional, show only their column
+
   const scheduleProfessionals = professionals.filter(p => p.is_active && p.has_schedule);
-  const visibleProfessionals = isAdmin 
-    ? scheduleProfessionals
-    : currentProfessional 
-      ? scheduleProfessionals.filter(p => p.id === currentProfessional.id)
-      : [];
-  
+
   const [currentDate, setCurrentDate] = useState(new Date());
+  const [columnCount, setColumnCount] = useState(5);
+  const [scheduleSearch, setScheduleSearch] = useState('');
+  const [selectedProfessionalIds, setSelectedProfessionalIds] = useState<string[]>([]);
   const [selectedSlot, setSelectedSlot] = useState<{ time: string; professionalId: string } | null>(null);
   const [selectedAppointment, setSelectedAppointment] = useState<Appointment | null>(null);
   const [isNewAppointmentOpen, setIsNewAppointmentOpen] = useState(false);
@@ -139,6 +150,26 @@ export function Schedule() {
   const [editValue, setEditValue] = useState('');
   const [editDuration, setEditDuration] = useState('');
 
+  const baseVisibleProfessionals = isAdmin
+    ? scheduleProfessionals
+    : currentProfessional
+      ? scheduleProfessionals.filter(p => p.id === currentProfessional.id)
+      : [];
+  const filteredVisibleProfessionals = selectedProfessionalIds.length > 0
+    ? baseVisibleProfessionals.filter(p => selectedProfessionalIds.includes(p.id))
+    : baseVisibleProfessionals;
+  const visibleProfessionals = filteredVisibleProfessionals.slice(0, columnCount);
+  const allProfessionalsSelected = selectedProfessionalIds.length === 0 || selectedProfessionalIds.length === baseVisibleProfessionals.length;
+  const calendarMonthStart = new Date(currentDate.getFullYear(), currentDate.getMonth(), 1);
+  const calendarStart = new Date(calendarMonthStart);
+  calendarStart.setDate(calendarStart.getDate() - calendarStart.getDay());
+  const calendarDays = Array.from({ length: 42 }, (_, index) => {
+    const day = new Date(calendarStart);
+    day.setDate(calendarStart.getDate() + index);
+    return day;
+  });
+  const normalizedScheduleSearch = normalizeText(scheduleSearch.trim());
+
   useEffect(() => {
     if (selectedAppointment) {
       setEditValue(selectedAppointment.total_value?.toString() || '');
@@ -153,6 +184,44 @@ export function Schedule() {
   };
 
   const goToToday = () => setCurrentDate(new Date());
+
+  const navigateCalendarMonth = (direction: 'prev' | 'next') => {
+    const newDate = new Date(currentDate.getFullYear(), currentDate.getMonth() + (direction === 'next' ? 1 : -1), 1);
+    setCurrentDate(newDate);
+  };
+
+  const toggleProfessionalFilter = (professionalId: string) => {
+    setSelectedProfessionalIds(prev => {
+      if (prev.length === 0) {
+        return baseVisibleProfessionals.map(professional => professional.id).filter(id => id !== professionalId);
+      }
+
+      if (prev.includes(professionalId)) {
+        const next = prev.filter(id => id !== professionalId);
+        return next.length === 0 ? [] : next;
+      }
+
+      return [...prev, professionalId];
+    });
+  };
+
+  const appointmentMatchesSearch = (appointment: Appointment) => {
+    if (!normalizedScheduleSearch) return true;
+
+    const clientName = appointment.client?.name || clients.find(client => client.id === appointment.client_id)?.name;
+    const serviceName = appointment.service?.name || services.find(service => service.id === appointment.service_id)?.name;
+    const professionalName = professionals.find(professional => professional.id === appointment.professional_id)?.name;
+    const professionalNickname = professionals.find(professional => professional.id === appointment.professional_id)?.nickname;
+
+    return [
+      clientName,
+      serviceName,
+      professionalName,
+      professionalNickname,
+      appointment.notes,
+      appointmentStatusLabels[appointment.status],
+    ].some(value => normalizeText(value).includes(normalizedScheduleSearch));
+  };
 
   const getAppointmentForSlot = (time: string, professionalId: string): Appointment | undefined => {
     return appointments.find(apt => {
@@ -187,7 +256,7 @@ export function Schedule() {
       const aptDate = new Date(apt.start_time);
       const isSameDay = aptDate.toDateString() === currentDate.toDateString();
       const aptTime = getTimeFromISO(apt.start_time);
-      return isSameDay && aptTime === time && apt.professional_id === professionalId;
+      return isSameDay && aptTime === time && apt.professional_id === professionalId && appointmentMatchesSearch(apt);
     });
   };
 
@@ -308,7 +377,7 @@ export function Schedule() {
 
   const handleCloseBill = async () => {
     if (!selectedAppointment || !selectedPaymentMethod) return;
-    
+
     // Double check cash session
     if (!currentCashSession) {
       toast({
@@ -318,15 +387,15 @@ export function Schedule() {
       });
       return;
     }
-    
+
     const baseValue = parseFloat(editValue) || selectedAppointment.total_value || 0;
     const additionalTotal = billItems.reduce((sum, item) => sum + item.total, 0);
     const totalValue = baseValue + additionalTotal;
-    
+
     // Build notes with additional items
     let notes = selectedAppointment.notes || '';
     if (billItems.length > 0) {
-      const itemsDesc = billItems.map(item => 
+      const itemsDesc = billItems.map(item =>
         `${item.name} (${item.quantity}x R$${item.unitPrice.toFixed(2)})`
       ).join(', ');
       notes = `${notes} [Adicionais: ${itemsDesc}]`.trim();
@@ -334,13 +403,13 @@ export function Schedule() {
     if (selectedPaymentMethod === 'pending') {
       notes = `${notes} [PENDENTE: R$${totalValue.toFixed(2)}]`.trim();
     }
-    
+
     // Update total_value before completing
-    await updateAppointment(selectedAppointment.id, { 
+    await updateAppointment(selectedAppointment.id, {
       total_value: totalValue,
       notes: notes
     });
-    
+
     // Map payment methods to database format
     const paymentMethodMap: Record<string, string> = {
       pix: 'pix',
@@ -349,13 +418,13 @@ export function Schedule() {
       cash: 'cash',
       pending: 'other'
     };
-    
+
     // Complete appointment with proper payment method
     const transactionId = await completeAppointment(selectedAppointment.id, paymentMethodMap[selectedPaymentMethod], {
       total_value: totalValue,
       notes,
     });
-    
+
     // ETAPA 3: Baixa automática de estoque para produtos vendidos
     const productItems = billItems.filter(item => item.type === 'product' && item.productId);
     for (const item of productItems) {
@@ -363,12 +432,12 @@ export function Schedule() {
         await registerSale(item.productId, item.quantity, item.unitPrice, transactionId || undefined);
       }
     }
-    
+
     // ETAPA 4: Baixa automática de insumos vinculados ao serviço
     if (selectedAppointment.service_id) {
       await registerServiceConsumption(selectedAppointment.service_id, selectedAppointment.id);
     }
-    
+
     const paymentLabels: Record<string, string> = {
       pix: 'PIX',
       credit: 'Cartão de Crédito',
@@ -376,12 +445,12 @@ export function Schedule() {
       cash: 'Dinheiro',
       pending: 'Pendente'
     };
-    
-    toast({ 
-      title: "Comanda fechada", 
-      description: `R$ ${totalValue.toFixed(2)} - ${paymentLabels[selectedPaymentMethod]}${billItems.length > 0 ? ` (+${billItems.length} item(s))` : ''}` 
+
+    toast({
+      title: "Comanda fechada",
+      description: `R$ ${totalValue.toFixed(2)} - ${paymentLabels[selectedPaymentMethod]}${billItems.length > 0 ? ` (+${billItems.length} item(s))` : ''}`
     });
-    
+
     setIsClosingBill(false);
     setIsAppointmentDetailOpen(false);
     setSelectedAppointment(null);
@@ -462,158 +531,281 @@ export function Schedule() {
 
   return (
     <div className="p-6 lg:p-8 space-y-6">
-      <div className="flex flex-col sm:flex-row sm:items-center sm:justify-between gap-4">
-        <div>
-          <h1 className="text-3xl lg:text-4xl font-display font-bold text-foreground">Agenda</h1>
-          <p className="text-muted-foreground mt-1 capitalize">{formatDate(currentDate)}</p>
-        </div>
-        <div className="flex items-center gap-2">
-          <Button variant="outline" size="sm" onClick={goToToday}>Hoje</Button>
-          <Button variant="ghost" size="icon-sm" onClick={() => navigateDate('prev')}><ChevronLeft className="w-4 h-4" /></Button>
-          <Button variant="ghost" size="icon-sm" onClick={() => navigateDate('next')}><ChevronRight className="w-4 h-4" /></Button>
-        </div>
+      <div>
+        <h1 className="text-3xl lg:text-4xl font-display font-bold text-foreground">Agenda</h1>
+        <p className="text-muted-foreground mt-1 capitalize">{formatDate(currentDate)}</p>
       </div>
 
-      <Card className="border-0 shadow-lg overflow-hidden">
-        <div className="overflow-x-auto">
-          <div className="min-w-[800px]">
-            <div className="grid border-b border-border" style={{ gridTemplateColumns: `80px repeat(${visibleProfessionals.length}, 1fr)` }}>
-              <div className="p-4 bg-secondary/50 flex items-center justify-center"><Clock className="w-5 h-5 text-muted-foreground" /></div>
-              {visibleProfessionals.map((professional, index) => (
-                <div key={professional.id} className={cn("p-4 border-l border-border", getProfessionalColor(index))}>
-                  <div className="flex items-center gap-3">
-                    <Avatar className="w-10 h-10 shadow-sm">
-                      <AvatarImage src={professional.photo_url || undefined} alt={professional.name} />
-                      <AvatarFallback className="bg-white/80 text-sm font-semibold text-foreground">
-                        {professional.nickname.charAt(0)}
-                      </AvatarFallback>
-                    </Avatar>
-                    <div>
-                      <p className="font-medium text-foreground">{professional.nickname}</p>
-                      <p className="text-xs text-muted-foreground capitalize">{professional.type}</p>
-                    </div>
-                  </div>
-                </div>
-              ))}
+      <div className="grid gap-6 xl:grid-cols-[260px_minmax(0,1fr)]">
+        <div className="space-y-4">
+          <Card className="p-4 border-0 shadow-sm">
+            <div className="flex items-center justify-between mb-3">
+              <Button variant="ghost" size="icon-sm" onClick={() => navigateCalendarMonth('prev')} aria-label="Mês anterior">
+                <ChevronLeft className="w-4 h-4" />
+              </Button>
+              <p className="text-sm font-semibold capitalize">
+                {currentDate.toLocaleDateString('pt-BR', { month: 'long', year: 'numeric' })}
+              </p>
+              <Button variant="ghost" size="icon-sm" onClick={() => navigateCalendarMonth('next')} aria-label="Próximo mês">
+                <ChevronRight className="w-4 h-4" />
+              </Button>
             </div>
 
-            <div className="max-h-[600px] overflow-y-auto scrollbar-thin">
-              {timeSlots.map((time) => {
+            <div className="grid grid-cols-7 gap-1 text-center text-xs font-semibold text-muted-foreground mb-1">
+              {['D', 'S', 'T', 'Q', 'Q', 'S', 'S'].map((weekday, index) => (
+                <span key={`${weekday}-${index}`} className="py-1">{weekday}</span>
+              ))}
+            </div>
+            <div className="grid grid-cols-7 gap-1">
+              {calendarDays.map((day) => {
+                const isCurrentMonth = day.getMonth() === currentDate.getMonth();
+                const isSelected = isSameCalendarDay(day, currentDate);
+                const isToday = isSameCalendarDay(day, new Date());
+
                 return (
-                  <div key={time} className="grid border-b border-border/50 last:border-0" style={{ gridTemplateColumns: `80px repeat(${visibleProfessionals.length}, 1fr)` }}>
-                    <div className="p-3 flex items-center justify-center bg-muted/30">
-                      <span className="text-sm font-medium text-muted-foreground">{time}</span>
-                    </div>
-                    {visibleProfessionals.map((professional) => {
-                      const occupyingAppointments = getAppointmentsForSlot(time, professional.id);
-                      const appointmentsStartingNow = getAppointmentsStartingAt(time, professional.id);
-                      const hasOccupyingAppointment = occupyingAppointments.length > 0;
-                      
-                      // Check if any appointments that START at this time exist
-                      const hasAppointmentsStarting = appointmentsStartingNow.length > 0;
-                      
-                      // For slots that are occupied but appointment doesn't start here, show empty slot
-                      if (hasOccupyingAppointment && !hasAppointmentsStarting) {
-                        return <div key={professional.id} className="border-l border-border/50 relative min-h-[48px]" />;
-                      }
+                  <button
+                    key={day.toISOString()}
+                    type="button"
+                    onClick={() => setCurrentDate(new Date(day))}
+                    className={cn(
+                      "h-8 rounded-md text-sm transition-colors hover:bg-primary/10",
+                      !isCurrentMonth && "text-muted-foreground/50",
+                      isToday && !isSelected && "font-semibold text-primary",
+                      isSelected && "bg-primary text-primary-foreground shadow-sm hover:bg-primary"
+                    )}
+                  >
+                    {day.getDate()}
+                  </button>
+                );
+              })}
+            </div>
+          </Card>
 
+          <Card className="border-0 shadow-sm overflow-hidden">
+            <div className="border-b border-border p-4">
+              <p className="font-semibold text-foreground">Profissionais</p>
+            </div>
+            <div className="p-4 space-y-3">
+              {isAdmin && (
+                <label className="flex items-center gap-2 text-sm text-foreground cursor-pointer">
+                  <input
+                    type="checkbox"
+                    checked={allProfessionalsSelected}
+                    onChange={() => setSelectedProfessionalIds([])}
+                    className="h-4 w-4 accent-primary"
+                  />
+                  Todos
+                </label>
+              )}
+
+              {baseVisibleProfessionals.map((professional) => {
+                const isChecked = selectedProfessionalIds.length === 0 || selectedProfessionalIds.includes(professional.id);
+
+                return (
+                  <label key={professional.id} className="flex items-center gap-2 text-sm text-foreground cursor-pointer">
+                    <input
+                      type="checkbox"
+                      checked={isChecked}
+                      onChange={() => toggleProfessionalFilter(professional.id)}
+                      className="h-4 w-4 accent-primary"
+                    />
+                    <span className="truncate">{professional.nickname || professional.name}</span>
+                  </label>
+                );
+              })}
+            </div>
+          </Card>
+        </div>
+
+        <div className="min-w-0 space-y-4">
+          <div className="flex flex-col gap-3 lg:flex-row lg:items-center lg:justify-between">
+            <div className="flex items-center gap-2">
+              <Button variant="outline" size="sm" onClick={goToToday}>Hoje</Button>
+              <Button variant="ghost" size="icon-sm" onClick={() => navigateDate('prev')} aria-label="Dia anterior">
+                <ChevronLeft className="w-4 h-4" />
+              </Button>
+              <Button variant="ghost" size="icon-sm" onClick={() => navigateDate('next')} aria-label="Próximo dia">
+                <ChevronRight className="w-4 h-4" />
+              </Button>
+            </div>
+
+            <div className="flex flex-col gap-3 md:flex-row md:items-center md:justify-end">
+              <div className="flex items-center gap-2">
+                <span className="text-sm text-muted-foreground whitespace-nowrap">Ajustar colunas:</span>
+                {[3, 5, 8, 10, 12].map((option) => (
+                  <Button
+                    key={option}
+                    type="button"
+                    variant={columnCount === option ? 'default' : 'outline'}
+                    size="sm"
+                    className="h-8 w-8 p-0"
+                    onClick={() => setColumnCount(option)}
+                  >
+                    {option}
+                  </Button>
+                ))}
+              </div>
+
+              <div className="relative md:w-80">
+                <Search className="absolute left-3 top-1/2 h-4 w-4 -translate-y-1/2 text-muted-foreground" />
+                <Input
+                  value={scheduleSearch}
+                  onChange={(event) => setScheduleSearch(event.target.value)}
+                  placeholder="Pesquisar agendamento"
+                  className="pl-9"
+                />
+              </div>
+            </div>
+          </div>
+
+          {visibleProfessionals.length === 0 ? (
+            <Card className="p-12 text-center border-0 shadow-sm">
+              <p className="text-muted-foreground">Selecione pelo menos um profissional para visualizar a agenda.</p>
+            </Card>
+          ) : (
+            <Card className="border-0 shadow-lg overflow-hidden">
+              <div className="overflow-x-auto">
+                <div className="min-w-[800px]">
+                  <div className="grid border-b border-border" style={{ gridTemplateColumns: `80px repeat(${visibleProfessionals.length}, minmax(180px, 1fr))` }}>
+                    <div className="p-4 bg-secondary/50 flex items-center justify-center"><Clock className="w-5 h-5 text-muted-foreground" /></div>
+                    {visibleProfessionals.map((professional, index) => (
+                      <div key={professional.id} className={cn("p-4 border-l border-border", getProfessionalColor(index))}>
+                        <div className="flex items-center gap-3">
+                          <Avatar className="w-10 h-10 shadow-sm">
+                            <AvatarImage src={professional.photo_url || undefined} alt={professional.name} />
+                            <AvatarFallback className="bg-white/80 text-sm font-semibold text-foreground">
+                              {(professional.nickname || professional.name || '?').charAt(0)}
+                            </AvatarFallback>
+                          </Avatar>
+                          <div>
+                            <p className="font-medium text-foreground">{professional.nickname || professional.name}</p>
+                            <p className="text-xs text-muted-foreground capitalize">{professional.type}</p>
+                          </div>
+                        </div>
+                      </div>
+                    ))}
+                  </div>
+
+                  <div className="max-h-[600px] overflow-y-auto scrollbar-thin">
+                    {timeSlots.map((time) => {
                       return (
-                        <div
-                          key={professional.id}
-                          className={cn(
-                            "relative border-l border-border/50 min-h-[48px]",
-                            !hasAppointmentsStarting && canEditSchedule && "hover:bg-primary/5 cursor-pointer transition-colors"
-                          )}
-                          onClick={() => !hasAppointmentsStarting && canEditSchedule && handleSlotClick(time, professional.id)}
-                        >
-                          {/* Thin clickable strip for new appointment - only show when there are appointments */}
-                          {hasAppointmentsStarting && canEditSchedule && (
-                            <div 
-                              className="absolute right-0 top-0 bottom-0 w-4 hover:bg-primary/20 cursor-pointer transition-colors z-20 flex items-center justify-center group border-l border-dashed border-transparent hover:border-primary/30"
-                              onClick={(e) => {
-                                e.stopPropagation();
-                                handleSlotClick(time, professional.id);
-                              }}
-                              title="Novo agendamento"
-                            >
-                              <Plus className="w-3 h-3 text-transparent group-hover:text-primary/60 transition-colors" />
-                            </div>
-                          )}
+                        <div key={time} className="grid border-b border-border/50 last:border-0" style={{ gridTemplateColumns: `80px repeat(${visibleProfessionals.length}, minmax(180px, 1fr))` }}>
+                          <div className="p-3 flex items-center justify-center bg-muted/30">
+                            <span className="text-sm font-medium text-muted-foreground">{time}</span>
+                          </div>
+                          {visibleProfessionals.map((professional) => {
+                            const occupyingAppointments = getAppointmentsForSlot(time, professional.id);
+                            const appointmentsStartingNow = getAppointmentsStartingAt(time, professional.id);
+                            const hasOccupyingAppointment = occupyingAppointments.length > 0;
 
-                          {hasAppointmentsStarting && (
-                            <div className="absolute top-0 left-0 right-4 flex">
-                              {appointmentsStartingNow.map((appointment, aptIndex) => {
-                                const slotCount = getSlotHeight(appointment);
-                                const cardWidthPercent = 100 / appointmentsStartingNow.length;
-                                
-                                return (
-                                  <motion.div
-                                    key={appointment.id}
-                                    initial={{ opacity: 0, scale: 0.95 }}
-                                    animate={{ opacity: 1, scale: 1 }}
-                                    className={cn(
-                                      "rounded-lg p-2 cursor-pointer z-10 shadow-sm border transition-all hover:shadow-md m-0.5",
-                                      (appointment.status as string) === 'pre_scheduled' && "bg-orange-100 border-orange-400 border-dashed border-2 animate-pulse",
-                                      appointment.status === 'scheduled' && "bg-info-soft border-info/30",
-                                      appointment.status === 'confirmed' && "bg-success-soft border-success/30",
-                                      appointment.status === 'in_progress' && "bg-warning-soft border-warning/30",
-                                      appointment.status === 'completed' && "bg-primary-soft border-primary/30",
-                                      appointment.status === 'cancelled' && "bg-destructive-soft border-destructive/30 opacity-60",
-                                    )}
-                                    style={{ 
-                                      height: `calc(${slotCount * 48}px - 4px)`,
-                                      width: `calc(${cardWidthPercent}% - 4px)`,
-                                      position: 'absolute',
-                                      left: `calc(${aptIndex * cardWidthPercent}% + 2px)`,
-                                      top: '2px'
-                                    }}
+                            // Check if any appointments that START at this time exist
+                            const hasAppointmentsStarting = appointmentsStartingNow.length > 0;
+
+                            // For slots that are occupied but appointment doesn't start here, show empty slot
+                            if (hasOccupyingAppointment && !hasAppointmentsStarting) {
+                              return <div key={professional.id} className="border-l border-border/50 relative min-h-[48px]" />;
+                            }
+
+                            return (
+                              <div
+                                key={professional.id}
+                                className={cn(
+                                  "relative border-l border-border/50 min-h-[48px]",
+                                  !hasAppointmentsStarting && canEditSchedule && "hover:bg-primary/5 cursor-pointer transition-colors"
+                                )}
+                                onClick={() => !hasAppointmentsStarting && canEditSchedule && handleSlotClick(time, professional.id)}
+                              >
+                                {/* Thin clickable strip for new appointment - only show when there are appointments */}
+                                {hasAppointmentsStarting && canEditSchedule && (
+                                  <div
+                                    className="absolute right-0 top-0 bottom-0 w-4 hover:bg-primary/20 cursor-pointer transition-colors z-20 flex items-center justify-center group border-l border-dashed border-transparent hover:border-primary/30"
                                     onClick={(e) => {
                                       e.stopPropagation();
-                                      setSelectedAppointment(appointment);
-                                      setIsAppointmentDetailOpen(true);
+                                      handleSlotClick(time, professional.id);
                                     }}
+                                    title="Novo agendamento"
                                   >
-                                    <div className="flex flex-col h-full overflow-hidden">
-                                      <div className="flex items-start gap-1">
-                                        <Avatar className="w-6 h-6 shrink-0 border border-border/50">
-                                          <AvatarImage src={appointment.client?.photo_url || undefined} alt={appointment.client?.name} />
-                                          <AvatarFallback className="text-[9px] bg-background/50">
-                                            {appointment.client?.name?.charAt(0) || '?'}
-                                          </AvatarFallback>
-                                        </Avatar>
-                                        <div className="flex-1 min-w-0">
-                                          <div className="flex items-start justify-between gap-1">
-                                            <p className="text-xs font-medium text-foreground truncate flex-1">{appointment.client?.name}</p>
-                                            {appointment.booking_source === 'online' && (
-                                              <span className="flex items-center gap-0.5 text-[8px] font-medium bg-primary/10 text-primary px-1 py-0.5 rounded shrink-0" title="Agendamento online">
-                                                <Globe className="w-2 h-2" />
-                                              </span>
+                                    <Plus className="w-3 h-3 text-transparent group-hover:text-primary/60 transition-colors" />
+                                  </div>
+                                )}
+
+                                {hasAppointmentsStarting && (
+                                  <div className="absolute top-0 left-0 right-4 flex">
+                                    {appointmentsStartingNow.map((appointment, aptIndex) => {
+                                      const slotCount = getSlotHeight(appointment);
+                                      const cardWidthPercent = 100 / appointmentsStartingNow.length;
+
+                                      return (
+                                        <motion.div
+                                          key={appointment.id}
+                                          initial={{ opacity: 0, scale: 0.95 }}
+                                          animate={{ opacity: 1, scale: 1 }}
+                                          className={cn(
+                                            "rounded-lg p-2 cursor-pointer z-10 shadow-sm border transition-all hover:shadow-md m-0.5",
+                                            (appointment.status as string) === 'pre_scheduled' && "bg-orange-100 border-orange-400 border-dashed border-2 animate-pulse",
+                                            appointment.status === 'scheduled' && "bg-info-soft border-info/30",
+                                            appointment.status === 'confirmed' && "bg-success-soft border-success/30",
+                                            appointment.status === 'in_progress' && "bg-warning-soft border-warning/30",
+                                            appointment.status === 'completed' && "bg-primary-soft border-primary/30",
+                                            appointment.status === 'cancelled' && "bg-destructive-soft border-destructive/30 opacity-60",
+                                          )}
+                                          style={{
+                                            height: `calc(${slotCount * 48}px - 4px)`,
+                                            width: `calc(${cardWidthPercent}% - 4px)`,
+                                            position: 'absolute',
+                                            left: `calc(${aptIndex * cardWidthPercent}% + 2px)`,
+                                            top: '2px'
+                                          }}
+                                          onClick={(e) => {
+                                            e.stopPropagation();
+                                            setSelectedAppointment(appointment);
+                                            setIsAppointmentDetailOpen(true);
+                                          }}
+                                        >
+                                          <div className="flex flex-col h-full overflow-hidden">
+                                            <div className="flex items-start gap-1">
+                                              <Avatar className="w-6 h-6 shrink-0 border border-border/50">
+                                                <AvatarImage src={appointment.client?.photo_url || undefined} alt={appointment.client?.name} />
+                                                <AvatarFallback className="text-[9px] bg-background/50">
+                                                  {appointment.client?.name?.charAt(0) || '?'}
+                                                </AvatarFallback>
+                                              </Avatar>
+                                              <div className="flex-1 min-w-0">
+                                                <div className="flex items-start justify-between gap-1">
+                                                  <p className="text-xs font-medium text-foreground truncate flex-1">{appointment.client?.name}</p>
+                                                  {appointment.booking_source === 'online' && (
+                                                    <span className="flex items-center gap-0.5 text-[8px] font-medium bg-primary/10 text-primary px-1 py-0.5 rounded shrink-0" title="Agendamento online">
+                                                      <Globe className="w-2 h-2" />
+                                                    </span>
+                                                  )}
+                                                </div>
+                                                <p className="text-[10px] text-muted-foreground truncate">{appointment.service?.name}</p>
+                                              </div>
+                                            </div>
+                                            {slotCount > 1.5 && (
+                                              <Badge variant={appointment.status as any} className="mt-auto text-[9px] px-1 py-0 w-fit">
+                                                {appointmentStatusLabels[appointment.status]}
+                                              </Badge>
                                             )}
                                           </div>
-                                          <p className="text-[10px] text-muted-foreground truncate">{appointment.service?.name}</p>
-                                        </div>
-                                      </div>
-                                      {slotCount > 1.5 && (
-                                        <Badge variant={appointment.status as any} className="mt-auto text-[9px] px-1 py-0 w-fit">
-                                          {appointmentStatusLabels[appointment.status]}
-                                        </Badge>
-                                      )}
-                                    </div>
-                                  </motion.div>
-                                );
-                              })}
-                            </div>
-                          )}
+                                        </motion.div>
+                                      );
+                                    })}
+                                  </div>
+                                )}
+                              </div>
+                            );
+                          })}
                         </div>
                       );
                     })}
                   </div>
-                );
-              })}
-            </div>
-          </div>
+                </div>
+              </div>
+            </Card>
+          )}
         </div>
-      </Card>
+      </div>
 
       {/* New Appointment Dialog */}
       <Dialog open={isNewAppointmentOpen} onOpenChange={setIsNewAppointmentOpen}>
