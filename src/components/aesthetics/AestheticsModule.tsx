@@ -1,5 +1,5 @@
 import { useEffect, useMemo, useState } from 'react';
-import { Activity, Camera, ClipboardList, ImagePlus, Plus, Search, UserRound } from 'lucide-react';
+import { Activity, Camera, ClipboardList, ImagePlus, Plus, Search, UserRound, X } from 'lucide-react';
 import { toast } from 'sonner';
 
 import { useAuth } from '@/contexts/AuthContext';
@@ -68,10 +68,17 @@ const formatDateTime = (value: string) => new Date(value).toLocaleString('pt-BR'
 
 const fromAestheticTable = (table: string) => supabase.from(table as any);
 
+const normalizeSearch = (value?: string | null) => (
+  value || ''
+).normalize('NFD').replace(/[\u0300-\u036f]/g, '').toLowerCase();
+
+const onlyDigits = (value?: string | null) => (value || '').replace(/\D/g, '');
+
 export function AestheticsModule() {
   const { tenantId, currentTenant, canModify } = useAuth();
   const { clients, professionals } = useData();
   const [clientSearch, setClientSearch] = useState('');
+  const [isClientSearchFocused, setIsClientSearchFocused] = useState(false);
   const [selectedClientId, setSelectedClientId] = useState('');
   const [loadingRecords, setLoadingRecords] = useState(false);
   const [savingAnamnesis, setSavingAnamnesis] = useState(false);
@@ -125,14 +132,40 @@ export function AestheticsModule() {
   const selectedClient = clients.find((client) => client.id === selectedClientId);
 
   const filteredClients = useMemo(() => {
-    const query = clientSearch.toLowerCase().trim();
+    const query = normalizeSearch(clientSearch.trim());
+    const digitQuery = onlyDigits(clientSearch);
+
     return clients
       .filter((client) => {
-        if (!query) return true;
-        return client.name.toLowerCase().includes(query) || client.phone?.includes(query);
+        if (!query && !digitQuery) return true;
+        const nameMatches = normalizeSearch(client.name).includes(query);
+        const phoneMatches = digitQuery ? onlyDigits(client.phone).includes(digitQuery) : false;
+        return nameMatches || phoneMatches;
       })
-      .slice(0, 100);
+      .slice(0, 12);
   }, [clients, clientSearch]);
+
+  const shouldShowClientResults = isClientSearchFocused && !selectedClientId && filteredClients.length > 0;
+
+  const handleClientSearchChange = (value: string) => {
+    setClientSearch(value);
+    if (selectedClient && normalizeSearch(value) !== normalizeSearch(selectedClient.name)) {
+      setSelectedClientId('');
+    }
+  };
+
+  const handleSelectClient = (clientId: string) => {
+    const client = clients.find((item) => item.id === clientId);
+    setSelectedClientId(clientId);
+    setClientSearch(client?.name || '');
+    setIsClientSearchFocused(false);
+  };
+
+  const clearSelectedClient = () => {
+    setSelectedClientId('');
+    setClientSearch('');
+    setIsClientSearchFocused(true);
+  };
 
   const fetchRecords = async () => {
     if (!tenantId || !selectedClientId || !hasPackage) return;
@@ -409,28 +442,60 @@ export function AestheticsModule() {
           </CardTitle>
           <CardDescription>Busque e selecione o cliente para visualizar ou registrar informações.</CardDescription>
         </CardHeader>
-        <CardContent className="grid gap-4 md:grid-cols-[1fr_320px]">
-          <div className="relative">
+        <CardContent>
+          <div className="relative max-w-3xl">
             <Search className="absolute left-3 top-1/2 h-4 w-4 -translate-y-1/2 text-muted-foreground" />
             <Input
-              className="pl-9"
+              className="pl-9 pr-10"
               placeholder="Buscar cliente por nome ou telefone..."
               value={clientSearch}
-              onChange={(event) => setClientSearch(event.target.value)}
+              onChange={(event) => handleClientSearchChange(event.target.value)}
+              onFocus={() => setIsClientSearchFocused(true)}
+              onBlur={() => window.setTimeout(() => setIsClientSearchFocused(false), 120)}
             />
+            {clientSearch && (
+              <Button
+                type="button"
+                variant="ghost"
+                size="icon-sm"
+                className="absolute right-2 top-1/2 -translate-y-1/2"
+                onClick={clearSelectedClient}
+                aria-label="Limpar cliente"
+              >
+                <X className="h-4 w-4" />
+              </Button>
+            )}
+
+            {shouldShowClientResults && (
+              <div className="absolute left-0 right-0 z-30 mt-2 max-h-80 overflow-y-auto rounded-lg border border-border bg-background shadow-lg">
+                {filteredClients.map((client) => (
+                  <button
+                    key={client.id}
+                    type="button"
+                    className="flex w-full items-center justify-between gap-3 border-b border-border/60 px-4 py-3 text-left last:border-b-0 hover:bg-secondary/60"
+                    onMouseDown={(event) => {
+                      event.preventDefault();
+                      handleSelectClient(client.id);
+                    }}
+                  >
+                    <div className="min-w-0">
+                      <p className="truncate font-medium text-foreground">{client.name}</p>
+                      <p className="truncate text-xs text-muted-foreground">
+                        {client.phone || client.email || 'Sem contato'}
+                      </p>
+                    </div>
+                    <span className="text-xs text-primary">Selecionar</span>
+                  </button>
+                ))}
+              </div>
+            )}
+
+            {isClientSearchFocused && clientSearch && !selectedClientId && filteredClients.length === 0 && (
+              <div className="absolute left-0 right-0 z-30 mt-2 rounded-lg border border-border bg-background p-4 text-sm text-muted-foreground shadow-lg">
+                Nenhum cliente encontrado.
+              </div>
+            )}
           </div>
-          <Select value={selectedClientId} onValueChange={setSelectedClientId}>
-            <SelectTrigger>
-              <SelectValue placeholder="Selecionar cliente" />
-            </SelectTrigger>
-            <SelectContent>
-              {filteredClients.map((client) => (
-                <SelectItem key={client.id} value={client.id}>
-                  {client.name}
-                </SelectItem>
-              ))}
-            </SelectContent>
-          </Select>
         </CardContent>
       </Card>
 
