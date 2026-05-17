@@ -3,7 +3,7 @@ import { User, Session } from '@supabase/supabase-js';
 import { supabase } from '@/integrations/supabase/client';
 
 type UserRole = 'admin' | 'professional' | null;
-type TenantPackageType = 'salon' | 'aesthetic_clinic';
+type TenantPackageType = 'salon' | 'aesthetic_clinic' | 'cleaning_control' | 'business_erp';
 
 interface Professional {
   id: string;

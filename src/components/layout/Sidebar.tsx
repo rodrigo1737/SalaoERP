@@ -23,7 +23,8 @@ import {
   ChevronDown,
   Truck,
   ArrowRightLeft,
-  PackagePlus
+  PackagePlus,
+  Sparkles
 } from 'lucide-react';
 import { cn } from '@/lib/utils';
 import { Button } from '@/components/ui/button';
@@ -40,7 +41,7 @@ interface MenuItem {
   icon: React.ComponentType<{ className?: string }>;
   adminOnly?: boolean;
   permission?: string;
-  packageRequired?: 'aesthetic_clinic';
+  packageRequired?: 'aesthetic_clinic' | 'cleaning_control';
   children?: MenuItem[];
 }
 
@@ -53,6 +54,7 @@ const salonMenuItems: MenuItem[] = [
   { id: 'services', label: 'Serviços', icon: Scissors, adminOnly: true },
   { id: 'products', label: 'Produtos', icon: ShoppingBag, adminOnly: true },
   { id: 'aesthetics', label: 'Estética', icon: UserCircle, adminOnly: true, packageRequired: 'aesthetic_clinic' },
+  { id: 'cleaning', label: 'Limpeza', icon: Sparkles, adminOnly: false, permission: 'view_schedule', packageRequired: 'cleaning_control' },
   { 
     id: 'stock', 
     label: 'Estoque', 
@@ -107,7 +109,12 @@ export function Sidebar({ currentPage, onNavigate }: SidebarProps) {
 
     const canSeeItem = (item: MenuItem) => {
       if (isSuperAdmin) return true;
-      if (item.packageRequired && currentTenant?.package_type !== item.packageRequired) return false;
+      if (item.packageRequired) {
+        const packageType = currentTenant?.package_type;
+        const hasPackage = packageType === item.packageRequired
+          || packageType === 'business_erp';
+        if (!hasPackage) return false;
+      }
       if (userRole === 'admin') return true;
       if (item.id === 'settings') return true;
       if (item.adminOnly && !item.permission) return false;

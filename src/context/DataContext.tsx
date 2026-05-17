@@ -28,6 +28,12 @@ export interface Professional {
   is_active: boolean;
   has_schedule: boolean;
   schedule_color?: string;
+  works_cleaning?: boolean;
+  cleaning_role?: string;
+  cleaning_commission_type?: 'percent' | 'fixed' | 'mixed';
+  cleaning_commission_percent?: number;
+  cleaning_commission_fixed?: number;
+  can_view_cleaning_commission?: boolean;
   photo_url?: string;
   created_at: string;
 }

@@ -10,6 +10,7 @@ import { ProfessionalsList } from '@/components/professionals/ProfessionalsList'
 import { ServicesList } from '@/components/services/ServicesList';
 import { ProductsList } from '@/components/products/ProductsList';
 import { AestheticsModule } from '@/components/aesthetics/AestheticsModule';
+import { CleaningModule } from '@/components/cleaning/CleaningModule';
 import { Commissions } from '@/components/commissions/Commissions';
 import { Cashier } from '@/components/cashier/Cashier';
 import { Reports } from '@/components/reports/Reports';
@@ -27,8 +28,8 @@ import { StockMovements } from '@/components/stock/StockMovements';
 
 // Páginas válidas por perfil
 const ADMIN_PAGES = ['dashboard', 'agenda', 'clients', 'professionals', 'services', 'products', 'aesthetics',
-  'suppliers', 'purchase', 'stock-movements', 'commissions', 'reports', 'cashier', 'settings'];
-const PROFESSIONAL_PAGES = ['agenda', 'commissions', 'settings'];
+  'cleaning', 'suppliers', 'purchase', 'stock-movements', 'commissions', 'reports', 'cashier', 'settings'];
+const PROFESSIONAL_PAGES = ['agenda', 'cleaning', 'commissions', 'settings'];
 const SUPER_ADMIN_PAGES = ['super-dashboard', 'tenants'];
 
 const Index = () => {
@@ -40,7 +41,12 @@ const Index = () => {
   const canAccessPage = (targetPage: string) => {
     if (isSuperAdmin) return SUPER_ADMIN_PAGES.includes(targetPage);
     if (targetPage === 'aesthetics') {
-      return isAdmin && currentTenant?.package_type === 'aesthetic_clinic';
+      return isAdmin && (currentTenant?.package_type === 'aesthetic_clinic' || currentTenant?.package_type === 'business_erp');
+    }
+    if (targetPage === 'cleaning') {
+      const hasPackage = currentTenant?.package_type === 'cleaning_control' || currentTenant?.package_type === 'business_erp';
+      if (!hasPackage) return false;
+      return isAdmin || hasPermission('view_schedule') || hasPermission('edit_schedule');
     }
     if (isAdmin) return ADMIN_PAGES.includes(targetPage);
     if (targetPage === 'agenda') return hasPermission('view_schedule') || hasPermission('edit_schedule');
@@ -96,6 +102,7 @@ const Index = () => {
       case 'services':         return <ServicesList />;
       case 'products':         return <ProductsList />;
       case 'aesthetics':       return <AestheticsModule />;
+      case 'cleaning':         return <CleaningModule />;
       case 'suppliers':        return <SuppliersList />;
       case 'purchase':         return <PurchaseEntry />;
       case 'stock-movements':  return <StockMovements />;

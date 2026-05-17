@@ -40,7 +40,7 @@ interface Tenant {
   name: string;
   cnpj: string | null;
   cpf: string | null;
-  package_type: 'salon' | 'aesthetic_clinic';
+  package_type: 'salon' | 'aesthetic_clinic' | 'cleaning_control' | 'business_erp';
   payment_method: 'pix' | 'boleto' | 'cartao' | 'transferencia';
   subscription_due_date: string | null;
   status: 'active' | 'readonly' | 'blocked';
@@ -77,16 +77,22 @@ const statusColors: Record<string, string> = {
 const packageLabels: Record<Tenant['package_type'], string> = {
   salon: 'Salão/Barbearia',
   aesthetic_clinic: 'Estética e Emagrecimento',
+  cleaning_control: 'Controle de Limpeza',
+  business_erp: 'ERP Completo',
 };
 
 const packageDescriptions: Record<Tenant['package_type'], string> = {
   salon: 'Pacote atual para salão, barbearia e agenda padrão.',
   aesthetic_clinic: 'Libera módulos premium como anamnese, evolução e fotos clínicas.',
+  cleaning_control: 'Libera agenda de limpeza, imóveis, checklist, fotos, repasses e financeiro operacional.',
+  business_erp: 'Libera todos os segmentos: salão, estética e controle de limpeza.',
 };
 
 const packageColors: Record<Tenant['package_type'], string> = {
   salon: 'bg-blue-500/15 text-blue-700',
   aesthetic_clinic: 'bg-purple-500/15 text-purple-700',
+  cleaning_control: 'bg-emerald-500/15 text-emerald-700',
+  business_erp: 'bg-slate-700/15 text-slate-700',
 };
 
 export function TenantsList() {
@@ -554,6 +560,8 @@ export function TenantsList() {
                       <SelectContent>
                         <SelectItem value="salon">Salão/Barbearia</SelectItem>
                         <SelectItem value="aesthetic_clinic">Estética e Emagrecimento</SelectItem>
+                        <SelectItem value="cleaning_control">Controle de Limpeza</SelectItem>
+                        <SelectItem value="business_erp">ERP Completo</SelectItem>
                       </SelectContent>
                     </Select>
                     <p className="text-xs text-muted-foreground">
