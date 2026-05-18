@@ -16,6 +16,7 @@ import { Badge } from '@/components/ui/badge';
 import { useData } from '@/context/DataContext';
 import { useAuth } from '@/contexts/AuthContext';
 import { useMemo } from 'react';
+import { isCleaningControlTenant } from '@/lib/tenantSegments';
 
 interface DashboardProps {
   onNavigate: (page: string) => void;
@@ -54,7 +55,7 @@ export function Dashboard({ onNavigate }: DashboardProps) {
     loading 
   } = useData();
   const { user, currentTenant } = useAuth();
-  const isCleaningSegment = currentTenant?.package_type === 'cleaning_control';
+  const isCleaningSegment = isCleaningControlTenant(currentTenant);
 
   const stats = useMemo(() => {
     const today = new Date();

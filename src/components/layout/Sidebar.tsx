@@ -29,6 +29,7 @@ import {
 import { cn } from '@/lib/utils';
 import { Button } from '@/components/ui/button';
 import { motion, AnimatePresence } from 'framer-motion';
+import { isCleaningControlTenant } from '@/lib/tenantSegments';
 
 interface SidebarProps {
   currentPage: string;
@@ -84,7 +85,7 @@ export function Sidebar({ currentPage, onNavigate }: SidebarProps) {
   const navigate = useNavigate();
   const { user, userRole, isSuperAdmin, currentTenant, signOut, hasPermission } = useAuth();
   const { settings: tenantSettings } = useTenantSettings();
-  const isCleaningTenant = currentTenant?.package_type === 'cleaning_control';
+  const isCleaningTenant = isCleaningControlTenant(currentTenant);
   const cleaningHiddenItems = ['agenda', 'services', 'products', 'stock', 'cashier', 'commissions'];
 
   const handleLogout = async () => {
@@ -115,6 +116,7 @@ export function Sidebar({ currentPage, onNavigate }: SidebarProps) {
       if (item.packageRequired) {
         const packageType = currentTenant?.package_type;
         const hasPackage = packageType === item.packageRequired
+          || (item.packageRequired === 'cleaning_control' && isCleaningTenant)
           || packageType === 'business_erp';
         if (!hasPackage) return false;
       }

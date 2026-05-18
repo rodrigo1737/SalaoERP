@@ -21,6 +21,7 @@ import { supabase } from '@/integrations/supabase/client';
 import { useAuth } from '@/contexts/AuthContext';
 import { useData } from '@/context/DataContext';
 import { Badge } from '@/components/ui/badge';
+import { hasCleaningModulePackage } from '@/lib/tenantSegments';
 import { Button } from '@/components/ui/button';
 import { Card, CardContent, CardHeader, CardTitle } from '@/components/ui/card';
 import { Checkbox } from '@/components/ui/checkbox';
@@ -255,6 +256,12 @@ const defaultChecklistItems = [
   'Observações finais',
 ];
 
+const normalizeLookup = (value?: string | null) => (value || '')
+  .normalize('NFD')
+  .replace(/[\u0300-\u036f]/g, '')
+  .toLowerCase()
+  .trim();
+
 const initialProperty = {
   client_id: '',
   name: '',
@@ -342,7 +349,7 @@ export function CleaningModule() {
   const [dialogs, setDialogs] = useState({ property: false, service: false, team: false, appointment: false });
 
   const isAdmin = userRole === 'admin';
-  const cleaningEnabled = currentTenant?.package_type === 'cleaning_control' || currentTenant?.package_type === 'business_erp';
+  const cleaningEnabled = hasCleaningModulePackage(currentTenant);
   const canOperateCleaning = isAdmin || hasPermission('edit_schedule');
   const canManageCleaning = canModify() && canOperateCleaning;
   const canViewFinancial = isAdmin || hasPermission('manage_cash_flow');
@@ -662,18 +669,40 @@ export function CleaningModule() {
     loadCleaningData();
   };
 
+  const getOrCreateWalkInClient = async () => {
+    if (!tenantId) {
+      throw new Error('Tenant não identificado.');
+    }
+
+    const selectedClient = clients.find((item) => item.id === appointmentForm.client_id);
+    if (selectedClient) return selectedClient;
+
+    const existingClient = clients.find((item) => normalizeLookup(item.name) === 'cliente avulso');
+    if (existingClient) return existingClient;
+
+    const { data, error } = await db
+      .from('clients')
+      .insert({
+        tenant_id: tenantId,
+        name: 'Cliente avulso',
+      })
+      .select('id, name')
+      .single();
+
+    if (error || !data) {
+      throw new Error('Não foi possível criar o cliente avulso.');
+    }
+
+    await refreshData(['clients']);
+    return data;
+  };
+
   const createAppointment = async () => {
     if (!tenantId) return;
-    const client = clients.find((item) => item.id === appointmentForm.client_id);
     const service = services.find((item) => item.id === appointmentForm.service_setting_id);
     const professional = professionals.find((item) => item.id === appointmentForm.professional_id);
     const team = teams.find((item) => item.id === appointmentForm.team_id);
     const property = properties.find((item) => item.id === appointmentForm.property_id);
-
-    if (!client || !service || !appointmentForm.address.trim()) {
-      toast.error('Informe cliente, serviço e endereço.');
-      return;
-    }
 
     if (appointmentForm.assignee_type === 'professional' && !professional) {
       toast.error('Selecione o profissional.');
@@ -685,8 +714,19 @@ export function CleaningModule() {
       return;
     }
 
+    let client;
+    try {
+      client = await getOrCreateWalkInClient();
+    } catch (error) {
+      toast.error('Não foi possível preparar o cliente avulso.');
+      return;
+    }
+
     const start = new Date(`${appointmentForm.date}T${appointmentForm.time}:00`);
-    const end = addMinutes(start, service.duration_minutes);
+    const durationMinutes = service?.duration_minutes || 60;
+    const serviceName = service?.name || 'Serviço avulso';
+    const appointmentAddress = appointmentForm.address.trim() || property?.address?.trim() || 'Endereço não informado';
+    const end = addMinutes(start, durationMinutes);
     const quotedAmount = Number(appointmentForm.quoted_amount);
     const commissionAmount = Number(appointmentForm.commission_amount);
 
@@ -696,15 +736,15 @@ export function CleaningModule() {
         tenant_id: tenantId,
         client_id: client.id,
         property_id: property?.id ?? null,
-        service_setting_id: service.id,
+        service_setting_id: service?.id ?? null,
         professional_id: appointmentForm.assignee_type === 'professional' ? professional?.id : null,
         team_id: appointmentForm.assignee_type === 'team' ? team?.id : null,
         start_time: start.toISOString(),
         end_time: end.toISOString(),
         recurrence_type: appointmentForm.recurrence_type,
-        address: appointmentForm.address.trim(),
+        address: appointmentAddress,
         access_instructions: appointmentForm.access_instructions.trim() || null,
-        service_name_snapshot: service.name,
+        service_name_snapshot: serviceName,
         client_name_snapshot: client.name,
         assignee_name_snapshot: professional?.nickname || professional?.name || team?.name || null,
         quoted_amount: quotedAmount,
@@ -728,7 +768,7 @@ export function CleaningModule() {
         appointment_id: data.id,
         entry_type: 'receivable',
         category: 'Limpeza',
-        description: `${service.name} - ${client.name}`,
+        description: `${serviceName} - ${client.name}`,
         amount: quotedAmount,
         status: 'pending',
         due_date: appointmentForm.date,
@@ -1269,23 +1309,44 @@ export function CleaningModule() {
             onOpenChange={(open) => setDialogs((prev) => ({ ...prev, service: open }))}
           >
             <div className="grid gap-4">
-              <Input placeholder="Nome do serviço" value={serviceForm.name} onChange={(event) => setServiceForm((prev) => ({ ...prev, name: event.target.value }))} />
-              <Input placeholder="Categoria" value={serviceForm.category} onChange={(event) => setServiceForm((prev) => ({ ...prev, category: event.target.value }))} />
-              <div className="grid grid-cols-2 gap-3">
-                <Input type="number" placeholder="Duração" value={serviceForm.duration_minutes} onChange={(event) => setServiceForm((prev) => ({ ...prev, duration_minutes: Number(event.target.value) }))} />
-                <Input type="number" placeholder="Valor" value={serviceForm.default_price} onChange={(event) => setServiceForm((prev) => ({ ...prev, default_price: Number(event.target.value) }))} />
+              <div className="space-y-2">
+                <Label>Nome do serviço</Label>
+                <Input placeholder="Ex.: Limpeza padrão" value={serviceForm.name} onChange={(event) => setServiceForm((prev) => ({ ...prev, name: event.target.value }))} />
               </div>
-              <Select value={serviceForm.commission_type} onValueChange={(value) => setServiceForm((prev) => ({ ...prev, commission_type: value as CommissionType }))}>
-                <SelectTrigger><SelectValue /></SelectTrigger>
-                <SelectContent>
-                  <SelectItem value="percent">Percentual</SelectItem>
-                  <SelectItem value="fixed">Valor fixo</SelectItem>
-                  <SelectItem value="mixed">Misto</SelectItem>
-                </SelectContent>
-              </Select>
+              <div className="space-y-2">
+                <Label>Categoria</Label>
+                <Input placeholder="Ex.: Limpeza, passadoria, organizer" value={serviceForm.category} onChange={(event) => setServiceForm((prev) => ({ ...prev, category: event.target.value }))} />
+              </div>
               <div className="grid grid-cols-2 gap-3">
-                <Input type="number" placeholder="% repasse" value={serviceForm.commission_percent} onChange={(event) => setServiceForm((prev) => ({ ...prev, commission_percent: Number(event.target.value) }))} />
-                <Input type="number" placeholder="Repasse fixo" value={serviceForm.commission_fixed} onChange={(event) => setServiceForm((prev) => ({ ...prev, commission_fixed: Number(event.target.value) }))} />
+                <div className="space-y-2">
+                  <Label>Duração padrão (minutos)</Label>
+                  <Input type="number" placeholder="Ex.: 240" value={serviceForm.duration_minutes} onChange={(event) => setServiceForm((prev) => ({ ...prev, duration_minutes: Number(event.target.value) }))} />
+                </div>
+                <div className="space-y-2">
+                  <Label>Valor padrão cobrado (R$)</Label>
+                  <Input type="number" placeholder="Ex.: 250" value={serviceForm.default_price} onChange={(event) => setServiceForm((prev) => ({ ...prev, default_price: Number(event.target.value) }))} />
+                </div>
+              </div>
+              <div className="space-y-2">
+                <Label>Tipo de repasse/comissão</Label>
+                <Select value={serviceForm.commission_type} onValueChange={(value) => setServiceForm((prev) => ({ ...prev, commission_type: value as CommissionType }))}>
+                  <SelectTrigger><SelectValue /></SelectTrigger>
+                  <SelectContent>
+                    <SelectItem value="percent">Percentual</SelectItem>
+                    <SelectItem value="fixed">Valor fixo</SelectItem>
+                    <SelectItem value="mixed">Misto</SelectItem>
+                  </SelectContent>
+                </Select>
+              </div>
+              <div className="grid grid-cols-2 gap-3">
+                <div className="space-y-2">
+                  <Label>Repasse percentual (%)</Label>
+                  <Input type="number" placeholder="Ex.: 30" value={serviceForm.commission_percent} onChange={(event) => setServiceForm((prev) => ({ ...prev, commission_percent: Number(event.target.value) }))} />
+                </div>
+                <div className="space-y-2">
+                  <Label>Repasse fixo (R$)</Label>
+                  <Input type="number" placeholder="Ex.: 80" value={serviceForm.commission_fixed} onChange={(event) => setServiceForm((prev) => ({ ...prev, commission_fixed: Number(event.target.value) }))} />
+                </div>
               </div>
               <label className="flex items-center gap-2 text-sm">
                 <Checkbox checked={serviceForm.requires_checklist} onCheckedChange={(checked) => setServiceForm((prev) => ({ ...prev, requires_checklist: Boolean(checked) }))} />

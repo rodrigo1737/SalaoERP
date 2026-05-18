@@ -45,6 +45,8 @@ import { useAuth } from '@/contexts/AuthContext';
 import { useTenantSettings } from '@/contexts/TenantSettingsContext';
 import { cn } from '@/lib/utils';
 import { BillItemsEditor, BillItem } from './BillItemsEditor';
+import { useNavigate } from 'react-router-dom';
+import { isCleaningControlTenant } from '@/lib/tenantSegments';
 
 const appointmentStatusLabels: Record<string, string> = {
   pre_scheduled: 'Pré-Agendado',
@@ -104,6 +106,7 @@ const normalizeText = (value?: string | null) => {
 export function Schedule() {
   const { clients, professionals, services, products, appointments, loading, addClient, addService, addAppointment, updateAppointment, deleteAppointment, refundAppointment, currentCashSession, completeAppointment } = useData();
   const { settings: tenantSettings } = useTenantSettings();
+  const navigate = useNavigate();
 
   // ITEM 13: horários configuráveis; fallback para 8–20 se tenant não configurou ainda
   const workStart = tenantSettings?.working_hours_start ?? 8;
@@ -114,8 +117,9 @@ export function Schedule() {
     timeSlots.push(`${String(hour).padStart(2, '0')}:30`);
   }
   const { registerSale, registerServiceConsumption } = useStock();
-  const { userRole, currentProfessional, loading: authLoading, hasPermission } = useAuth();
+  const { userRole, currentProfessional, loading: authLoading, hasPermission, currentTenant } = useAuth();
   const { toast } = useToast();
+  const isCleaningTenant = isCleaningControlTenant(currentTenant);
   const isAdmin = userRole === 'admin';
   const canViewSchedule = isAdmin || hasPermission('view_schedule') || hasPermission('edit_schedule');
   const canEditSchedule = isAdmin || hasPermission('edit_schedule');
@@ -175,6 +179,12 @@ export function Schedule() {
       setEditDuration(selectedAppointment.service?.duration_minutes?.toString() || '');
     }
   }, [selectedAppointment]);
+
+  useEffect(() => {
+    if (!authLoading && isCleaningTenant) {
+      navigate('/app/cleaning', { replace: true });
+    }
+  }, [authLoading, isCleaningTenant, navigate]);
 
   const navigateDate = (direction: 'prev' | 'next') => {
     const newDate = new Date(currentDate);
@@ -360,6 +370,16 @@ export function Schedule() {
   };
 
   const handleOpenCloseBill = () => {
+    if (isCleaningTenant) {
+      setIsAppointmentDetailOpen(false);
+      toast({
+        title: "Use a Agenda Limpeza",
+        description: "O segmento de limpeza usa conta corrente, sem abertura de comanda ou caixa."
+      });
+      navigate('/app/cleaning', { replace: true });
+      return;
+    }
+
     // Check if cash session is open
     if (!currentCashSession) {
       toast({
@@ -474,6 +494,19 @@ export function Schedule() {
         <h1 className="text-3xl font-display font-bold text-foreground mb-4">Agenda</h1>
         <Card className="p-12 text-center">
           <p className="text-muted-foreground">Carregando...</p>
+        </Card>
+      </div>
+    );
+  }
+
+  if (isCleaningTenant) {
+    return (
+      <div className="p-6 lg:p-8 flex min-h-[400px] items-center justify-center">
+        <Card className="p-6 text-center">
+          <p className="font-medium text-foreground">Redirecionando para a Agenda Limpeza...</p>
+          <p className="mt-1 text-sm text-muted-foreground">
+            O segmento de limpeza não utiliza comanda ou abertura de caixa.
+          </p>
         </Card>
       </div>
     );
@@ -921,6 +954,7 @@ export function Schedule() {
         professionals={scheduleProfessionals}
         services={services}
         isAdmin={isAdmin}
+        canOpenBill={!isCleaningTenant}
         canEditAppointment={canEditSchedule}
         onUpdateStatus={handleUpdateStatus}
         onSave={async (data) => {

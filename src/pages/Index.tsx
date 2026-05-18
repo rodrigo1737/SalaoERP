@@ -21,6 +21,7 @@ import { StableDataProvider } from '@/context/StableDataContext';
 import { StockProvider } from '@/context/StockContext';
 import { TenantSettingsProvider } from '@/contexts/TenantSettingsContext';
 import { useAuth } from '@/contexts/AuthContext';
+import { hasCleaningModulePackage, isCleaningControlTenant } from '@/lib/tenantSegments';
 
 import { SuppliersList } from '@/components/stock/SuppliersList';
 import { PurchaseEntry } from '@/components/stock/PurchaseEntry';
@@ -38,7 +39,7 @@ const Index = () => {
   const navigate = useNavigate();
   const { userRole, isSuperAdmin, hasPermission, currentTenant } = useAuth();
   const isAdmin = userRole === 'admin';
-  const isCleaningTenant = currentTenant?.package_type === 'cleaning_control';
+  const isCleaningTenant = isCleaningControlTenant(currentTenant);
 
   const canAccessPage = (targetPage: string) => {
     if (isSuperAdmin) return SUPER_ADMIN_PAGES.includes(targetPage);
@@ -47,7 +48,7 @@ const Index = () => {
       return isAdmin && (currentTenant?.package_type === 'aesthetic_clinic' || currentTenant?.package_type === 'business_erp');
     }
     if (targetPage === 'cleaning') {
-      const hasPackage = currentTenant?.package_type === 'cleaning_control' || currentTenant?.package_type === 'business_erp';
+      const hasPackage = hasCleaningModulePackage(currentTenant);
       if (!hasPackage) return false;
       return isAdmin || hasPermission('view_schedule') || hasPermission('edit_schedule');
     }
