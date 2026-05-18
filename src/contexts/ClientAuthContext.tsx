@@ -33,6 +33,7 @@ interface ClientAuthContextType {
 }
 
 const ClientAuthContext = createContext<ClientAuthContextType | undefined>(undefined);
+const CLIENT_EMAIL_CONFIRMATION_ENABLED = false;
 
 export const useClientAuth = () => {
   const context = useContext(ClientAuthContext);
@@ -155,7 +156,9 @@ export const ClientAuthProvider: React.FC<{ children: React.ReactNode; tenantId?
           // Defer data fetching to avoid deadlocks
           setTimeout(async () => {
             let account = await fetchClientAccount(currentSession.user.id);
-            if (!account && currentSession.user.email_confirmed_at) {
+            // TODO: retomar confirmação por email no agendamento online.
+            // Enquanto o disparo estiver desativado, criamos/recuperamos a conta sem exigir email_confirmed_at.
+            if (!account) {
               account = await createClientAccountFromMetadata(currentSession.user);
             }
             setClientAccount(account);
@@ -175,7 +178,9 @@ export const ClientAuthProvider: React.FC<{ children: React.ReactNode; tenantId?
       
       if (currentSession?.user) {
         fetchClientAccount(currentSession.user.id).then(async account => {
-          if (!account && currentSession.user.email_confirmed_at) {
+          // TODO: retomar confirmação por email no agendamento online.
+          // Enquanto o disparo estiver desativado, criamos/recuperamos a conta sem exigir email_confirmed_at.
+          if (!account) {
             account = await createClientAccountFromMetadata(currentSession.user);
           }
           setClientAccount(account);
@@ -220,7 +225,10 @@ export const ClientAuthProvider: React.FC<{ children: React.ReactNode; tenantId?
         email: email.trim(),
         password,
         options: {
-          emailRedirectTo: window.location.href.replace(/\/cadastro.*$/, '/login'),
+          // TODO: habilitar quando retomarmos o disparo de confirmação por email.
+          ...(CLIENT_EMAIL_CONFIRMATION_ENABLED
+            ? { emailRedirectTo: window.location.href.replace(/\/cadastro.*$/, '/login') }
+            : {}),
           data: {
             full_name: fullName.trim(),
             client_signup_tenant_id: signupTenantId,
@@ -241,8 +249,14 @@ export const ClientAuthProvider: React.FC<{ children: React.ReactNode; tenantId?
         return { error: new Error('Erro ao criar usuário') };
       }
 
-      if (!authData.session) {
+      if (!authData.session && CLIENT_EMAIL_CONFIRMATION_ENABLED) {
         return { error: null, needsEmailConfirmation: true };
+      }
+
+      if (!authData.session) {
+        return {
+          error: new Error('Cadastro criado, mas a confirmação por email está temporariamente desativada. Faça login após a liberação da conta.'),
+        };
       }
 
       // Create client record
@@ -259,6 +273,12 @@ export const ClientAuthProvider: React.FC<{ children: React.ReactNode; tenantId?
   };
 
   const resendSignupConfirmation = async (email: string) => {
+    // TODO: retomar quando o fluxo de disparo de email estiver configurado.
+    // Mantemos a função como no-op para não quebrar telas que ainda chamem o contexto.
+    if (!CLIENT_EMAIL_CONFIRMATION_ENABLED) {
+      return { error: null };
+    }
+
     try {
       const { error } = await supabase.auth.resend({
         type: 'signup',

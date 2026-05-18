@@ -22,7 +22,7 @@ const loginSchema = z.object({
 const ClientLogin: React.FC = () => {
   const navigate = useNavigate();
   const { tenant } = useOutletContext<{ tenant: TenantInfo }>();
-  const { user, signIn, resendSignupConfirmation, loading: authLoading } = useClientAuth();
+  const { user, signIn, loading: authLoading } = useClientAuth();
 
   const [formData, setFormData] = useState({
     email: '',
@@ -30,7 +30,6 @@ const ClientLogin: React.FC = () => {
   });
   const [errors, setErrors] = useState<Record<string, string>>({});
   const [isSubmitting, setIsSubmitting] = useState(false);
-  const [needsConfirmation, setNeedsConfirmation] = useState(false);
 
   useEffect(() => {
     if (user && !authLoading) {
@@ -41,7 +40,6 @@ const ClientLogin: React.FC = () => {
   const handleSubmit = async (e: React.FormEvent) => {
     e.preventDefault();
     setErrors({});
-    setNeedsConfirmation(false);
 
     const result = loginSchema.safeParse(formData);
     if (!result.success) {
@@ -63,14 +61,11 @@ const ClientLogin: React.FC = () => {
 
     if (error) {
       const isEmailNotConfirmed = error.message.toLowerCase().includes('email not confirmed');
-      if (isEmailNotConfirmed) {
-        setNeedsConfirmation(true);
-      }
 
       toast.error('Erro ao entrar', {
         description:
           isEmailNotConfirmed
-            ? 'Confirme seu email antes de acessar o agendamento.'
+            ? 'A confirmação por email está temporariamente desativada. Fale com o salão para liberar seu acesso.'
             : error.message === 'Invalid login credentials'
               ? 'Email ou senha incorretos'
               : error.message,
@@ -79,23 +74,6 @@ const ClientLogin: React.FC = () => {
       toast.success('Bem-vindo!');
       navigate('../agendar');
     }
-  };
-
-  const handleResendConfirmation = async () => {
-    if (!formData.email) {
-      setErrors({ email: 'Informe seu email para reenviar a confirmação' });
-      return;
-    }
-
-    const { error } = await resendSignupConfirmation(formData.email);
-    if (error) {
-      toast.error('Erro ao reenviar confirmação', { description: error.message });
-      return;
-    }
-
-    toast.success('Email reenviado', {
-      description: 'Verifique sua caixa de entrada e spam.',
-    });
   };
 
   if (authLoading) {
@@ -163,11 +141,7 @@ const ClientLogin: React.FC = () => {
               )}
             </Button>
 
-            {needsConfirmation && (
-              <Button type="button" variant="outline" className="w-full" onClick={handleResendConfirmation}>
-                Reenviar email de confirmação
-              </Button>
-            )}
+            {/* TODO: retomar botão de reenvio quando o disparo de email estiver configurado. */}
 
             {/* Signup Link */}
             <p className="text-center text-sm text-muted-foreground">

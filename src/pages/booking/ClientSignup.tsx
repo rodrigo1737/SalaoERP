@@ -195,7 +195,7 @@ const ClientSignup: React.FC = () => {
     } else if (needsEmailConfirmation) {
       setPendingConfirmationEmail(formData.email);
       toast.success('Conta criada!', {
-        description: 'Enviamos um email de confirmação para liberar o agendamento.',
+        description: 'A confirmação por email está temporariamente desativada. Retomaremos esse fluxo depois.',
       });
     } else {
       toast.success('Conta criada com sucesso!', {
@@ -229,7 +229,7 @@ const ClientSignup: React.FC = () => {
           <CardHeader className="text-center">
             <CardTitle className="text-2xl">Confirme seu email</CardTitle>
             <CardDescription>
-              Enviamos um link de confirmação para {pendingConfirmationEmail}. Depois de confirmar, faça login para agendar.
+              A confirmação por email para {pendingConfirmationEmail} está temporariamente desativada. Faça login quando o acesso estiver liberado.
             </CardDescription>
           </CardHeader>
           <CardContent className="space-y-4">
@@ -237,7 +237,7 @@ const ClientSignup: React.FC = () => {
               Ir para login
             </Button>
             <p className="text-center text-xs text-muted-foreground">
-              Verifique também a caixa de spam ou lixo eletrônico.
+              Retomaremos o envio automático de confirmação em uma próxima etapa.
             </p>
           </CardContent>
         </Card>
