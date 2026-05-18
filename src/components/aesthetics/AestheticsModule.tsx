@@ -417,7 +417,7 @@ export function AestheticsModule() {
           <CardHeader>
             <CardTitle>Módulo de Estética</CardTitle>
             <CardDescription>
-              Este módulo fica disponível para clientes no pacote Estética e Emagrecimento.
+              Este módulo fica disponível para clientes no segmento Estética e Emagrecimento.
             </CardDescription>
           </CardHeader>
         </Card>

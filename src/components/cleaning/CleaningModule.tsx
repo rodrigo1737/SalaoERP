@@ -1005,10 +1005,10 @@ export function CleaningModule() {
         <Card>
           <CardContent className="p-8">
             <div className="max-w-2xl space-y-3">
-              <Badge variant="outline">Pacote não habilitado</Badge>
+              <Badge variant="outline">Segmento não habilitado</Badge>
               <h2 className="text-2xl font-semibold">Este cliente B2B ainda não possui o segmento de limpeza.</h2>
               <p className="text-muted-foreground">
-                Libere o pacote Controle de Limpeza ou ERP completo no cadastro B2B para ativar agenda, imóveis,
+                Libere o segmento Controle de Limpeza ou ERP completo no cadastro B2B para ativar agenda, imóveis,
                 checklist, financeiro, repasses e permissões de funcionários.
               </p>
             </div>

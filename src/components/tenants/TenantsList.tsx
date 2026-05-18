@@ -74,26 +74,33 @@ const statusColors: Record<string, string> = {
   blocked: 'bg-red-500/20 text-red-700',
 };
 
-const packageLabels: Record<Tenant['package_type'], string> = {
+const segmentLabels: Record<Tenant['package_type'], string> = {
   salon: 'Salão/Barbearia',
   aesthetic_clinic: 'Estética e Emagrecimento',
   cleaning_control: 'Controle de Limpeza',
   business_erp: 'ERP Completo',
 };
 
-const packageDescriptions: Record<Tenant['package_type'], string> = {
-  salon: 'Pacote atual para salão, barbearia e agenda padrão.',
+const segmentDescriptions: Record<Tenant['package_type'], string> = {
+  salon: 'Segmento para salão, barbearia e agenda padrão.',
   aesthetic_clinic: 'Libera módulos premium como anamnese, evolução e fotos clínicas.',
   cleaning_control: 'Libera agenda de limpeza, imóveis, checklist, fotos, repasses e financeiro operacional.',
   business_erp: 'Libera todos os segmentos: salão, estética e controle de limpeza.',
 };
 
-const packageColors: Record<Tenant['package_type'], string> = {
+const segmentColors: Record<Tenant['package_type'], string> = {
   salon: 'bg-blue-500/15 text-blue-700',
   aesthetic_clinic: 'bg-purple-500/15 text-purple-700',
   cleaning_control: 'bg-emerald-500/15 text-emerald-700',
   business_erp: 'bg-slate-700/15 text-slate-700',
 };
+
+const segmentOptions: Array<{ value: Tenant['package_type']; label: string }> = [
+  { value: 'salon', label: segmentLabels.salon },
+  { value: 'aesthetic_clinic', label: segmentLabels.aesthetic_clinic },
+  { value: 'cleaning_control', label: segmentLabels.cleaning_control },
+  { value: 'business_erp', label: segmentLabels.business_erp },
+];
 
 export function TenantsList() {
   const [tenants, setTenants] = useState<Tenant[]>([]);
@@ -549,7 +556,7 @@ export function TenantsList() {
                   </div>
 
                   <div className="space-y-2">
-                    <Label htmlFor="package_type">Pacote</Label>
+                    <Label htmlFor="package_type">Segmento</Label>
                     <Select
                       value={formData.package_type}
                       onValueChange={(value) => setFormData({ ...formData, package_type: value as Tenant['package_type'] })}
@@ -558,14 +565,15 @@ export function TenantsList() {
                         <SelectValue />
                       </SelectTrigger>
                       <SelectContent>
-                        <SelectItem value="salon">Salão/Barbearia</SelectItem>
-                        <SelectItem value="aesthetic_clinic">Estética e Emagrecimento</SelectItem>
-                        <SelectItem value="cleaning_control">Controle de Limpeza</SelectItem>
-                        <SelectItem value="business_erp">ERP Completo</SelectItem>
+                        {segmentOptions.map((option) => (
+                          <SelectItem key={option.value} value={option.value}>
+                            {option.label}
+                          </SelectItem>
+                        ))}
                       </SelectContent>
                     </Select>
                     <p className="text-xs text-muted-foreground">
-                      {packageDescriptions[formData.package_type]}
+                      {segmentDescriptions[formData.package_type]}
                     </p>
                   </div>
 
@@ -746,7 +754,7 @@ export function TenantsList() {
                   <TableRow>
                     <TableHead>Nome</TableHead>
                     <TableHead>CNPJ/CPF</TableHead>
-                    <TableHead>Pacote</TableHead>
+                    <TableHead>Segmento</TableHead>
                     <TableHead>Link Online</TableHead>
                     <TableHead>Pagamento</TableHead>
                     <TableHead>Vencimento</TableHead>
@@ -769,8 +777,8 @@ export function TenantsList() {
                           {tenant.cnpj || tenant.cpf || '-'}
                         </TableCell>
                         <TableCell>
-                          <Badge className={packageColors[tenant.package_type || 'salon']}>
-                            {packageLabels[tenant.package_type || 'salon']}
+                          <Badge className={segmentColors[tenant.package_type || 'salon']}>
+                            {segmentLabels[tenant.package_type || 'salon']}
                           </Badge>
                         </TableCell>
                         <TableCell>
