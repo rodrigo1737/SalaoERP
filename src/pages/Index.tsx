@@ -48,6 +48,7 @@ const Index = () => {
       if (!hasPackage) return false;
       return isAdmin || hasPermission('view_schedule') || hasPermission('edit_schedule');
     }
+    if (targetPage === 'cashier' && currentTenant?.package_type === 'cleaning_control') return false;
     if (isAdmin) return ADMIN_PAGES.includes(targetPage);
     if (targetPage === 'agenda') return hasPermission('view_schedule') || hasPermission('edit_schedule');
     if (targetPage === 'clients') return hasPermission('view_clients');

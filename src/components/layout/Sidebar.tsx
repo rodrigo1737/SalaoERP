@@ -109,6 +109,7 @@ export function Sidebar({ currentPage, onNavigate }: SidebarProps) {
 
     const canSeeItem = (item: MenuItem) => {
       if (isSuperAdmin) return true;
+      if (item.id === 'cashier' && currentTenant?.package_type === 'cleaning_control') return false;
       if (item.packageRequired) {
         const packageType = currentTenant?.package_type;
         const hasPackage = packageType === item.packageRequired

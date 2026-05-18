@@ -53,7 +53,8 @@ export function Dashboard({ onNavigate }: DashboardProps) {
     currentCashSession,
     loading 
   } = useData();
-  const { user } = useAuth();
+  const { user, currentTenant } = useAuth();
+  const isCleaningSegment = currentTenant?.package_type === 'cleaning_control';
 
   const stats = useMemo(() => {
     const today = new Date();
@@ -71,6 +72,13 @@ export function Dashboard({ onNavigate }: DashboardProps) {
       .filter(t => {
         const d = new Date(t.created_at);
         return d >= today && d <= endOfToday;
+      })
+      .reduce((sum, t) => sum + Number(t.amount), 0);
+
+    const todayExpense = transactions
+      .filter(t => {
+        const d = new Date(t.created_at);
+        return t.type === 'expense' && d >= today && d <= endOfToday;
       })
       .reduce((sum, t) => sum + Number(t.amount), 0);
 
@@ -114,6 +122,8 @@ export function Dashboard({ onNavigate }: DashboardProps) {
       todayAppointments: todayAppts.length,
       activeClients: activeClientIds.size || clients.length,
       monthRevenue,
+      todayExpense,
+      todayNetBalance: todayRevenue - todayExpense,
       cashSessionIncome,
       cashSessionExpense,
       cashSessionBalance: currentCashSession 
@@ -201,7 +211,43 @@ export function Dashboard({ onNavigate }: DashboardProps) {
       </div>
 
       {/* Cash Session Alert or Summary */}
-      {!currentCashSession ? (
+      {isCleaningSegment ? (
+        <motion.div
+          initial={{ opacity: 0, y: -10 }}
+          animate={{ opacity: 1, y: 0 }}
+        >
+          <Card className="p-4 border-primary/30 bg-primary/5">
+            <div className="flex flex-col sm:flex-row sm:items-center gap-4">
+              <div className="flex items-center gap-3">
+                <Banknote className="w-5 h-5 text-primary" />
+                <div>
+                  <p className="font-medium text-foreground">Conta Corrente</p>
+                  <p className="text-sm text-muted-foreground">
+                    Movimentos da limpeza lançados direto no fluxo financeiro
+                  </p>
+                </div>
+              </div>
+              <div className="flex-1 flex flex-wrap gap-4 sm:justify-end">
+                <div className="text-center sm:text-right">
+                  <p className="text-xs text-muted-foreground">Entradas hoje</p>
+                  <p className="font-bold text-success">{formatCurrency(stats.todayRevenue)}</p>
+                </div>
+                <div className="text-center sm:text-right">
+                  <p className="text-xs text-muted-foreground">Saídas hoje</p>
+                  <p className="font-bold text-destructive">{formatCurrency(stats.todayExpense)}</p>
+                </div>
+                <div className="text-center sm:text-right">
+                  <p className="text-xs text-muted-foreground">Saldo do dia</p>
+                  <p className="font-bold text-primary">{formatCurrency(stats.todayNetBalance)}</p>
+                </div>
+                <Button variant="outline" size="sm" onClick={() => onNavigate('cleaning')}>
+                  Ver Fluxo
+                </Button>
+              </div>
+            </div>
+          </Card>
+        </motion.div>
+      ) : !currentCashSession ? (
         <motion.div
           initial={{ opacity: 0, y: -10 }}
           animate={{ opacity: 1, y: 0 }}
@@ -437,10 +483,17 @@ export function Dashboard({ onNavigate }: DashboardProps) {
               <Users className="w-4 h-4 mr-2" />
               Cadastrar Cliente
             </Button>
-            <Button variant="secondary" onClick={() => onNavigate('cashier')}>
-              <DollarSign className="w-4 h-4 mr-2" />
-              {currentCashSession ? 'Ver Caixa' : 'Abrir Caixa'}
-            </Button>
+            {isCleaningSegment ? (
+              <Button variant="secondary" onClick={() => onNavigate('cleaning')}>
+                <DollarSign className="w-4 h-4 mr-2" />
+                Conta Corrente
+              </Button>
+            ) : (
+              <Button variant="secondary" onClick={() => onNavigate('cashier')}>
+                <DollarSign className="w-4 h-4 mr-2" />
+                {currentCashSession ? 'Ver Caixa' : 'Abrir Caixa'}
+              </Button>
+            )}
             <Button variant="secondary" onClick={() => onNavigate('commissions')}>
               <TrendingUp className="w-4 h-4 mr-2" />
               Comissões

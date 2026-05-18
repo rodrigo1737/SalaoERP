@@ -320,7 +320,7 @@ function calculateCommission(amount: number, type: CommissionType, percent: numb
 
 export function CleaningModule() {
   const { currentTenant, tenantId, user, userRole, hasPermission, canModify } = useAuth();
-  const { clients, professionals, refreshData, currentCashSession } = useData();
+  const { clients, professionals, refreshData } = useData();
   const [loading, setLoading] = useState(true);
   const [activeTab, setActiveTab] = useState('agenda');
   const [properties, setProperties] = useState<CleaningProperty[]>([]);
@@ -363,7 +363,7 @@ export function CleaningModule() {
       .from('transactions')
       .insert({
         ...transaction,
-        cash_session_id: currentCashSession?.id ?? null,
+        cash_session_id: null,
         tenant_id: tenantId,
         created_by: user?.id,
       })
@@ -372,13 +372,13 @@ export function CleaningModule() {
 
     if (error) {
       console.error('Error recording cleaning financial transaction:', error);
-      toast.warning('Lançamento atualizado, mas não entrou no caixa global. Verifique manualmente.');
+      toast.warning('Lançamento atualizado, mas não entrou no fluxo financeiro global. Verifique manualmente.');
       return null;
     }
 
-    await refreshData(['transactions', 'cash']);
+    await refreshData(['transactions']);
     return data;
-  }, [currentCashSession?.id, tenantId, user?.id, refreshData]);
+  }, [tenantId, user?.id, refreshData]);
 
   const cleaningProfessionals = useMemo(
     () => professionals.filter((professional) => professional.works_cleaning || professional.has_schedule),
@@ -1033,7 +1033,7 @@ export function CleaningModule() {
         <div>
           <h1 className="text-4xl font-display font-bold text-foreground">Controle de Limpeza</h1>
           <p className="text-muted-foreground mt-1">
-            Agenda, imóveis, execução, repasses, caixa e permissões integrados ao ERP.
+            Agenda, imóveis, execução, repasses, conta corrente e permissões integrados ao ERP.
           </p>
         </div>
         <div className="flex flex-wrap gap-2">
@@ -1197,7 +1197,7 @@ export function CleaningModule() {
           <TabsTrigger value="properties" disabled={!canOperateCleaning}>Imóveis</TabsTrigger>
           <TabsTrigger value="services" disabled={!canOperateCleaning}>Serviços</TabsTrigger>
           <TabsTrigger value="teams" disabled={!canOperateCleaning}>Equipes</TabsTrigger>
-          <TabsTrigger value="finance" disabled={!canViewFinancial}>Financeiro</TabsTrigger>
+          <TabsTrigger value="finance" disabled={!canViewFinancial}>Conta Corrente</TabsTrigger>
           <TabsTrigger value="permissions" disabled={!isAdmin}>Permissões</TabsTrigger>
         </TabsList>
 
@@ -1412,6 +1412,14 @@ export function CleaningModule() {
         </TabsContent>
 
         <TabsContent value="finance" className="space-y-4">
+          <Card>
+            <CardHeader>
+              <CardTitle>Conta Corrente de Limpeza</CardTitle>
+            </CardHeader>
+            <CardContent className="text-sm text-muted-foreground">
+              Recebimentos, despesas e repasses são baixados diretamente no fluxo financeiro, sem abertura ou fechamento de caixa.
+            </CardContent>
+          </Card>
           <DataTable headers={['Tipo', 'Descrição', 'Valor', 'Status', 'Vencimento', 'Ações']}>
             {financialEntries.map((entry) => (
               <TableRow key={entry.id}>

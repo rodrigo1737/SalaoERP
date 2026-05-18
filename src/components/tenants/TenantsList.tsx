@@ -99,7 +99,6 @@ const segmentOptions: Array<{ value: Tenant['package_type']; label: string }> = 
   { value: 'salon', label: segmentLabels.salon },
   { value: 'aesthetic_clinic', label: segmentLabels.aesthetic_clinic },
   { value: 'cleaning_control', label: segmentLabels.cleaning_control },
-  { value: 'business_erp', label: segmentLabels.business_erp },
 ];
 
 export function TenantsList() {
