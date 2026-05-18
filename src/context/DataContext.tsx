@@ -240,130 +240,117 @@ export const DataProvider: React.FC<{ children: ReactNode }> = ({ children }) =>
   const [currentCashSession, setCurrentCashSession] = useState<CashSession | null>(null);
   const realtimeChannelRef = useRef<ReturnType<typeof supabase.channel> | null>(null);
 
-  // ── fetch helpers (ITEM 8: date filter; ITEM 9: join via supabase) ──
-  const fetchClients = async () => {
-    if (!tenantId) return [];
-
-    const allClients: Client[] = [];
+  const fetchAllPages = async <T,>(queryFactory: () => any): Promise<T[]> => {
+    const rows: T[] = [];
     let from = 0;
 
     while (true) {
-      const { data, error } = await supabase
-        .from('clients')
-        .select('*')
-        .eq('tenant_id', tenantId)
-        .is('deleted_at', null)
-        .order('name')
-        .range(from, from + SUPABASE_PAGE_SIZE - 1);
-
+      const { data, error } = await queryFactory().range(from, from + SUPABASE_PAGE_SIZE - 1);
       if (error) throw error;
 
-      const page = (data as Client[]) ?? [];
-      allClients.push(...page);
+      const page = (data as T[]) ?? [];
+      rows.push(...page);
 
       if (page.length < SUPABASE_PAGE_SIZE) break;
       from += SUPABASE_PAGE_SIZE;
     }
 
-    return allClients;
+    return rows;
+  };
+
+  // ── fetch helpers (ITEM 8: date filter; ITEM 9: join via supabase) ──
+  const fetchClients = async () => {
+    if (!tenantId) return [];
+    return fetchAllPages<Client>(() =>
+      supabase
+        .from('clients')
+        .select('*')
+        .eq('tenant_id', tenantId)
+        .is('deleted_at', null)
+        .order('name'),
+    );
   };
 
   const fetchProfessionals = async () => {
     if (!tenantId) return [];
-    const { data } = await supabase
-      .from('professionals')
-      .select('*')
-      .eq('tenant_id', tenantId)
-      .is('deleted_at', null)
-      .order('nickname');
-    return (data as Professional[]) ?? [];
+    return fetchAllPages<Professional>(() =>
+      supabase
+        .from('professionals')
+        .select('*')
+        .eq('tenant_id', tenantId)
+        .is('deleted_at', null)
+        .order('nickname'),
+    );
   };
 
   const fetchServices = async () => {
     if (!tenantId) return [];
     // ITEM 8: buscar todos os serviços (inclusive inativos) para não quebrar histórico
-    const allServices: Service[] = [];
-    let from = 0;
-
-    while (true) {
-      const { data, error } = await supabase
+    return fetchAllPages<Service>(() =>
+      supabase
         .from('services')
         .select('*')
         .eq('tenant_id', tenantId)
         .is('deleted_at', null)
-        .order('name')
-        .range(from, from + SUPABASE_PAGE_SIZE - 1);
-
-      if (error) throw error;
-
-      const page = (data as Service[]) ?? [];
-      allServices.push(...page);
-
-      if (page.length < SUPABASE_PAGE_SIZE) break;
-      from += SUPABASE_PAGE_SIZE;
-    }
-
-    return allServices;
+        .order('name'),
+    );
   };
 
   const fetchProducts = async () => {
     if (!tenantId) return [];
-    const { data } = await supabase
-      .from('products')
-      .select('*')
-      .eq('tenant_id', tenantId)
-      .is('deleted_at', null)
-      .order('name');
-    return (data as Product[]) ?? [];
+    return fetchAllPages<Product>(() =>
+      supabase
+        .from('products')
+        .select('*')
+        .eq('tenant_id', tenantId)
+        .is('deleted_at', null)
+        .order('name'),
+    );
   };
 
   const fetchAppointments = async () => {
     if (!tenantId) return [];
-    // ITEM 8: limite últimos 90 dias + futuros para não carregar o banco inteiro
-    const since = new Date();
-    since.setDate(since.getDate() - 90);
-    const { data } = await supabase
-      .from('appointments')
-      .select('*')
-      .eq('tenant_id', tenantId)
-      .gte('start_time', since.toISOString())
-      .is('deleted_at', null)
-      .order('start_time', { ascending: false });
-    return (data as Appointment[]) ?? [];
+    return fetchAllPages<Appointment>(() =>
+      supabase
+        .from('appointments')
+        .select('*')
+        .eq('tenant_id', tenantId)
+        .is('deleted_at', null)
+        .order('start_time', { ascending: false }),
+    );
   };
 
   const fetchCash = async () => {
     if (!tenantId) return [];
-    const { data } = await supabase
-      .from('cash_sessions')
-      .select('*')
-      .eq('tenant_id', tenantId)
-      .order('opened_at', { ascending: false })
-      .limit(50);
-    return (data as CashSession[]) ?? [];
+    return fetchAllPages<CashSession>(() =>
+      supabase
+        .from('cash_sessions')
+        .select('*')
+        .eq('tenant_id', tenantId)
+        .order('opened_at', { ascending: false }),
+    );
   };
 
   const fetchTransactions = async () => {
     if (!tenantId) return [];
-    const since = new Date();
-    since.setDate(since.getDate() - 90);
-    const { data } = await supabase
-      .from('transactions')
-      .select('*')
-      .eq('tenant_id', tenantId)
-      .gte('created_at', since.toISOString())
-      .order('created_at', { ascending: false });
-    return (data as Transaction[]) ?? [];
+    return fetchAllPages<Transaction>(() =>
+      supabase
+        .from('transactions')
+        .select('*')
+        .eq('tenant_id', tenantId)
+        .order('created_at', { ascending: false }),
+    );
   };
 
   const fetchCommissions = async () => {
     if (!tenantId) return [];
-    const { data } = await supabase
-      .from('commissions')
-      .select('*')
-      .eq('tenant_id', tenantId)
-      .order('created_at', { ascending: false });
-    return (data as Commission[]) ?? [];
+    return fetchAllPages<Commission>(() =>
+      supabase
+        .from('commissions')
+        .select('*')
+        .eq('tenant_id', tenantId)
+        .order('created_at', { ascending: false }),
+    );
   };
 
   // ── full initial load ──

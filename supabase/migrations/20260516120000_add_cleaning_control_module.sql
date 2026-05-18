@@ -50,14 +50,7 @@ AS $$
     FROM public.tenants
     WHERE id = _tenant_id
       AND package_type IN ('aesthetic_clinic', 'business_erp')
-  )
-  OR EXISTS (
-    SELECT 1
-    FROM public.tenant_segments
-    WHERE tenant_id = _tenant_id
-      AND segment = 'aesthetic_clinic'
-      AND is_enabled
-  )
+  );
 $$;
 
 CREATE OR REPLACE FUNCTION public.has_cleaning_package(_tenant_id uuid)
@@ -72,14 +65,7 @@ AS $$
     FROM public.tenants
     WHERE id = _tenant_id
       AND package_type IN ('cleaning_control', 'business_erp')
-  )
-  OR EXISTS (
-    SELECT 1
-    FROM public.tenant_segments
-    WHERE tenant_id = _tenant_id
-      AND segment = 'cleaning_control'
-      AND is_enabled
-  )
+  );
 $$;
 
 CREATE OR REPLACE FUNCTION public.current_user_professional_id(_tenant_id uuid)
@@ -94,7 +80,7 @@ AS $$
   WHERE tenant_id = _tenant_id
     AND user_id = auth.uid()
     AND deleted_at IS NULL
-  LIMIT 1
+  LIMIT 1;
 $$;
 
 CREATE OR REPLACE FUNCTION public.can_view_cleaning(_tenant_id uuid)
@@ -110,7 +96,7 @@ AS $$
       OR public.has_role(auth.uid(), 'admin', _tenant_id)
       OR public.has_permission(auth.uid(), 'view_schedule', _tenant_id)
       OR public.has_permission(auth.uid(), 'edit_schedule', _tenant_id)
-    )
+    );
 $$;
 
 CREATE OR REPLACE FUNCTION public.can_manage_cleaning(_tenant_id uuid)
@@ -126,7 +112,7 @@ AS $$
       public.is_super_admin(auth.jwt() ->> 'email')
       OR public.has_role(auth.uid(), 'admin', _tenant_id)
       OR public.has_permission(auth.uid(), 'edit_schedule', _tenant_id)
-    )
+    );
 $$;
 
 CREATE OR REPLACE FUNCTION public.can_view_cleaning_financial(_tenant_id uuid)
@@ -141,7 +127,7 @@ AS $$
       public.is_super_admin(auth.jwt() ->> 'email')
       OR public.has_role(auth.uid(), 'admin', _tenant_id)
       OR public.has_permission(auth.uid(), 'manage_cash_flow', _tenant_id)
-    )
+    );
 $$;
 
 ALTER TABLE public.professionals
@@ -424,7 +410,7 @@ AS $$
           )
         )
       )
-    )
+    );
 $$;
 
 CREATE OR REPLACE FUNCTION public.can_view_cleaning_commission(
@@ -456,7 +442,7 @@ AS $$
           )
         )
       )
-    )
+    );
 $$;
 
 CREATE OR REPLACE FUNCTION public.cleaning_storage_appointment_id(_name text)
@@ -470,7 +456,7 @@ AS $$
     WHEN (storage.foldername(_name))[2] ~* '^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$'
       THEN ((storage.foldername(_name))[2])::uuid
     ELSE NULL
-  END
+  END;
 $$;
 
 CREATE OR REPLACE FUNCTION public.can_view_cleaning_storage_object(_name text)
@@ -487,15 +473,16 @@ AS $$
       AND ca.tenant_id = public.storage_object_tenant_id(_name)
       AND ca.deleted_at IS NULL
       AND public.can_view_cleaning_appointment(ca.tenant_id, ca.professional_id, ca.team_id)
-  )
+  );
 $$;
 
 DROP POLICY IF EXISTS "Tenant admins can manage tenant segments" ON public.tenant_segments;
-CREATE POLICY "Tenant admins can manage tenant segments"
+DROP POLICY IF EXISTS "Super admins can manage tenant segments" ON public.tenant_segments;
+CREATE POLICY "Super admins can manage tenant segments"
 ON public.tenant_segments
 FOR ALL
-USING (public.is_super_admin(auth.jwt() ->> 'email') OR public.has_role(auth.uid(), 'admin', tenant_id))
-WITH CHECK (public.is_super_admin(auth.jwt() ->> 'email') OR public.has_role(auth.uid(), 'admin', tenant_id));
+USING (public.is_super_admin(auth.jwt() ->> 'email'))
+WITH CHECK (public.is_super_admin(auth.jwt() ->> 'email'));
 
 DROP POLICY IF EXISTS "Users can view cleaning properties" ON public.cleaning_properties;
 CREATE POLICY "Users can view cleaning properties"

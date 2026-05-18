@@ -26,7 +26,8 @@ interface ClientAuthContextType {
     preferredProfessionalId?: string,
     preferredServiceIds?: string[],
     photoUrl?: string | null
-  ) => Promise<{ error: Error | null }>;
+  ) => Promise<{ error: Error | null; needsEmailConfirmation?: boolean }>;
+  resendSignupConfirmation: (email: string) => Promise<{ error: Error | null }>;
   signOut: () => Promise<void>;
   refreshClientAccount: () => Promise<void>;
 }
@@ -72,6 +73,70 @@ export const ClientAuthProvider: React.FC<{ children: React.ReactNode; tenantId?
     }
   }, [tenantId]);
 
+  const createClientAccountFromMetadata = useCallback(async (currentUser: User) => {
+    const metadata = currentUser.user_metadata || {};
+    const signupTenantId = metadata.client_signup_tenant_id || tenantId;
+    const fullName = metadata.full_name;
+    const phone = metadata.client_signup_phone;
+
+    if (!signupTenantId || !fullName || !phone) return null;
+
+    const existingAccount = await fetchClientAccount(currentUser.id);
+    if (existingAccount) return existingAccount;
+
+    const { data: clientData, error: clientError } = await supabase
+      .from('clients')
+      .insert({
+        name: String(fullName).trim(),
+        phone: String(phone).trim(),
+        email: currentUser.email,
+        birth_date: metadata.client_signup_birth_date || null,
+        tenant_id: signupTenantId,
+        photo_url: metadata.client_signup_photo_url || null,
+      })
+      .select()
+      .single();
+
+    if (clientError) {
+      console.error('Error creating client after email confirmation:', clientError);
+      return null;
+    }
+
+    const { data: accountData, error: accountError } = await supabase
+      .from('client_accounts')
+      .insert({
+        user_id: currentUser.id,
+        client_id: clientData.id,
+        tenant_id: signupTenantId,
+        preferred_professional_id: metadata.client_signup_preferred_professional_id || null,
+        terms_accepted_at: new Date().toISOString(),
+      })
+      .select()
+      .single();
+
+    if (accountError) {
+      console.error('Error creating client account after email confirmation:', accountError);
+      return null;
+    }
+
+    const preferredServiceIds = Array.isArray(metadata.client_signup_preferred_service_ids)
+      ? metadata.client_signup_preferred_service_ids
+      : [];
+
+    if (preferredServiceIds.length > 0) {
+      await supabase
+        .from('client_preferred_services')
+        .insert(
+          preferredServiceIds.map((serviceId: string) => ({
+            client_account_id: accountData.id,
+            service_id: serviceId,
+          }))
+        );
+    }
+
+    return accountData;
+  }, [fetchClientAccount, tenantId]);
+
   const refreshClientAccount = useCallback(async () => {
     if (user) {
       const account = await fetchClientAccount(user.id);
@@ -89,7 +154,10 @@ export const ClientAuthProvider: React.FC<{ children: React.ReactNode; tenantId?
         if (currentSession?.user) {
           // Defer data fetching to avoid deadlocks
           setTimeout(async () => {
-            const account = await fetchClientAccount(currentSession.user.id);
+            let account = await fetchClientAccount(currentSession.user.id);
+            if (!account && currentSession.user.email_confirmed_at) {
+              account = await createClientAccountFromMetadata(currentSession.user);
+            }
             setClientAccount(account);
             setLoading(false);
           }, 0);
@@ -106,7 +174,10 @@ export const ClientAuthProvider: React.FC<{ children: React.ReactNode; tenantId?
       setUser(currentSession?.user ?? null);
       
       if (currentSession?.user) {
-        fetchClientAccount(currentSession.user.id).then(account => {
+        fetchClientAccount(currentSession.user.id).then(async account => {
+          if (!account && currentSession.user.email_confirmed_at) {
+            account = await createClientAccountFromMetadata(currentSession.user);
+          }
           setClientAccount(account);
           setLoading(false);
         });
@@ -118,7 +189,7 @@ export const ClientAuthProvider: React.FC<{ children: React.ReactNode; tenantId?
     return () => {
       subscription.unsubscribe();
     };
-  }, [fetchClientAccount]);
+  }, [fetchClientAccount, createClientAccountFromMetadata]);
 
   const signIn = async (email: string, password: string) => {
     try {
@@ -149,9 +220,15 @@ export const ClientAuthProvider: React.FC<{ children: React.ReactNode; tenantId?
         email: email.trim(),
         password,
         options: {
-          emailRedirectTo: window.location.origin,
+          emailRedirectTo: window.location.href.replace(/\/cadastro.*$/, '/login'),
           data: {
             full_name: fullName.trim(),
+            client_signup_tenant_id: signupTenantId,
+            client_signup_phone: phone.trim(),
+            client_signup_birth_date: birthDate,
+            client_signup_preferred_professional_id: preferredProfessionalId || null,
+            client_signup_preferred_service_ids: preferredServiceIds || [],
+            client_signup_photo_url: photoUrl || null,
           },
         },
       });
@@ -164,65 +241,34 @@ export const ClientAuthProvider: React.FC<{ children: React.ReactNode; tenantId?
         return { error: new Error('Erro ao criar usuário') };
       }
 
+      if (!authData.session) {
+        return { error: null, needsEmailConfirmation: true };
+      }
+
       // Create client record
-      const { data: clientData, error: clientError } = await supabase
-        .from('clients')
-        .insert({
-          name: fullName.trim(),
-          phone: phone.trim(),
-          email: email.trim(),
-          birth_date: birthDate,
-          tenant_id: signupTenantId,
-          photo_url: photoUrl || null,
-        })
-        .select()
-        .single();
-
-      if (clientError) {
-        console.error('Error creating client:', clientError);
-        return { error: new Error('Erro ao criar registro de cliente') };
-      }
-
-      // Create client account
-      const { error: accountError } = await supabase
-        .from('client_accounts')
-        .insert({
-          user_id: authData.user.id,
-          client_id: clientData.id,
-          tenant_id: signupTenantId,
-          preferred_professional_id: preferredProfessionalId || null,
-          terms_accepted_at: new Date().toISOString(),
-        });
-
-      if (accountError) {
-        console.error('Error creating client account:', accountError);
+      const account = await createClientAccountFromMetadata(authData.user);
+      if (!account) {
         return { error: new Error('Erro ao criar conta de cliente') };
-      }
-
-      // Add preferred services if provided
-      if (preferredServiceIds && preferredServiceIds.length > 0) {
-        const { data: accountData } = await supabase
-          .from('client_accounts')
-          .select('id')
-          .eq('user_id', authData.user.id)
-          .eq('tenant_id', signupTenantId)
-          .single();
-
-        if (accountData) {
-          await supabase
-            .from('client_preferred_services')
-            .insert(
-              preferredServiceIds.map(serviceId => ({
-                client_account_id: accountData.id,
-                service_id: serviceId,
-              }))
-            );
-        }
       }
 
       return { error: null };
     } catch (error) {
       console.error('Error in signUp:', error);
+      return { error: error as Error };
+    }
+  };
+
+  const resendSignupConfirmation = async (email: string) => {
+    try {
+      const { error } = await supabase.auth.resend({
+        type: 'signup',
+        email: email.trim(),
+        options: {
+          emailRedirectTo: window.location.href.replace(/\/(cadastro|login).*$/, '/login'),
+        },
+      });
+      return { error: error as Error | null };
+    } catch (error) {
       return { error: error as Error };
     }
   };
@@ -241,6 +287,7 @@ export const ClientAuthProvider: React.FC<{ children: React.ReactNode; tenantId?
     loading,
     signIn,
     signUp,
+    resendSignupConfirmation,
     signOut,
     refreshClientAccount,
   };

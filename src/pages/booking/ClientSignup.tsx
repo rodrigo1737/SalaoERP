@@ -53,6 +53,7 @@ const ClientSignup: React.FC = () => {
   const navigate = useNavigate();
   const { tenant } = useOutletContext<{ tenant: TenantInfo }>();
   const { user, signUp, loading: authLoading } = useClientAuth();
+  const [pendingConfirmationEmail, setPendingConfirmationEmail] = useState('');
 
   const [formData, setFormData] = useState({
     name: '',
@@ -171,7 +172,7 @@ const ClientSignup: React.FC = () => {
 
     setIsSubmitting(true);
 
-    const { error } = await signUp(
+    const { error, needsEmailConfirmation } = await signUp(
       formData.email,
       formData.password,
       formData.name,
@@ -190,6 +191,11 @@ const ClientSignup: React.FC = () => {
         description: error.message === 'User already registered'
           ? 'Este email já está cadastrado. Faça login.'
           : error.message,
+      });
+    } else if (needsEmailConfirmation) {
+      setPendingConfirmationEmail(formData.email);
+      toast.success('Conta criada!', {
+        description: 'Enviamos um email de confirmação para liberar o agendamento.',
       });
     } else {
       toast.success('Conta criada com sucesso!', {
@@ -212,6 +218,29 @@ const ClientSignup: React.FC = () => {
     return (
       <div className="flex items-center justify-center py-12">
         <Loader2 className="h-8 w-8 animate-spin text-primary" />
+      </div>
+    );
+  }
+
+  if (pendingConfirmationEmail) {
+    return (
+      <div className="max-w-md mx-auto">
+        <Card>
+          <CardHeader className="text-center">
+            <CardTitle className="text-2xl">Confirme seu email</CardTitle>
+            <CardDescription>
+              Enviamos um link de confirmação para {pendingConfirmationEmail}. Depois de confirmar, faça login para agendar.
+            </CardDescription>
+          </CardHeader>
+          <CardContent className="space-y-4">
+            <Button className="w-full" onClick={() => navigate('../login')}>
+              Ir para login
+            </Button>
+            <p className="text-center text-xs text-muted-foreground">
+              Verifique também a caixa de spam ou lixo eletrônico.
+            </p>
+          </CardContent>
+        </Card>
       </div>
     );
   }

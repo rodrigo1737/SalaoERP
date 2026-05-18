@@ -189,6 +189,25 @@ interface StaffVisibility {
 }
 
 const db = supabase as any;
+const CLEANING_PAGE_SIZE = 1000;
+
+async function fetchCleaningPages<T>(queryFactory: () => any): Promise<T[]> {
+  const rows: T[] = [];
+  let from = 0;
+
+  while (true) {
+    const { data, error } = await queryFactory().range(from, from + CLEANING_PAGE_SIZE - 1);
+    if (error) throw error;
+
+    const page = (data as T[]) ?? [];
+    rows.push(...page);
+
+    if (page.length < CLEANING_PAGE_SIZE) break;
+    from += CLEANING_PAGE_SIZE;
+  }
+
+  return rows;
+}
 
 const statusLabels: Record<CleaningStatus, string> = {
   scheduled: 'Agendado',
@@ -300,8 +319,8 @@ function calculateCommission(amount: number, type: CommissionType, percent: numb
 }
 
 export function CleaningModule() {
-  const { currentTenant, tenantId, userRole, hasPermission, canModify } = useAuth();
-  const { clients, professionals, refreshData } = useData();
+  const { currentTenant, tenantId, user, userRole, hasPermission, canModify } = useAuth();
+  const { clients, professionals, refreshData, currentCashSession } = useData();
   const [loading, setLoading] = useState(true);
   const [activeTab, setActiveTab] = useState('agenda');
   const [properties, setProperties] = useState<CleaningProperty[]>([]);
@@ -329,6 +348,38 @@ export function CleaningModule() {
   const canViewFinancial = isAdmin || hasPermission('manage_cash_flow');
   const canViewCommissions = canViewFinancial || hasPermission('view_commissions');
 
+  const recordCleaningTransaction = useCallback(async (transaction: {
+    type: 'income' | 'expense';
+    category: string;
+    description: string;
+    amount: number;
+    payment_method?: 'cash' | 'credit_card' | 'debit_card' | 'pix' | 'other';
+    reference_id: string;
+    reference_type: string;
+  }) => {
+    if (!tenantId) return null;
+
+    const { data, error } = await db
+      .from('transactions')
+      .insert({
+        ...transaction,
+        cash_session_id: currentCashSession?.id ?? null,
+        tenant_id: tenantId,
+        created_by: user?.id,
+      })
+      .select()
+      .single();
+
+    if (error) {
+      console.error('Error recording cleaning financial transaction:', error);
+      toast.warning('Lançamento atualizado, mas não entrou no caixa global. Verifique manualmente.');
+      return null;
+    }
+
+    await refreshData(['transactions', 'cash']);
+    return data;
+  }, [currentCashSession?.id, tenantId, user?.id, refreshData]);
+
   const cleaningProfessionals = useMemo(
     () => professionals.filter((professional) => professional.works_cleaning || professional.has_schedule),
     [professionals],
@@ -342,76 +393,61 @@ export function CleaningModule() {
 
     setLoading(true);
     try {
-      const since = new Date();
-      since.setDate(since.getDate() - 45);
       const [
-        propertiesResult,
-        servicesResult,
-        teamsResult,
-        membersResult,
-        appointmentsResult,
-        checklistResult,
-        photosResult,
-        financialResult,
-        commissionsResult,
-        visibilityResult,
+        propertiesData,
+        servicesData,
+        teamsData,
+        membersData,
+        appointmentsData,
+        checklistData,
+        photosData,
+        financialData,
+        commissionsData,
+        visibilityData,
       ] = await Promise.all([
         canOperateCleaning
-          ? db.from('cleaning_properties').select('*').eq('tenant_id', tenantId).is('deleted_at', null).order('name')
-          : Promise.resolve({ data: [], error: null }),
+          ? fetchCleaningPages<CleaningProperty>(() => db.from('cleaning_properties').select('*').eq('tenant_id', tenantId).is('deleted_at', null).order('name'))
+          : Promise.resolve([]),
         canOperateCleaning
-          ? db.from('cleaning_service_settings').select('*').eq('tenant_id', tenantId).is('deleted_at', null).order('name')
-          : Promise.resolve({ data: [], error: null }),
+          ? fetchCleaningPages<CleaningService>(() => db.from('cleaning_service_settings').select('*').eq('tenant_id', tenantId).is('deleted_at', null).order('name'))
+          : Promise.resolve([]),
         canOperateCleaning
-          ? db.from('cleaning_teams').select('*').eq('tenant_id', tenantId).is('deleted_at', null).order('name')
-          : Promise.resolve({ data: [], error: null }),
+          ? fetchCleaningPages<CleaningTeam>(() => db.from('cleaning_teams').select('*').eq('tenant_id', tenantId).is('deleted_at', null).order('name'))
+          : Promise.resolve([]),
         canOperateCleaning
-          ? db.from('cleaning_team_members').select('*').eq('tenant_id', tenantId).is('deleted_at', null)
-          : Promise.resolve({ data: [], error: null }),
-        db
-          .from('cleaning_appointments')
-          .select('*')
-          .eq('tenant_id', tenantId)
-          .is('deleted_at', null)
-          .gte('start_time', since.toISOString())
-          .order('start_time', { ascending: true }),
-        db.from('cleaning_appointment_checklist').select('*').eq('tenant_id', tenantId).order('sort_order'),
-        db.from('cleaning_appointment_photos').select('*').eq('tenant_id', tenantId).is('deleted_at', null).order('created_at', { ascending: false }),
+          ? fetchCleaningPages<CleaningTeamMember>(() => db.from('cleaning_team_members').select('*').eq('tenant_id', tenantId).is('deleted_at', null))
+          : Promise.resolve([]),
+        fetchCleaningPages<CleaningAppointment>(() =>
+          db
+            .from('cleaning_appointments')
+            .select('*')
+            .eq('tenant_id', tenantId)
+            .is('deleted_at', null)
+            .order('start_time', { ascending: true }),
+        ),
+        fetchCleaningPages<CleaningChecklistItem>(() => db.from('cleaning_appointment_checklist').select('*').eq('tenant_id', tenantId).order('sort_order')),
+        fetchCleaningPages<CleaningPhoto>(() => db.from('cleaning_appointment_photos').select('*').eq('tenant_id', tenantId).is('deleted_at', null).order('created_at', { ascending: false })),
         canViewFinancial
-          ? db.from('cleaning_financial_entries').select('*').eq('tenant_id', tenantId).is('deleted_at', null).order('created_at', { ascending: false })
-          : Promise.resolve({ data: [], error: null }),
+          ? fetchCleaningPages<CleaningFinancialEntry>(() => db.from('cleaning_financial_entries').select('*').eq('tenant_id', tenantId).is('deleted_at', null).order('created_at', { ascending: false }))
+          : Promise.resolve([]),
         canViewCommissions
-          ? db.from('cleaning_commission_payables').select('*').eq('tenant_id', tenantId).is('deleted_at', null).order('created_at', { ascending: false })
-          : Promise.resolve({ data: [], error: null }),
+          ? fetchCleaningPages<CleaningCommissionPayable>(() => db.from('cleaning_commission_payables').select('*').eq('tenant_id', tenantId).is('deleted_at', null).order('created_at', { ascending: false }))
+          : Promise.resolve([]),
         isAdmin
-          ? db.from('cleaning_staff_visibility').select('*').eq('tenant_id', tenantId)
-          : Promise.resolve({ data: [], error: null }),
+          ? fetchCleaningPages<StaffVisibility>(() => db.from('cleaning_staff_visibility').select('*').eq('tenant_id', tenantId))
+          : Promise.resolve([]),
       ]);
 
-      const firstError = [
-        propertiesResult,
-        servicesResult,
-        teamsResult,
-        membersResult,
-        appointmentsResult,
-        checklistResult,
-        photosResult,
-        financialResult,
-        commissionsResult,
-        visibilityResult,
-      ].find((result) => result.error)?.error;
-      if (firstError) throw firstError;
-
-      setProperties((propertiesResult.data ?? []) as CleaningProperty[]);
-      setServices((servicesResult.data ?? []) as CleaningService[]);
-      setTeams((teamsResult.data ?? []) as CleaningTeam[]);
-      setTeamMembers((membersResult.data ?? []) as CleaningTeamMember[]);
-      setAppointments((appointmentsResult.data ?? []) as CleaningAppointment[]);
-      setChecklistItems((checklistResult.data ?? []) as CleaningChecklistItem[]);
-      setPhotos((photosResult.data ?? []) as CleaningPhoto[]);
-      setFinancialEntries((financialResult.data ?? []) as CleaningFinancialEntry[]);
-      setCommissions((commissionsResult.data ?? []) as CleaningCommissionPayable[]);
-      setVisibility((visibilityResult.data ?? []) as StaffVisibility[]);
+      setProperties(propertiesData);
+      setServices(servicesData);
+      setTeams(teamsData);
+      setTeamMembers(membersData);
+      setAppointments(appointmentsData);
+      setChecklistItems(checklistData);
+      setPhotos(photosData);
+      setFinancialEntries(financialData);
+      setCommissions(commissionsData);
+      setVisibility(visibilityData);
     } catch (error) {
       console.error('Error loading cleaning module:', error);
       toast.error('Erro ao carregar o módulo de limpeza.');
@@ -825,9 +861,14 @@ export function CleaningModule() {
   };
 
   const markFinancialEntryPaid = async (entry: CleaningFinancialEntry) => {
+    const paidAt = new Date().toISOString();
     const { error } = await db
       .from('cleaning_financial_entries')
-      .update({ status: 'paid', paid_at: new Date().toISOString() })
+      .update({
+        status: 'paid',
+        paid_at: paidAt,
+        entry_type: entry.entry_type === 'receivable' ? 'received' : entry.entry_type,
+      })
       .eq('id', entry.id)
       .eq('tenant_id', tenantId);
 
@@ -844,16 +885,39 @@ export function CleaningModule() {
         .eq('tenant_id', tenantId);
     }
 
+    if (entry.entry_type === 'receivable' || entry.entry_type === 'received') {
+      await recordCleaningTransaction({
+        type: 'income',
+        category: 'Limpeza',
+        description: entry.description || 'Recebimento de limpeza',
+        amount: Number(entry.amount),
+        payment_method: 'other',
+        reference_id: entry.id,
+        reference_type: 'cleaning_receivable',
+      });
+    } else if (entry.entry_type === 'expense' || entry.entry_type === 'commission_payment') {
+      await recordCleaningTransaction({
+        type: 'expense',
+        category: entry.category || 'Limpeza',
+        description: entry.description || 'Despesa de limpeza',
+        amount: Number(entry.amount),
+        payment_method: 'other',
+        reference_id: entry.id,
+        reference_type: entry.entry_type === 'commission_payment' ? 'cleaning_commission' : 'cleaning_expense',
+      });
+    }
+
     toast.success('Lançamento marcado como pago.');
     loadCleaningData();
   };
 
   const updateCommissionStatus = async (commission: CleaningCommissionPayable, status: CleaningCommissionPayable['status']) => {
+    const paidAt = status === 'paid' ? new Date().toISOString() : null;
     const { error } = await db
       .from('cleaning_commission_payables')
       .update({
         status,
-        paid_at: status === 'paid' ? new Date().toISOString() : null,
+        paid_at: paidAt,
       })
       .eq('id', commission.id)
       .eq('tenant_id', tenantId);
@@ -872,8 +936,26 @@ export function CleaningModule() {
         description: 'Repasse de limpeza',
         amount: commission.commission_amount,
         status: 'paid',
-        paid_at: new Date().toISOString(),
+        paid_at: paidAt,
       });
+
+      await recordCleaningTransaction({
+        type: 'expense',
+        category: 'Repasse Limpeza',
+        description: 'Repasse de limpeza',
+        amount: Number(commission.commission_amount),
+        payment_method: 'other',
+        reference_id: commission.id,
+        reference_type: 'cleaning_commission',
+      });
+
+      if (commission.appointment_id) {
+        await db
+          .from('cleaning_appointments')
+          .update({ financial_status: 'commission_paid' })
+          .eq('id', commission.appointment_id)
+          .eq('tenant_id', tenantId);
+      }
     }
 
     toast.success('Repasse atualizado.');

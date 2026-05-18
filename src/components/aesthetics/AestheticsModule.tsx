@@ -128,7 +128,7 @@ export function AestheticsModule() {
     accepted: false,
   });
 
-  const hasPackage = currentTenant?.package_type === 'aesthetic_clinic';
+  const hasPackage = currentTenant?.package_type === 'aesthetic_clinic' || currentTenant?.package_type === 'business_erp';
   const selectedClient = clients.find((client) => client.id === selectedClientId);
 
   const filteredClients = useMemo(() => {

@@ -102,6 +102,25 @@ interface StockContextType {
 }
 
 const StockContext = createContext<StockContextType | undefined>(undefined);
+const STOCK_PAGE_SIZE = 1000;
+
+async function fetchStockPages<T>(queryFactory: () => any): Promise<T[]> {
+  const rows: T[] = [];
+  let from = 0;
+
+  while (true) {
+    const { data, error } = await queryFactory().range(from, from + STOCK_PAGE_SIZE - 1);
+    if (error) throw error;
+
+    const page = (data as T[]) ?? [];
+    rows.push(...page);
+
+    if (page.length < STOCK_PAGE_SIZE) break;
+    from += STOCK_PAGE_SIZE;
+  }
+
+  return rows;
+}
 
 export const useStock = () => {
   const context = useContext(StockContext);
@@ -112,7 +131,7 @@ export const useStock = () => {
 };
 
 export const StockProvider: React.FC<{ children: ReactNode }> = ({ children }) => {
-  const { user, tenantId, isSuperAdmin, canModify } = useAuth();
+  const { user, tenantId, canModify } = useAuth();
   const { products, refreshData } = useData();
   const [loading, setLoading] = useState(true);
   const [suppliers, setSuppliers] = useState<Supplier[]>([]);
@@ -120,24 +139,24 @@ export const StockProvider: React.FC<{ children: ReactNode }> = ({ children }) =
   const [serviceProducts, setServiceProducts] = useState<ServiceProduct[]>([]);
 
   const fetchStockData = async () => {
-    if (!user) {
+    if (!user || !tenantId) {
       setLoading(false);
       return;
     }
 
     try {
-      const [suppliersRes, movementsRes, serviceProductsRes] = await Promise.all([
-        supabase.from('suppliers').select('*').order('name'),
-        supabase.from('stock_movements').select('*').order('created_at', { ascending: false }).limit(500),
-        supabase.from('service_products').select(`
+      const [suppliersData, movementsData, serviceProductsData] = await Promise.all([
+        fetchStockPages<Supplier>(() => supabase.from('suppliers').select('*').eq('tenant_id', tenantId).order('name')),
+        fetchStockPages<StockMovement>(() => supabase.from('stock_movements').select('*').eq('tenant_id', tenantId).order('created_at', { ascending: false })),
+        fetchStockPages<ServiceProduct>(() => supabase.from('service_products').select(`
           *,
           product:products(id, name, unit, stock_quantity)
-        `),
+        `).eq('tenant_id', tenantId)),
       ]);
 
-      setSuppliers((suppliersRes.data as Supplier[]) || []);
-      setStockMovements((movementsRes.data as StockMovement[]) || []);
-      setServiceProducts((serviceProductsRes.data as ServiceProduct[]) || []);
+      setSuppliers(suppliersData);
+      setStockMovements(movementsData);
+      setServiceProducts(serviceProductsData);
     } catch (error) {
       console.error('Error fetching stock data:', error);
     } finally {
@@ -147,7 +166,7 @@ export const StockProvider: React.FC<{ children: ReactNode }> = ({ children }) =
 
   useEffect(() => {
     fetchStockData();
-  }, [user]);
+  }, [user, tenantId]);
 
   const refreshStock = async () => {
     await fetchStockData();
@@ -159,7 +178,7 @@ export const StockProvider: React.FC<{ children: ReactNode }> = ({ children }) =
       toast.error('Operação bloqueada. Sua conta está com restrições.');
       return null;
     }
-    if (!tenantId && !isSuperAdmin) {
+    if (!tenantId) {
       toast.error('Erro: Tenant não identificado.');
       return null;
     }
@@ -184,7 +203,7 @@ export const StockProvider: React.FC<{ children: ReactNode }> = ({ children }) =
       toast.error('Operação bloqueada. Sua conta está com restrições.');
       return;
     }
-    await supabase.from('suppliers').update(data).eq('id', id);
+    await supabase.from('suppliers').update(data).eq('id', id).eq('tenant_id', tenantId);
     await refreshStock();
   };
 
@@ -194,7 +213,7 @@ export const StockProvider: React.FC<{ children: ReactNode }> = ({ children }) =
       toast.error('Operação bloqueada. Sua conta está com restrições.');
       return;
     }
-    if (!tenantId && !isSuperAdmin) {
+    if (!tenantId) {
       toast.error('Erro: Tenant não identificado.');
       return;
     }
@@ -234,7 +253,7 @@ export const StockProvider: React.FC<{ children: ReactNode }> = ({ children }) =
         batch_number: item.batch_number,
         expiry_date: item.expiry_date,
         supplier_id: purchaseData.supplier_id,
-      }).eq('id', item.product_id);
+      }).eq('id', item.product_id).eq('tenant_id', tenantId);
     }
 
     await refreshStock();
@@ -246,7 +265,7 @@ export const StockProvider: React.FC<{ children: ReactNode }> = ({ children }) =
       toast.error('Operação bloqueada. Sua conta está com restrições.');
       return;
     }
-    if (!tenantId && !isSuperAdmin) {
+    if (!tenantId) {
       toast.error('Erro: Tenant não identificado.');
       return;
     }
@@ -282,7 +301,7 @@ export const StockProvider: React.FC<{ children: ReactNode }> = ({ children }) =
     // Update product stock
     await supabase.from('products').update({
       stock_quantity: newStock,
-    }).eq('id', productId);
+    }).eq('id', productId).eq('tenant_id', tenantId);
 
     await refreshStock();
     await refreshData();
@@ -293,7 +312,7 @@ export const StockProvider: React.FC<{ children: ReactNode }> = ({ children }) =
       toast.error('Operação bloqueada. Sua conta está com restrições.');
       return;
     }
-    if (!tenantId && !isSuperAdmin) {
+    if (!tenantId) {
       toast.error('Erro: Tenant não identificado.');
       return;
     }
@@ -327,7 +346,7 @@ export const StockProvider: React.FC<{ children: ReactNode }> = ({ children }) =
     // Update product stock
     await supabase.from('products').update({
       stock_quantity: newStock,
-    }).eq('id', productId);
+    }).eq('id', productId).eq('tenant_id', tenantId);
 
     await refreshStock();
     await refreshData();
@@ -344,7 +363,7 @@ export const StockProvider: React.FC<{ children: ReactNode }> = ({ children }) =
       toast.error('Operação bloqueada. Sua conta está com restrições.');
       return;
     }
-    if (!tenantId && !isSuperAdmin) {
+    if (!tenantId) {
       toast.error('Erro: Tenant não identificado.');
       return;
     }
@@ -374,7 +393,7 @@ export const StockProvider: React.FC<{ children: ReactNode }> = ({ children }) =
   // Register service consumption (baixa de insumos ao finalizar serviço)
   const registerServiceConsumption = async (serviceId: string, appointmentId: string) => {
     if (!canModify()) return;
-    if (!tenantId && !isSuperAdmin) return;
+    if (!tenantId) return;
 
     // Get service products for this service
     const serviceItems = serviceProducts.filter(sp => sp.service_id === serviceId);
@@ -408,7 +427,7 @@ export const StockProvider: React.FC<{ children: ReactNode }> = ({ children }) =
       // Update product stock
       await supabase.from('products').update({
         stock_quantity: newStock,
-      }).eq('id', item.product_id);
+      }).eq('id', item.product_id).eq('tenant_id', tenantId);
     }
 
     await refreshStock();

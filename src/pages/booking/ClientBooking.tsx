@@ -356,6 +356,26 @@ const ClientBooking: React.FC = () => {
     );
   }
 
+  if (user && !user.email_confirmed_at) {
+    return (
+      <div className="max-w-md mx-auto">
+        <Card>
+          <CardHeader className="text-center">
+            <CardTitle>Confirme seu email</CardTitle>
+            <CardDescription>
+              Para sua segurança, confirme o email cadastrado antes de criar agendamentos online.
+            </CardDescription>
+          </CardHeader>
+          <CardContent>
+            <Button className="w-full" onClick={() => navigate('../login')}>
+              Ir para login
+            </Button>
+          </CardContent>
+        </Card>
+      </div>
+    );
+  }
+
   return (
     <div className="space-y-6">
       {/* Progress Indicator */}

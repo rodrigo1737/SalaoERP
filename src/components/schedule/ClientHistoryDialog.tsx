@@ -86,6 +86,26 @@ const statusLabels: Record<string, { label: string; color: string }> = {
   cancelled: { label: 'Cancelado', color: 'bg-gray-400' },
 };
 
+const HISTORY_PAGE_SIZE = 1000;
+
+async function fetchHistoryPages<T>(queryFactory: () => any): Promise<T[]> {
+  const rows: T[] = [];
+  let from = 0;
+
+  while (true) {
+    const { data, error } = await queryFactory().range(from, from + HISTORY_PAGE_SIZE - 1);
+    if (error) throw error;
+
+    const page = (data as T[]) ?? [];
+    rows.push(...page);
+
+    if (page.length < HISTORY_PAGE_SIZE) break;
+    from += HISTORY_PAGE_SIZE;
+  }
+
+  return rows;
+}
+
 export function ClientHistoryDialog({
   open,
   onOpenChange,
@@ -147,23 +167,23 @@ export function ClientHistoryDialog({
       setClient(clientData);
 
       // Fetch appointments
-      const { data: appointmentsData, error: appointmentsError } = await supabase
-        .from('appointments')
-        .select(`
-          id,
-          start_time,
-          status,
-          total_value,
-          notes,
-          service:services(name),
-          professional:professionals(nickname, name)
-        `)
-        .eq('client_id', clientId)
-        .order('start_time', { ascending: false })
-        .limit(100);
+      const appointmentsData = await fetchHistoryPages<AppointmentItem>(() =>
+        supabase
+          .from('appointments')
+          .select(`
+            id,
+            start_time,
+            status,
+            total_value,
+            notes,
+            service:services(name),
+            professional:professionals(nickname, name)
+          `)
+          .eq('client_id', clientId)
+          .order('start_time', { ascending: false }),
+      );
 
-      if (appointmentsError) throw appointmentsError;
-      setAppointments(appointmentsData || []);
+      setAppointments(appointmentsData);
 
       // Calculate credit balance from notes (simplified - in production you'd have a dedicated table)
       // For now, we'll just show 0
