@@ -1,8 +1,8 @@
 import { motion } from 'framer-motion';
-import { 
-  TrendingUp, 
-  Calendar, 
-  Users, 
+import {
+  TrendingUp,
+  Calendar,
+  Users,
   DollarSign,
   ArrowUpRight,
   ArrowDownRight,
@@ -15,8 +15,9 @@ import { Button } from '@/components/ui/button';
 import { Badge } from '@/components/ui/badge';
 import { useData } from '@/context/DataContext';
 import { useAuth } from '@/contexts/AuthContext';
-import { useMemo } from 'react';
+import { useEffect, useMemo, useState } from 'react';
 import { isCleaningControlTenant } from '@/lib/tenantSegments';
+import { supabase } from '@/integrations/supabase/client';
 
 interface DashboardProps {
   onNavigate: (page: string) => void;
@@ -39,23 +40,85 @@ const formatTime = (isoString: string) => {
 const appointmentStatusLabels: Record<string, string> = {
   scheduled: 'Agendado',
   confirmed: 'Confirmado',
+  on_the_way: 'A caminho',
   in_progress: 'Em Andamento',
   completed: 'Concluído',
   cancelled: 'Cancelado',
   no_show: 'Não Compareceu',
 };
 
+// Shape mínimo consumido pelo Dashboard — comum entre appointments (salão) e cleaning_appointments
+interface DashboardAppointment {
+  id: string;
+  start_time: string;
+  end_time: string;
+  status: string;
+  client_id: string | null;
+  client?: { name?: string | null } | null;
+  service?: { name?: string | null } | null;
+  professional?: { nickname?: string | null } | null;
+}
+
 export function Dashboard({ onNavigate }: DashboardProps) {
-  const { 
-    appointments, 
-    clients, 
-    professionals, 
-    transactions, 
+  const {
+    appointments,
+    clients,
+    professionals,
+    transactions,
     currentCashSession,
-    loading 
+    loading
   } = useData();
-  const { user, currentTenant } = useAuth();
+  const { user, currentTenant, tenantId } = useAuth();
   const isCleaningSegment = isCleaningControlTenant(currentTenant);
+
+  // Para tenants de limpeza, os agendamentos vêm de `cleaning_appointments`.
+  // Para os demais, mantém a fonte do DataContext (`appointments`).
+  const [cleaningAppointments, setCleaningAppointments] = useState<DashboardAppointment[]>([]);
+  const [cleaningLoading, setCleaningLoading] = useState(false);
+
+  useEffect(() => {
+    let cancelled = false;
+    if (!isCleaningSegment || !tenantId) {
+      setCleaningAppointments([]);
+      return;
+    }
+    setCleaningLoading(true);
+    supabase
+      .from('cleaning_appointments')
+      .select('id, start_time, end_time, status, client_id, client_name_snapshot, service_name_snapshot, assignee_name_snapshot')
+      .eq('tenant_id', tenantId)
+      .is('deleted_at', null)
+      .neq('status', 'cancelled')
+      .order('start_time', { ascending: true })
+      .then(({ data, error }) => {
+        if (cancelled) return;
+        if (error) {
+          console.error('Erro carregando cleaning_appointments para o Dashboard', error);
+          setCleaningAppointments([]);
+        } else {
+          const mapped: DashboardAppointment[] = (data || []).map((row) => ({
+            id: row.id,
+            start_time: row.start_time,
+            end_time: row.end_time,
+            status: row.status,
+            client_id: row.client_id,
+            client: { name: row.client_name_snapshot },
+            service: { name: row.service_name_snapshot },
+            professional: { nickname: row.assignee_name_snapshot },
+          }));
+          setCleaningAppointments(mapped);
+        }
+        setCleaningLoading(false);
+      });
+    return () => {
+      cancelled = true;
+    };
+  }, [isCleaningSegment, tenantId]);
+
+  // Fonte unificada para o restante do componente
+  const sourceAppointments: DashboardAppointment[] = isCleaningSegment
+    ? cleaningAppointments
+    : (appointments as DashboardAppointment[]);
 
   const stats = useMemo(() => {
     const today = new Date();
@@ -91,7 +154,7 @@ export function Dashboard({ onNavigate }: DashboardProps) {
       .reduce((sum, t) => sum + Number(t.amount), 0);
 
     // Filter today's appointments (para contagem — não para receita)
-    const todayAppts = appointments.filter(apt => {
+    const todayAppts = sourceAppointments.filter(apt => {
       const aptDate = new Date(apt.start_time);
       return aptDate >= today && aptDate <= endOfToday;
     });
@@ -100,7 +163,7 @@ export function Dashboard({ onNavigate }: DashboardProps) {
     const thirtyDaysAgo = new Date();
     thirtyDaysAgo.setDate(thirtyDaysAgo.getDate() - 30);
     const activeClientIds = new Set(
-      appointments
+      sourceAppointments
         .filter(apt => new Date(apt.start_time) >= thirtyDaysAgo && apt.client_id)
         .map(apt => apt.client_id)
     );
@@ -131,15 +194,15 @@ export function Dashboard({ onNavigate }: DashboardProps) {
         ? currentCashSession.opening_balance + cashSessionIncome - cashSessionExpense 
         : 0,
     };
-  }, [appointments, transactions, clients, currentCashSession]);
+  }, [sourceAppointments, transactions, clients, currentCashSession]);
 
   const upcomingAppointments = useMemo(() => {
     const now = new Date();
-    return appointments
+    return sourceAppointments
       .filter(apt => new Date(apt.start_time) >= now && apt.status !== 'cancelled')
       .sort((a, b) => new Date(a.start_time).getTime() - new Date(b.start_time).getTime())
       .slice(0, 4);
-  }, [appointments]);
+  }, [sourceAppointments]);
 
   const activeProfessionals = useMemo(() => {
     return professionals.filter(p => p.is_active).slice(0, 4);
@@ -188,7 +251,7 @@ export function Dashboard({ onNavigate }: DashboardProps) {
   const primaryScheduleLabel = isCleaningSegment ? 'Ver Agenda Limpeza' : 'Ver Agenda';
   const newAppointmentLabel = isCleaningSegment ? 'Nova Limpeza' : 'Novo Agendamento';
 
-  if (loading) {
+  if (loading || cleaningLoading) {
     return (
       <div className="p-6 lg:p-8 flex items-center justify-center min-h-[400px]">
         <div className="text-center">
@@ -362,7 +425,7 @@ export function Dashboard({ onNavigate }: DashboardProps) {
               <h2 className="text-xl font-display font-semibold text-foreground">
                 Próximos Atendimentos
               </h2>
-              <Button variant="ghost" size="sm" onClick={() => onNavigate('agenda')}>
+              <Button variant="ghost" size="sm" onClick={() => onNavigate(primarySchedulePage)}>
                 Ver todos
               </Button>
             </div>
@@ -371,12 +434,12 @@ export function Dashboard({ onNavigate }: DashboardProps) {
                 <div className="text-center py-8 text-muted-foreground">
                   <Calendar className="w-12 h-12 mx-auto mb-3 opacity-50" />
                   <p>Nenhum agendamento próximo</p>
-                  <Button 
-                    variant="link" 
+                  <Button
+                    variant="link"
                     className="mt-2"
-                    onClick={() => onNavigate('agenda')}
+                    onClick={() => onNavigate(primarySchedulePage)}
                   >
-                    Criar novo agendamento
+                    {newAppointmentLabel}
                   </Button>
                 </div>
               ) : (
