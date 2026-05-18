@@ -31,15 +31,18 @@ const ADMIN_PAGES = ['dashboard', 'agenda', 'clients', 'professionals', 'service
   'cleaning', 'suppliers', 'purchase', 'stock-movements', 'commissions', 'reports', 'cashier', 'settings'];
 const PROFESSIONAL_PAGES = ['agenda', 'cleaning', 'commissions', 'settings'];
 const SUPER_ADMIN_PAGES = ['super-dashboard', 'tenants'];
+const CLEANING_BLOCKED_PAGES = ['agenda', 'services', 'products', 'suppliers', 'purchase', 'stock-movements', 'commissions', 'cashier'];
 
 const Index = () => {
   const { page } = useParams<{ page?: string }>();
   const navigate = useNavigate();
   const { userRole, isSuperAdmin, hasPermission, currentTenant } = useAuth();
   const isAdmin = userRole === 'admin';
+  const isCleaningTenant = currentTenant?.package_type === 'cleaning_control';
 
   const canAccessPage = (targetPage: string) => {
     if (isSuperAdmin) return SUPER_ADMIN_PAGES.includes(targetPage);
+    if (isCleaningTenant && CLEANING_BLOCKED_PAGES.includes(targetPage)) return false;
     if (targetPage === 'aesthetics') {
       return isAdmin && (currentTenant?.package_type === 'aesthetic_clinic' || currentTenant?.package_type === 'business_erp');
     }
@@ -48,7 +51,6 @@ const Index = () => {
       if (!hasPackage) return false;
       return isAdmin || hasPermission('view_schedule') || hasPermission('edit_schedule');
     }
-    if (targetPage === 'cashier' && currentTenant?.package_type === 'cleaning_control') return false;
     if (isAdmin) return ADMIN_PAGES.includes(targetPage);
     if (targetPage === 'agenda') return hasPermission('view_schedule') || hasPermission('edit_schedule');
     if (targetPage === 'clients') return hasPermission('view_clients');
@@ -60,6 +62,7 @@ const Index = () => {
 
   const getDefaultPage = () => {
     if (isSuperAdmin) return 'super-dashboard';
+    if (isCleaningTenant && canAccessPage('cleaning')) return 'cleaning';
     if (isAdmin) return 'dashboard';
     if (canAccessPage('agenda')) return 'agenda';
     if (canAccessPage('commissions')) return 'commissions';
@@ -86,7 +89,8 @@ const Index = () => {
   const currentPage = page ?? getDefaultPage();
 
   const handleNavigate = (targetPage: string) => {
-    navigate(`/app/${targetPage}`);
+    const resolvedPage = isCleaningTenant && targetPage === 'agenda' ? 'cleaning' : targetPage;
+    navigate(`/app/${resolvedPage}`);
   };
 
   const renderPage = () => {
@@ -95,9 +99,13 @@ const Index = () => {
       return <SuperAdminDashboard onNavigate={handleNavigate} />;
     }
 
+    if (isCleaningTenant && CLEANING_BLOCKED_PAGES.includes(currentPage)) {
+      return <CleaningModule />;
+    }
+
     switch (currentPage) {
       case 'dashboard':        return <Dashboard onNavigate={handleNavigate} />;
-      case 'agenda':           return <Schedule />;
+      case 'agenda':           return isCleaningTenant ? <CleaningModule /> : <Schedule />;
       case 'clients':          return <ClientsList />;
       case 'professionals':    return <ProfessionalsList />;
       case 'services':         return <ServicesList />;

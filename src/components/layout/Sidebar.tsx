@@ -84,6 +84,8 @@ export function Sidebar({ currentPage, onNavigate }: SidebarProps) {
   const navigate = useNavigate();
   const { user, userRole, isSuperAdmin, currentTenant, signOut, hasPermission } = useAuth();
   const { settings: tenantSettings } = useTenantSettings();
+  const isCleaningTenant = currentTenant?.package_type === 'cleaning_control';
+  const cleaningHiddenItems = ['agenda', 'services', 'products', 'stock', 'cashier', 'commissions'];
 
   const handleLogout = async () => {
     await signOut();
@@ -109,7 +111,7 @@ export function Sidebar({ currentPage, onNavigate }: SidebarProps) {
 
     const canSeeItem = (item: MenuItem) => {
       if (isSuperAdmin) return true;
-      if (item.id === 'cashier' && currentTenant?.package_type === 'cleaning_control') return false;
+      if (isCleaningTenant && cleaningHiddenItems.includes(item.id)) return false;
       if (item.packageRequired) {
         const packageType = currentTenant?.package_type;
         const hasPackage = packageType === item.packageRequired
@@ -137,12 +139,16 @@ export function Sidebar({ currentPage, onNavigate }: SidebarProps) {
             ) : tenantSettings?.logo_url ? (
               <img 
                 src={tenantSettings.logo_url} 
-                alt="Logo do salão" 
+                alt={isCleaningTenant ? 'Logo da empresa de limpeza' : 'Logo do salão'}
                 className="w-10 h-10 rounded-xl object-cover"
               />
             ) : (
               <div className="w-10 h-10 rounded-xl bg-gradient-to-br from-primary to-primary-glow flex items-center justify-center">
-                <Scissors className="w-5 h-5 text-primary-foreground" />
+                {isCleaningTenant ? (
+                  <Sparkles className="w-5 h-5 text-primary-foreground" />
+                ) : (
+                  <Scissors className="w-5 h-5 text-primary-foreground" />
+                )}
               </div>
             )}
             {!collapsed && (
@@ -155,7 +161,7 @@ export function Sidebar({ currentPage, onNavigate }: SidebarProps) {
                   {isSuperAdmin ? 'MultiSoluction' : (tenantSettings?.salon_name || 'Beleza')}
                 </span>
                 <span className="text-xs text-sidebar-foreground/60">
-                  {isSuperAdmin ? 'Super Admin' : 'Gestão de Salão'}
+                  {isSuperAdmin ? 'Super Admin' : isCleaningTenant ? 'Controle de Limpeza' : 'Gestão de Salão'}
                 </span>
               </motion.div>
             )}
@@ -187,6 +193,7 @@ export function Sidebar({ currentPage, onNavigate }: SidebarProps) {
             const isActive = currentPage === item.id || isChildActive(item);
             const hasChildren = item.children && item.children.length > 0;
             const isExpanded = expandedMenus.includes(item.id);
+            const itemLabel = isCleaningTenant && item.id === 'cleaning' ? 'Agenda Limpeza' : item.label;
             
             return (
               <div key={item.id}>
@@ -217,7 +224,7 @@ export function Sidebar({ currentPage, onNavigate }: SidebarProps) {
                         animate={{ opacity: 1 }}
                         className="font-medium text-sm flex-1 text-left"
                       >
-                        {item.label}
+                        {itemLabel}
                       </motion.span>
                       {hasChildren && (
                         <ChevronDown className={cn(

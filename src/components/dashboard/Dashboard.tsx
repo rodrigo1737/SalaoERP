@@ -180,6 +180,12 @@ export function Dashboard({ onNavigate }: DashboardProps) {
   ];
 
   const userName = user?.user_metadata?.full_name || 'Usuário';
+  const dashboardSubtitle = isCleaningSegment
+    ? 'Aqui está o resumo da sua operação de limpeza hoje'
+    : 'Aqui está o resumo do seu salão hoje';
+  const primarySchedulePage = isCleaningSegment ? 'cleaning' : 'agenda';
+  const primaryScheduleLabel = isCleaningSegment ? 'Ver Agenda Limpeza' : 'Ver Agenda';
+  const newAppointmentLabel = isCleaningSegment ? 'Nova Limpeza' : 'Novo Agendamento';
 
   if (loading) {
     return (
@@ -201,12 +207,12 @@ export function Dashboard({ onNavigate }: DashboardProps) {
             Bem-vindo(a), {userName}
           </h1>
           <p className="text-muted-foreground mt-1">
-            Aqui está o resumo do seu salão hoje
+            {dashboardSubtitle}
           </p>
         </div>
-        <Button variant="hero" size="lg" onClick={() => onNavigate('agenda')}>
+        <Button variant="hero" size="lg" onClick={() => onNavigate(primarySchedulePage)}>
           <Calendar className="w-5 h-5 mr-2" />
-          Ver Agenda
+          {primaryScheduleLabel}
         </Button>
       </div>
 
@@ -475,9 +481,9 @@ export function Dashboard({ onNavigate }: DashboardProps) {
             Ações Rápidas
           </h2>
           <div className="flex flex-wrap gap-3">
-            <Button variant="default" onClick={() => onNavigate('agenda')}>
+            <Button variant="default" onClick={() => onNavigate(primarySchedulePage)}>
               <Calendar className="w-4 h-4 mr-2" />
-              Novo Agendamento
+              {newAppointmentLabel}
             </Button>
             <Button variant="secondary" onClick={() => onNavigate('clients')}>
               <Users className="w-4 h-4 mr-2" />
