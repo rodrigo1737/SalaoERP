@@ -50,6 +50,7 @@ import {
   TableHeader,
   TableRow,
 } from '@/components/ui/table';
+import { Calendar } from '@/components/ui/calendar';
 import { cn } from '@/lib/utils';
 
 type CleaningStatus = 'scheduled' | 'confirmed' | 'on_the_way' | 'in_progress' | 'completed' | 'cancelled' | 'no_show';
@@ -433,6 +434,8 @@ export function CleaningModule() {
 
   const dashboard = useMemo(() => {
     const dayAppointments = appointments.filter((appointment) => appointment.start_time.slice(0, 10) === selectedDate);
+    const selectedMonth = selectedDate.slice(0, 7);
+    const monthAppointments = appointments.filter((appointment) => appointment.start_time.slice(0, 7) === selectedMonth);
     const revenue = financialEntries
       .filter((entry) => entry.entry_type === 'receivable' || entry.entry_type === 'received')
       .reduce((sum, entry) => sum + Number(entry.amount ?? 0), 0);
@@ -443,12 +446,24 @@ export function CleaningModule() {
 
     return {
       dayAppointments,
+      monthAppointments,
       revenue,
       expenses,
       commissionTotal,
       grossProfit: revenue - expenses - commissionTotal,
     };
   }, [appointments, selectedDate, financialEntries, commissions]);
+
+  const selectedDateValue = useMemo(
+    () => parseISO(`${selectedDate}T12:00:00`),
+    [selectedDate],
+  );
+
+  const appointmentCalendarDates = useMemo(
+    () => Array.from(new Set(appointments.map((appointment) => appointment.start_time.slice(0, 10))))
+      .map((date) => parseISO(`${date}T12:00:00`)),
+    [appointments],
+  );
 
   const updateAppointmentDefaults = (field: string, value: string | number | boolean) => {
     const next = { ...appointmentForm, [field]: value };
@@ -1169,19 +1184,70 @@ export function CleaningModule() {
         </TabsList>
 
         <TabsContent value="agenda" className="space-y-4">
-          <div className="flex flex-wrap items-center gap-3">
-            <Input className="w-48" type="date" value={selectedDate} onChange={(event) => setSelectedDate(event.target.value)} />
-            <Badge variant="outline">{format(parseISO(`${selectedDate}T12:00:00`), "EEEE, dd 'de' MMMM", { locale: ptBR })}</Badge>
+          <div className="grid gap-4 xl:grid-cols-[320px_minmax(0,1fr)]">
+            <div className="space-y-4">
+              <Card>
+                <CardHeader className="pb-3">
+                  <CardTitle className="text-lg">Calendário de limpezas</CardTitle>
+                </CardHeader>
+                <CardContent className="pt-0">
+                  <Calendar
+                    mode="single"
+                    locale={ptBR}
+                    selected={selectedDateValue}
+                    onSelect={(date) => {
+                      if (!date) return;
+                      setSelectedDate(format(date, 'yyyy-MM-dd'));
+                    }}
+                    modifiers={{ hasAppointments: appointmentCalendarDates }}
+                    modifiersClassNames={{
+                      hasAppointments: "relative font-semibold after:absolute after:bottom-1 after:left-1/2 after:h-1.5 after:w-1.5 after:-translate-x-1/2 after:rounded-full after:bg-primary",
+                    }}
+                    className="rounded-md border p-3"
+                  />
+                </CardContent>
+              </Card>
+
+              <Card>
+                <CardHeader className="pb-3">
+                  <CardTitle className="text-lg">Resumo do período</CardTitle>
+                </CardHeader>
+                <CardContent className="space-y-3 text-sm">
+                  <div className="flex items-center justify-between">
+                    <span className="text-muted-foreground">Data selecionada</span>
+                    <Badge variant="outline">{format(selectedDateValue, 'dd/MM/yyyy')}</Badge>
+                  </div>
+                  <div className="flex items-center justify-between">
+                    <span className="text-muted-foreground">Limpezas no dia</span>
+                    <span className="font-semibold">{dashboard.dayAppointments.length}</span>
+                  </div>
+                  <div className="flex items-center justify-between">
+                    <span className="text-muted-foreground">Limpezas no mês</span>
+                    <span className="font-semibold">{dashboard.monthAppointments.length}</span>
+                  </div>
+                  <p className="text-xs text-muted-foreground">
+                    Os dias com agendamento ficam marcados com um ponto azul no calendário.
+                  </p>
+                </CardContent>
+              </Card>
+            </div>
+
+            <div className="space-y-4">
+              <div className="flex flex-wrap items-center gap-3">
+                <Input className="w-48" type="date" value={selectedDate} onChange={(event) => setSelectedDate(event.target.value)} />
+                <Badge variant="outline">{format(selectedDateValue, "EEEE, dd 'de' MMMM", { locale: ptBR })}</Badge>
+              </div>
+              <AppointmentsTable
+                appointments={dashboard.dayAppointments}
+                checklistItems={checklistItems}
+                photos={photos}
+                canManage={canManageCleaning}
+                onStatusChange={updateAppointmentStatus}
+                onChecklistToggle={toggleChecklistItem}
+                onPhotoUpload={uploadPhoto}
+              />
+            </div>
           </div>
-          <AppointmentsTable
-            appointments={dashboard.dayAppointments}
-            checklistItems={checklistItems}
-            photos={photos}
-            canManage={canManageCleaning}
-            onStatusChange={updateAppointmentStatus}
-            onChecklistToggle={toggleChecklistItem}
-            onPhotoUpload={uploadPhoto}
-          />
         </TabsContent>
 
         <TabsContent value="properties" className="space-y-4">
