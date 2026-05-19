@@ -12,8 +12,10 @@ import {
   Home,
   KeyRound,
   Loader2,
+  Pencil,
   Plus,
   RefreshCw,
+  RotateCcw,
   Sparkles,
   Users,
 } from 'lucide-react';
@@ -176,6 +178,11 @@ interface CleaningPhoto {
   notes?: string | null;
 }
 
+interface CleaningStaffVisibility {
+  professional_id: string;
+  can_reopen_completed_appointment: boolean;
+}
+
 const db = supabase as any;
 const CLEANING_PAGE_SIZE = 1000;
 
@@ -309,6 +316,7 @@ const initialAppointment = {
   date: todayISO(),
   time: '09:00',
   recurrence_type: 'none',
+  duration_minutes: 0,
   address: '',
   access_instructions: '',
   quoted_amount: 0,
@@ -326,7 +334,7 @@ function calculateCommission(amount: number, type: CommissionType, percent: numb
 }
 
 export function CleaningModule() {
-  const { currentTenant, tenantId, user, userRole, hasPermission, canModify } = useAuth();
+  const { currentTenant, currentProfessional, tenantId, user, userRole, hasPermission, canModify } = useAuth();
   const { clients, professionals, refreshData } = useData();
   const [loading, setLoading] = useState(true);
   const [activeTab, setActiveTab] = useState('agenda');
@@ -339,6 +347,7 @@ export function CleaningModule() {
   const [commissions, setCommissions] = useState<CleaningCommissionPayable[]>([]);
   const [checklistItems, setChecklistItems] = useState<CleaningChecklistItem[]>([]);
   const [photos, setPhotos] = useState<CleaningPhoto[]>([]);
+  const [staffVisibility, setStaffVisibility] = useState<CleaningStaffVisibility[]>([]);
   const [selectedDate, setSelectedDate] = useState(todayISO());
   const [propertyForm, setPropertyForm] = useState(initialProperty);
   const [serviceForm, setServiceForm] = useState(initialService);
@@ -346,6 +355,7 @@ export function CleaningModule() {
   const [appointmentForm, setAppointmentForm] = useState(initialAppointment);
   const [teamMemberSelection, setTeamMemberSelection] = useState<Record<string, string>>({});
   const [dialogs, setDialogs] = useState({ property: false, service: false, team: false, appointment: false });
+  const [editingAppointment, setEditingAppointment] = useState<CleaningAppointment | null>(null);
 
   const isAdmin = userRole === 'admin';
   const cleaningEnabled = hasCleaningModulePackage(currentTenant);
@@ -353,6 +363,11 @@ export function CleaningModule() {
   const canManageCleaning = canModify() && canOperateCleaning;
   const canViewFinancial = isAdmin || hasPermission('manage_cash_flow');
   const canViewCommissions = canViewFinancial || hasPermission('view_commissions');
+
+  const currentCleaningVisibility = useMemo(
+    () => staffVisibility.find((item) => item.professional_id === currentProfessional?.id) ?? null,
+    [staffVisibility, currentProfessional?.id],
+  );
 
   const recordCleaningTransaction = useCallback(async (transaction: {
     type: 'income' | 'expense';
@@ -439,6 +454,7 @@ export function CleaningModule() {
         canViewCommissions
           ? fetchCleaningPages<CleaningCommissionPayable>(() => db.from('cleaning_commission_payables').select('*').eq('tenant_id', tenantId).is('deleted_at', null).order('created_at', { ascending: false }))
           : Promise.resolve([]),
+        fetchCleaningPages<CleaningStaffVisibility>(() => db.from('cleaning_staff_visibility').select('professional_id, can_reopen_completed_appointment').eq('tenant_id', tenantId)),
       ]);
 
       setProperties(propertiesData);
@@ -450,6 +466,7 @@ export function CleaningModule() {
       setPhotos(photosData);
       setFinancialEntries(financialData);
       setCommissions(commissionsData);
+      setStaffVisibility(visibilityData);
     } catch (error) {
       console.error('Error loading cleaning module:', error);
       toast.error('Erro ao carregar o módulo de limpeza.');
@@ -467,12 +484,14 @@ export function CleaningModule() {
     const selectedMonth = selectedDate.slice(0, 7);
     const monthAppointments = appointments.filter((appointment) => appointment.start_time.slice(0, 7) === selectedMonth);
     const revenue = financialEntries
-      .filter((entry) => entry.entry_type === 'receivable' || entry.entry_type === 'received')
+      .filter((entry) => entry.status !== 'cancelled' && (entry.entry_type === 'receivable' || entry.entry_type === 'received'))
       .reduce((sum, entry) => sum + Number(entry.amount ?? 0), 0);
     const expenses = financialEntries
-      .filter((entry) => entry.entry_type === 'expense')
+      .filter((entry) => entry.status !== 'cancelled' && entry.entry_type === 'expense')
       .reduce((sum, entry) => sum + Number(entry.amount ?? 0), 0);
-    const commissionTotal = commissions.reduce((sum, entry) => sum + Number(entry.commission_amount ?? 0), 0);
+    const commissionTotal = commissions
+      .filter((entry) => entry.status !== 'cancelled')
+      .reduce((sum, entry) => sum + Number(entry.commission_amount ?? 0), 0);
 
     return {
       dayAppointments,
@@ -539,6 +558,65 @@ export function CleaningModule() {
     return slots;
   }, [weeklyScheduleBounds]);
 
+  const canReopenAppointment = useCallback((appointment: CleaningAppointment) => {
+    if (isAdmin) return true;
+    if (!canViewFinancial || !currentProfessional || !currentCleaningVisibility?.can_reopen_completed_appointment) return false;
+
+    if (appointment.professional_id === currentProfessional.id) {
+      return true;
+    }
+
+    if (appointment.team_id) {
+      return teamMembers.some((member) => (
+        member.team_id === appointment.team_id && member.professional_id === currentProfessional.id
+      ));
+    }
+
+    return false;
+  }, [isAdmin, canViewFinancial, currentProfessional, currentCleaningVisibility?.can_reopen_completed_appointment, teamMembers]);
+
+  const resetAppointmentDialog = useCallback(() => {
+    setEditingAppointment(null);
+    setAppointmentForm(initialAppointment);
+    setDialogs((prev) => ({ ...prev, appointment: false }));
+  }, []);
+
+  const openCreateAppointmentDialog = useCallback(() => {
+    setEditingAppointment(null);
+    setAppointmentForm(initialAppointment);
+    setDialogs((prev) => ({ ...prev, appointment: true }));
+  }, []);
+
+  const openEditAppointmentDialog = useCallback((appointment: CleaningAppointment) => {
+    const startDate = parseISO(appointment.start_time);
+    const durationMinutes = Math.max(30, differenceInMinutes(parseISO(appointment.end_time), startDate));
+    const matchingService = services.find((service) => service.id === appointment.service_setting_id);
+    const matchingProperty = properties.find((property) => property.id === appointment.property_id);
+
+    setEditingAppointment(appointment);
+    setAppointmentForm({
+      client_id: appointment.client_id || '',
+      property_id: appointment.property_id || '',
+      service_setting_id: appointment.service_setting_id || '',
+      assignee_type: appointment.team_id ? 'team' : 'professional',
+      professional_id: appointment.professional_id || '',
+      team_id: appointment.team_id || '',
+      date: format(startDate, 'yyyy-MM-dd'),
+      time: format(startDate, 'HH:mm'),
+      recurrence_type: appointment.recurrence_type || 'none',
+      duration_minutes: durationMinutes,
+      address: appointment.address || matchingProperty?.address || '',
+      access_instructions: appointment.access_instructions || matchingProperty?.access_instructions || '',
+      quoted_amount: Number(appointment.quoted_amount || matchingService?.default_price || 0),
+      commission_amount: Number(appointment.commission_amount || 0),
+      uses_product_control: appointment.uses_product_control,
+      requires_checklist: appointment.requires_checklist,
+      requires_photos: appointment.requires_photos,
+      internal_notes: appointment.internal_notes || '',
+    });
+    setDialogs((prev) => ({ ...prev, appointment: true }));
+  }, [properties, services]);
+
   const updateAppointmentDefaults = (field: string, value: string | number | boolean) => {
     const next = { ...appointmentForm, [field]: value };
 
@@ -562,6 +640,7 @@ export function CleaningModule() {
     if (field === 'service_setting_id') {
       const service = services.find((item) => item.id === value);
       if (service) {
+        next.duration_minutes = Number(service.duration_minutes ?? 0);
         next.quoted_amount = Number(service.default_price ?? 0);
         next.commission_amount = calculateCommission(
           Number(service.default_price ?? 0),
@@ -776,84 +855,278 @@ export function CleaningModule() {
     }
 
     const start = new Date(`${appointmentForm.date}T${appointmentForm.time}:00`);
-    const durationMinutes = service?.duration_minutes || 60;
+    const durationMinutes = Number(appointmentForm.duration_minutes || service?.duration_minutes || 60);
     const serviceName = service?.name || 'Serviço avulso';
     const appointmentAddress = appointmentForm.address.trim() || property?.address?.trim() || 'Endereço não informado';
     const end = addMinutes(start, durationMinutes);
     const quotedAmount = Number(appointmentForm.quoted_amount);
     const commissionAmount = Number(appointmentForm.commission_amount);
+    const payload = {
+      tenant_id: tenantId,
+      client_id: client.id,
+      property_id: property?.id ?? null,
+      service_setting_id: service?.id ?? null,
+      professional_id: appointmentForm.assignee_type === 'professional' ? professional?.id : null,
+      team_id: appointmentForm.assignee_type === 'team' ? team?.id : null,
+      start_time: start.toISOString(),
+      end_time: end.toISOString(),
+      recurrence_type: appointmentForm.recurrence_type,
+      address: appointmentAddress,
+      access_instructions: appointmentForm.access_instructions.trim() || null,
+      service_name_snapshot: serviceName,
+      client_name_snapshot: client.name,
+      assignee_name_snapshot: professional?.nickname || professional?.name || team?.name || null,
+      quoted_amount: quotedAmount,
+      commission_amount: commissionAmount,
+      uses_product_control: appointmentForm.uses_product_control,
+      requires_checklist: appointmentForm.requires_checklist,
+      requires_photos: appointmentForm.requires_photos,
+      internal_notes: appointmentForm.internal_notes.trim() || null,
+    };
 
-    const { data, error } = await db
-      .from('cleaning_appointments')
-      .insert({
-        tenant_id: tenantId,
-        client_id: client.id,
-        property_id: property?.id ?? null,
-        service_setting_id: service?.id ?? null,
-        professional_id: appointmentForm.assignee_type === 'professional' ? professional?.id : null,
-        team_id: appointmentForm.assignee_type === 'team' ? team?.id : null,
-        start_time: start.toISOString(),
-        end_time: end.toISOString(),
-        recurrence_type: appointmentForm.recurrence_type,
-        address: appointmentAddress,
-        access_instructions: appointmentForm.access_instructions.trim() || null,
-        service_name_snapshot: serviceName,
-        client_name_snapshot: client.name,
-        assignee_name_snapshot: professional?.nickname || professional?.name || team?.name || null,
-        quoted_amount: quotedAmount,
-        commission_amount: commissionAmount,
-        uses_product_control: appointmentForm.uses_product_control,
-        requires_checklist: appointmentForm.requires_checklist,
-        requires_photos: appointmentForm.requires_photos,
-        internal_notes: appointmentForm.internal_notes.trim() || null,
-      })
-      .select()
-      .single();
+    if (editingAppointment) {
+      const { error } = await db
+        .from('cleaning_appointments')
+        .update(payload)
+        .eq('id', editingAppointment.id)
+        .eq('tenant_id', tenantId);
 
-    if (error) {
-      toast.error('Erro ao criar agendamento de limpeza.');
-      return;
-    }
+      if (error) {
+        toast.error('Erro ao atualizar agendamento de limpeza.');
+        return;
+      }
 
-    await Promise.all([
-      db.from('cleaning_financial_entries').insert({
-        tenant_id: tenantId,
-        appointment_id: data.id,
-        entry_type: 'receivable',
-        category: 'Limpeza',
-        description: `${serviceName} - ${client.name}`,
-        amount: quotedAmount,
-        status: 'pending',
-        due_date: appointmentForm.date,
-      }),
-      commissionAmount > 0
-        ? db.from('cleaning_commission_payables').insert({
+      const [{ data: receivableEntry }, { data: commissionEntry }] = await Promise.all([
+        db
+          .from('cleaning_financial_entries')
+          .select('id, status')
+          .eq('tenant_id', tenantId)
+          .eq('appointment_id', editingAppointment.id)
+          .in('entry_type', ['receivable', 'received'])
+          .is('deleted_at', null)
+          .order('created_at', { ascending: true })
+          .limit(1)
+          .maybeSingle(),
+        db
+          .from('cleaning_commission_payables')
+          .select('id')
+          .eq('tenant_id', tenantId)
+          .eq('appointment_id', editingAppointment.id)
+          .is('deleted_at', null)
+          .order('created_at', { ascending: true })
+          .limit(1)
+          .maybeSingle(),
+      ]);
+
+      if (receivableEntry) {
+        await db
+          .from('cleaning_financial_entries')
+          .update({
+            category: 'Limpeza',
+            description: `${serviceName} - ${client.name}`,
+            amount: quotedAmount,
+            due_date: appointmentForm.date,
+          })
+          .eq('id', receivableEntry.id)
+          .eq('tenant_id', tenantId);
+      }
+
+      if (commissionAmount > 0) {
+        if (commissionEntry) {
+          await db
+            .from('cleaning_commission_payables')
+            .update({
+              professional_id: appointmentForm.assignee_type === 'professional' ? professional?.id : null,
+              team_id: appointmentForm.assignee_type === 'team' ? team?.id : null,
+              base_amount: quotedAmount,
+              commission_amount: commissionAmount,
+              due_date: appointmentForm.date,
+            })
+            .eq('id', commissionEntry.id)
+            .eq('tenant_id', tenantId);
+        } else {
+          await db.from('cleaning_commission_payables').insert({
             tenant_id: tenantId,
-            appointment_id: data.id,
+            appointment_id: editingAppointment.id,
             professional_id: appointmentForm.assignee_type === 'professional' ? professional?.id : null,
             team_id: appointmentForm.assignee_type === 'team' ? team?.id : null,
             base_amount: quotedAmount,
             commission_amount: commissionAmount,
             status: 'pending',
             due_date: appointmentForm.date,
-          })
-        : Promise.resolve({ error: null }),
-      appointmentForm.requires_checklist
-        ? db.from('cleaning_appointment_checklist').insert(
+          });
+        }
+      }
+
+      if (commissionAmount <= 0 && commissionEntry) {
+        await db
+          .from('cleaning_commission_payables')
+          .update({ status: 'cancelled' })
+          .eq('id', commissionEntry.id)
+          .eq('tenant_id', tenantId);
+      }
+
+      if (appointmentForm.requires_checklist) {
+        const existingChecklist = checklistItems.filter((item) => item.appointment_id === editingAppointment.id);
+        if (existingChecklist.length === 0) {
+          await db.from('cleaning_appointment_checklist').insert(
             defaultChecklistItems.map((label, index) => ({
               tenant_id: tenantId,
-              appointment_id: data.id,
+              appointment_id: editingAppointment.id,
               label,
               is_required: !label.toLowerCase().includes('observa'),
               sort_order: index,
             })),
-          )
-        : Promise.resolve({ error: null }),
+          );
+        }
+      }
+
+      toast.success('Agendamento de limpeza atualizado.');
+    } else {
+      const { data, error } = await db
+        .from('cleaning_appointments')
+        .insert(payload)
+        .select()
+        .single();
+
+      if (error) {
+        toast.error('Erro ao criar agendamento de limpeza.');
+        return;
+      }
+
+      await Promise.all([
+        db.from('cleaning_financial_entries').insert({
+          tenant_id: tenantId,
+          appointment_id: data.id,
+          entry_type: 'receivable',
+          category: 'Limpeza',
+          description: `${serviceName} - ${client.name}`,
+          amount: quotedAmount,
+          status: 'pending',
+          due_date: appointmentForm.date,
+        }),
+        commissionAmount > 0
+          ? db.from('cleaning_commission_payables').insert({
+              tenant_id: tenantId,
+              appointment_id: data.id,
+              professional_id: appointmentForm.assignee_type === 'professional' ? professional?.id : null,
+              team_id: appointmentForm.assignee_type === 'team' ? team?.id : null,
+              base_amount: quotedAmount,
+              commission_amount: commissionAmount,
+              status: 'pending',
+              due_date: appointmentForm.date,
+            })
+          : Promise.resolve({ error: null }),
+        appointmentForm.requires_checklist
+          ? db.from('cleaning_appointment_checklist').insert(
+              defaultChecklistItems.map((label, index) => ({
+                tenant_id: tenantId,
+                appointment_id: data.id,
+                label,
+                is_required: !label.toLowerCase().includes('observa'),
+                sort_order: index,
+              })),
+            )
+          : Promise.resolve({ error: null }),
+      ]);
+
+      toast.success('Agendamento de limpeza criado.');
+    }
+
+    resetAppointmentDialog();
+    loadCleaningData();
+  };
+
+  const reopenCompletedAppointment = async (appointment: CleaningAppointment) => {
+    if (!tenantId) return;
+    if (!canReopenAppointment(appointment)) {
+      toast.error('Você não tem permissão para reabrir este atendimento.');
+      return;
+    }
+
+    const receivableEntries = financialEntries.filter((entry) => (
+      entry.appointment_id === appointment.id
+      && (entry.entry_type === 'receivable' || entry.entry_type === 'received')
+      && entry.status !== 'cancelled'
+    ));
+    const paidReceivableEntries = receivableEntries.filter((entry) => entry.status === 'paid');
+    const commissionRows = commissions.filter((entry) => entry.appointment_id === appointment.id && entry.status !== 'cancelled');
+    const paidCommissionRows = commissionRows.filter((entry) => entry.status === 'paid');
+    const paidCommissionFinancialEntries = financialEntries.filter((entry) => (
+      entry.appointment_id === appointment.id
+      && entry.entry_type === 'commission_payment'
+      && entry.status === 'paid'
+    ));
+
+    for (const entry of paidReceivableEntries) {
+      await recordCleaningTransaction({
+        type: 'expense',
+        category: 'Estorno Limpeza',
+        description: `Estorno por reabertura - ${entry.description || appointment.service_name_snapshot}`,
+        amount: Number(entry.amount),
+        payment_method: 'other',
+        reference_id: entry.id,
+        reference_type: 'cleaning_receivable_reversal',
+      });
+    }
+
+    for (const commission of paidCommissionRows) {
+      await recordCleaningTransaction({
+        type: 'income',
+        category: 'Estorno Repasse Limpeza',
+        description: `Estorno de repasse por reabertura - ${appointment.client_name_snapshot}`,
+        amount: Number(commission.commission_amount),
+        payment_method: 'other',
+        reference_id: commission.id,
+        reference_type: 'cleaning_commission_reversal',
+      });
+    }
+
+    await Promise.all([
+      db
+        .from('cleaning_appointments')
+        .update({
+          status: 'confirmed',
+          completed_at: null,
+          cancelled_at: null,
+          financial_status: 'pending',
+        })
+        .eq('id', appointment.id)
+        .eq('tenant_id', tenantId),
+      receivableEntries.length > 0
+        ? db
+            .from('cleaning_financial_entries')
+            .update({
+              entry_type: 'receivable',
+              status: 'pending',
+              paid_at: null,
+            })
+            .in('id', receivableEntries.map((entry) => entry.id))
+            .eq('tenant_id', tenantId)
+        : Promise.resolve(),
+      paidCommissionFinancialEntries.length > 0
+        ? db
+            .from('cleaning_financial_entries')
+            .update({
+              status: 'cancelled',
+              paid_at: null,
+            })
+            .in('id', paidCommissionFinancialEntries.map((entry) => entry.id))
+            .eq('tenant_id', tenantId)
+        : Promise.resolve(),
+      commissionRows.length > 0
+        ? db
+            .from('cleaning_commission_payables')
+            .update({
+              status: 'pending',
+              paid_at: null,
+            })
+            .in('id', commissionRows.map((entry) => entry.id))
+            .eq('tenant_id', tenantId)
+        : Promise.resolve(),
     ]);
 
-    toast.success('Agendamento de limpeza criado.');
-    setAppointmentForm(initialAppointment);
-    setDialogs((prev) => ({ ...prev, appointment: false }));
+    toast.success('Atendimento reaberto e movimentos financeiros estornados.');
     loadCleaningData();
   };
 
@@ -878,13 +1151,18 @@ export function CleaningModule() {
     }
 
     const payload: Record<string, unknown> = { status };
-    if (status === 'in_progress') payload.started_at = new Date().toISOString();
+    if (status === 'in_progress') {
+      payload.started_at = new Date().toISOString();
+      payload.cancelled_at = null;
+    }
     if (status === 'completed') {
       payload.completed_at = new Date().toISOString();
+      payload.cancelled_at = null;
       payload.financial_status = appointment.financial_status === 'pending' ? 'pending' : appointment.financial_status;
     }
     if (status === 'cancelled') {
       payload.cancelled_at = new Date().toISOString();
+      payload.completed_at = null;
       payload.financial_status = 'cancelled';
     }
 
@@ -1098,16 +1376,25 @@ export function CleaningModule() {
             <RefreshCw className="w-4 h-4 mr-2" />
             Atualizar
           </Button>
-          <Dialog open={dialogs.appointment} onOpenChange={(open) => setDialogs((prev) => ({ ...prev, appointment: open }))}>
+          <Dialog
+            open={dialogs.appointment}
+            onOpenChange={(open) => {
+              if (!open) {
+                resetAppointmentDialog();
+                return;
+              }
+              setDialogs((prev) => ({ ...prev, appointment: true }));
+            }}
+          >
             <DialogTrigger asChild>
-              <Button disabled={!canManageCleaning}>
+              <Button disabled={!canManageCleaning} onClick={openCreateAppointmentDialog}>
                 <Plus className="w-4 h-4 mr-2" />
                 Nova limpeza
               </Button>
             </DialogTrigger>
             <DialogContent className="max-w-3xl max-h-[90vh] overflow-y-auto">
               <DialogHeader>
-                <DialogTitle>Novo agendamento de limpeza</DialogTitle>
+                <DialogTitle>{editingAppointment ? 'Alterar agendamento de limpeza' : 'Novo agendamento de limpeza'}</DialogTitle>
               </DialogHeader>
               <div className="grid gap-4 md:grid-cols-2">
                 <div className="space-y-2">
@@ -1193,6 +1480,10 @@ export function CleaningModule() {
                   <Input type="time" value={appointmentForm.time} onChange={(event) => updateAppointmentDefaults('time', event.target.value)} />
                 </div>
                 <div className="space-y-2">
+                  <Label>Duração prevista (minutos)</Label>
+                  <Input type="number" min="30" step="30" value={appointmentForm.duration_minutes} onChange={(event) => updateAppointmentDefaults('duration_minutes', Number(event.target.value))} />
+                </div>
+                <div className="space-y-2">
                   <Label>Recorrência</Label>
                   <Select value={appointmentForm.recurrence_type} onValueChange={(value) => updateAppointmentDefaults('recurrence_type', value)}>
                     <SelectTrigger><SelectValue /></SelectTrigger>
@@ -1233,8 +1524,8 @@ export function CleaningModule() {
                 </div>
               </div>
               <div className="flex justify-end gap-2 pt-4">
-                <Button variant="outline" onClick={() => setDialogs((prev) => ({ ...prev, appointment: false }))}>Cancelar</Button>
-                <Button onClick={createAppointment}>Agendar</Button>
+                <Button variant="outline" onClick={resetAppointmentDialog}>Cancelar</Button>
+                <Button onClick={createAppointment}>{editingAppointment ? 'Salvar alterações' : 'Agendar'}</Button>
               </div>
             </DialogContent>
           </Dialog>
@@ -1258,11 +1549,11 @@ export function CleaningModule() {
         </TabsList>
 
         <TabsContent value="agenda" className="space-y-4">
-          <div className="grid gap-4 xl:grid-cols-[320px_minmax(0,1fr)]">
+          <div className="grid gap-4 xl:grid-cols-[220px_minmax(0,1fr)]">
             <div className="space-y-4">
               <Card>
-                <CardHeader className="pb-3">
-                  <CardTitle className="text-lg">Calendário de limpezas</CardTitle>
+                <CardHeader className="pb-2">
+                  <CardTitle className="text-base">Calendário de limpezas</CardTitle>
                 </CardHeader>
                 <CardContent className="pt-0">
                   <Calendar
@@ -1277,16 +1568,24 @@ export function CleaningModule() {
                     modifiersClassNames={{
                       hasAppointments: "relative font-semibold after:absolute after:bottom-1 after:left-1/2 after:h-1.5 after:w-1.5 after:-translate-x-1/2 after:rounded-full after:bg-primary",
                     }}
-                    className="rounded-md border p-3"
+                    className="rounded-md border p-2"
+                    classNames={{
+                      month: "space-y-2",
+                      caption_label: "text-xs font-semibold",
+                      head_cell: "text-muted-foreground rounded-md w-7 font-normal text-[0.7rem]",
+                      row: "flex w-full mt-1.5",
+                      cell: "h-7 w-7 text-center text-xs p-0 relative [&:has([aria-selected].day-range-end)]:rounded-r-md [&:has([aria-selected].day-outside)]:bg-accent/50 [&:has([aria-selected])]:bg-accent first:[&:has([aria-selected])]:rounded-l-md last:[&:has([aria-selected])]:rounded-r-md focus-within:relative focus-within:z-20",
+                      day: "inline-flex h-7 w-7 items-center justify-center rounded-md p-0 text-xs font-normal transition-colors hover:bg-accent hover:text-accent-foreground focus:bg-accent focus:text-accent-foreground focus:outline-none disabled:pointer-events-none disabled:opacity-50 aria-selected:opacity-100",
+                    }}
                   />
                 </CardContent>
               </Card>
 
               <Card>
-                <CardHeader className="pb-3">
-                  <CardTitle className="text-lg">Resumo do período</CardTitle>
+                <CardHeader className="pb-2">
+                  <CardTitle className="text-base">Resumo do período</CardTitle>
                 </CardHeader>
-                <CardContent className="space-y-3 text-sm">
+                <CardContent className="space-y-2.5 text-xs">
                   <div className="flex items-center justify-between">
                     <span className="text-muted-foreground">Data selecionada</span>
                     <Badge variant="outline">{format(selectedDateValue, 'dd/MM/yyyy')}</Badge>
@@ -1299,7 +1598,7 @@ export function CleaningModule() {
                     <span className="text-muted-foreground">Limpezas no mês</span>
                     <span className="font-semibold">{dashboard.monthAppointments.length}</span>
                   </div>
-                  <p className="text-xs text-muted-foreground">
+                  <p className="text-[11px] text-muted-foreground">
                     Os dias com agendamento ficam marcados com um ponto azul no calendário.
                   </p>
                 </CardContent>
@@ -1356,6 +1655,9 @@ export function CleaningModule() {
                 checklistItems={checklistItems}
                 photos={photos}
                 canManage={canManageCleaning}
+                canReopenAppointment={canReopenAppointment}
+                onEditAppointment={openEditAppointmentDialog}
+                onReopenAppointment={reopenCompletedAppointment}
                 onStatusChange={updateAppointmentStatus}
                 onChecklistToggle={toggleChecklistItem}
                 onPhotoUpload={uploadPhoto}
@@ -1600,7 +1902,7 @@ export function CleaningModule() {
                   <Button
                     size="sm"
                     variant="outline"
-                    disabled={!canManageCleaning || entry.status === 'paid'}
+                    disabled={!canManageCleaning || entry.status !== 'pending'}
                     onClick={() => markFinancialEntryPaid(entry)}
                   >
                     Baixar
@@ -1854,6 +2156,9 @@ function AppointmentsTable({
   checklistItems,
   photos,
   canManage,
+  canReopenAppointment,
+  onEditAppointment,
+  onReopenAppointment,
   onStatusChange,
   onChecklistToggle,
   onPhotoUpload,
@@ -1862,6 +2167,9 @@ function AppointmentsTable({
   checklistItems: CleaningChecklistItem[];
   photos: CleaningPhoto[];
   canManage: boolean;
+  canReopenAppointment: (appointment: CleaningAppointment) => boolean;
+  onEditAppointment: (appointment: CleaningAppointment) => void;
+  onReopenAppointment: (appointment: CleaningAppointment) => void;
   onStatusChange: (appointment: CleaningAppointment, status: CleaningStatus) => void;
   onChecklistToggle: (item: CleaningChecklistItem, checked: boolean) => void;
   onPhotoUpload: (appointment: CleaningAppointment, file: File, photoType: CleaningPhoto['photo_type']) => void;
@@ -1911,6 +2219,10 @@ function AppointmentsTable({
                   </div>
                 </div>
                 <div className="flex flex-wrap gap-2">
+                  <Button size="sm" variant="outline" disabled={!canManage || appointment.status === 'completed'} onClick={() => onEditAppointment(appointment)}>
+                    <Pencil className="w-4 h-4 mr-1" />
+                    Alterar
+                  </Button>
                   <Button size="sm" variant="outline" disabled={!canManage || appointment.status === 'completed'} onClick={() => onStatusChange(appointment, 'in_progress')}>
                     Iniciar
                   </Button>
@@ -1921,6 +2233,12 @@ function AppointmentsTable({
                   <Button size="sm" variant="destructive" disabled={!canManage || appointment.status === 'completed'} onClick={() => onStatusChange(appointment, 'cancelled')}>
                     Cancelar
                   </Button>
+                  {appointment.status === 'completed' && (
+                    <Button size="sm" variant="secondary" disabled={!canReopenAppointment(appointment)} onClick={() => onReopenAppointment(appointment)}>
+                      <RotateCcw className="w-4 h-4 mr-1" />
+                      Reabrir
+                    </Button>
+                  )}
                 </div>
               </div>
 

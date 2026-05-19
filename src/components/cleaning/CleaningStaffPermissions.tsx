@@ -21,6 +21,7 @@ export interface StaffVisibility {
   can_view_client_history: boolean;
   can_manage_products_used: boolean;
   can_cancel_own_appointment: boolean;
+  can_reopen_completed_appointment: boolean;
 }
 
 interface CleaningProfessional {
@@ -46,6 +47,7 @@ const visibilityLabels: Array<{
   { key: 'can_view_client_history', label: 'Ver histórico do cliente' },
   { key: 'can_manage_products_used', label: 'Informar produtos utilizados' },
   { key: 'can_cancel_own_appointment', label: 'Cancelar atendimento próprio' },
+  { key: 'can_reopen_completed_appointment', label: 'Reabrir atendimento concluído' },
 ];
 
 const db = supabase as any;
@@ -121,6 +123,7 @@ export function CleaningStaffPermissions() {
       can_view_client_history: current?.can_view_client_history ?? false,
       can_manage_products_used: current?.can_manage_products_used ?? false,
       can_cancel_own_appointment: current?.can_cancel_own_appointment ?? false,
+      can_reopen_completed_appointment: current?.can_reopen_completed_appointment ?? false,
       [key]: value,
     };
 
