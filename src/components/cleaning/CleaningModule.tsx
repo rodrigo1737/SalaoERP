@@ -454,7 +454,7 @@ export function CleaningModule() {
         canViewCommissions
           ? fetchCleaningPages<CleaningCommissionPayable>(() => db.from('cleaning_commission_payables').select('*').eq('tenant_id', tenantId).is('deleted_at', null).order('created_at', { ascending: false }))
           : Promise.resolve([]),
-        fetchCleaningPages<CleaningStaffVisibility>(() => db.from('cleaning_staff_visibility').select('professional_id, can_reopen_completed_appointment').eq('tenant_id', tenantId)),
+        fetchCleaningPages<any>(() => db.from('cleaning_staff_visibility').select('*').eq('tenant_id', tenantId)),
       ]);
 
       setProperties(propertiesData);
@@ -466,7 +466,12 @@ export function CleaningModule() {
       setPhotos(photosData);
       setFinancialEntries(financialData);
       setCommissions(commissionsData);
-      setStaffVisibility(visibilityData);
+      setStaffVisibility(
+        (visibilityData || []).map((item: any) => ({
+          professional_id: item.professional_id,
+          can_reopen_completed_appointment: Boolean(item.can_reopen_completed_appointment),
+        })),
+      );
     } catch (error) {
       console.error('Error loading cleaning module:', error);
       toast.error('Erro ao carregar o módulo de limpeza.');
@@ -1549,9 +1554,9 @@ export function CleaningModule() {
         </TabsList>
 
         <TabsContent value="agenda" className="space-y-4">
-          <div className="grid gap-4 xl:grid-cols-[170px_minmax(0,1fr)]">
+          <div className="grid gap-4 xl:grid-cols-[210px_minmax(0,1fr)]">
             <div className="space-y-4">
-              <Card>
+              <Card className="overflow-hidden">
                 <CardHeader className="px-3 pb-1 pt-3">
                   <CardTitle className="text-sm">Calendário de limpezas</CardTitle>
                 </CardHeader>
@@ -1571,19 +1576,19 @@ export function CleaningModule() {
                     className="mx-auto w-fit rounded-md border p-1"
                     classNames={{
                       month: "space-y-1.5",
-                      caption: "flex justify-center pt-1 relative items-center px-5",
+                      caption: "flex justify-center pt-1 relative items-center px-4",
                       caption_label: "text-[11px] font-semibold",
                       nav_button: "h-5 w-5 bg-transparent p-0 opacity-60 hover:opacity-100",
-                      head_cell: "text-muted-foreground rounded-md w-6 font-normal text-[10px]",
+                      head_cell: "text-muted-foreground rounded-md w-[26px] font-normal text-[10px]",
                       row: "flex w-full mt-1",
-                      cell: "h-6 w-6 text-center text-[11px] p-0 relative [&:has([aria-selected].day-range-end)]:rounded-r-md [&:has([aria-selected].day-outside)]:bg-accent/50 [&:has([aria-selected])]:bg-accent first:[&:has([aria-selected])]:rounded-l-md last:[&:has([aria-selected])]:rounded-r-md focus-within:relative focus-within:z-20",
-                      day: "inline-flex h-6 w-6 items-center justify-center rounded-md p-0 text-[11px] font-normal transition-colors hover:bg-accent hover:text-accent-foreground focus:bg-accent focus:text-accent-foreground focus:outline-none disabled:pointer-events-none disabled:opacity-50 aria-selected:opacity-100",
+                      cell: "h-[26px] w-[26px] text-center text-[11px] p-0 relative [&:has([aria-selected].day-range-end)]:rounded-r-md [&:has([aria-selected].day-outside)]:bg-accent/50 [&:has([aria-selected])]:bg-accent first:[&:has([aria-selected])]:rounded-l-md last:[&:has([aria-selected])]:rounded-r-md focus-within:relative focus-within:z-20",
+                      day: "inline-flex h-[26px] w-[26px] items-center justify-center rounded-md p-0 text-[11px] font-normal transition-colors hover:bg-accent hover:text-accent-foreground focus:bg-accent focus:text-accent-foreground focus:outline-none disabled:pointer-events-none disabled:opacity-50 aria-selected:opacity-100",
                     }}
                   />
                 </CardContent>
               </Card>
 
-              <Card>
+              <Card className="overflow-hidden">
                 <CardHeader className="px-3 pb-1 pt-3">
                   <CardTitle className="text-sm">Resumo do período</CardTitle>
                 </CardHeader>
