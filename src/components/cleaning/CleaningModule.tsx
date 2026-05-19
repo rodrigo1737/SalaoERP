@@ -1549,13 +1549,13 @@ export function CleaningModule() {
         </TabsList>
 
         <TabsContent value="agenda" className="space-y-4">
-          <div className="grid gap-4 xl:grid-cols-[220px_minmax(0,1fr)]">
+          <div className="grid gap-4 xl:grid-cols-[170px_minmax(0,1fr)]">
             <div className="space-y-4">
               <Card>
-                <CardHeader className="pb-2">
-                  <CardTitle className="text-base">Calendário de limpezas</CardTitle>
+                <CardHeader className="px-3 pb-1 pt-3">
+                  <CardTitle className="text-sm">Calendário de limpezas</CardTitle>
                 </CardHeader>
-                <CardContent className="pt-0">
+                <CardContent className="px-2 pb-2 pt-0">
                   <Calendar
                     mode="single"
                     locale={ptBR}
@@ -1568,24 +1568,26 @@ export function CleaningModule() {
                     modifiersClassNames={{
                       hasAppointments: "relative font-semibold after:absolute after:bottom-1 after:left-1/2 after:h-1.5 after:w-1.5 after:-translate-x-1/2 after:rounded-full after:bg-primary",
                     }}
-                    className="rounded-md border p-2"
+                    className="mx-auto w-fit rounded-md border p-1"
                     classNames={{
-                      month: "space-y-2",
-                      caption_label: "text-xs font-semibold",
-                      head_cell: "text-muted-foreground rounded-md w-7 font-normal text-[0.7rem]",
-                      row: "flex w-full mt-1.5",
-                      cell: "h-7 w-7 text-center text-xs p-0 relative [&:has([aria-selected].day-range-end)]:rounded-r-md [&:has([aria-selected].day-outside)]:bg-accent/50 [&:has([aria-selected])]:bg-accent first:[&:has([aria-selected])]:rounded-l-md last:[&:has([aria-selected])]:rounded-r-md focus-within:relative focus-within:z-20",
-                      day: "inline-flex h-7 w-7 items-center justify-center rounded-md p-0 text-xs font-normal transition-colors hover:bg-accent hover:text-accent-foreground focus:bg-accent focus:text-accent-foreground focus:outline-none disabled:pointer-events-none disabled:opacity-50 aria-selected:opacity-100",
+                      month: "space-y-1.5",
+                      caption: "flex justify-center pt-1 relative items-center px-5",
+                      caption_label: "text-[11px] font-semibold",
+                      nav_button: "h-5 w-5 bg-transparent p-0 opacity-60 hover:opacity-100",
+                      head_cell: "text-muted-foreground rounded-md w-6 font-normal text-[10px]",
+                      row: "flex w-full mt-1",
+                      cell: "h-6 w-6 text-center text-[11px] p-0 relative [&:has([aria-selected].day-range-end)]:rounded-r-md [&:has([aria-selected].day-outside)]:bg-accent/50 [&:has([aria-selected])]:bg-accent first:[&:has([aria-selected])]:rounded-l-md last:[&:has([aria-selected])]:rounded-r-md focus-within:relative focus-within:z-20",
+                      day: "inline-flex h-6 w-6 items-center justify-center rounded-md p-0 text-[11px] font-normal transition-colors hover:bg-accent hover:text-accent-foreground focus:bg-accent focus:text-accent-foreground focus:outline-none disabled:pointer-events-none disabled:opacity-50 aria-selected:opacity-100",
                     }}
                   />
                 </CardContent>
               </Card>
 
               <Card>
-                <CardHeader className="pb-2">
-                  <CardTitle className="text-base">Resumo do período</CardTitle>
+                <CardHeader className="px-3 pb-1 pt-3">
+                  <CardTitle className="text-sm">Resumo do período</CardTitle>
                 </CardHeader>
-                <CardContent className="space-y-2.5 text-xs">
+                <CardContent className="space-y-2 px-3 pb-3 text-[11px]">
                   <div className="flex items-center justify-between">
                     <span className="text-muted-foreground">Data selecionada</span>
                     <Badge variant="outline">{format(selectedDateValue, 'dd/MM/yyyy')}</Badge>
@@ -1598,9 +1600,7 @@ export function CleaningModule() {
                     <span className="text-muted-foreground">Limpezas no mês</span>
                     <span className="font-semibold">{dashboard.monthAppointments.length}</span>
                   </div>
-                  <p className="text-[11px] text-muted-foreground">
-                    Os dias com agendamento ficam marcados com um ponto azul no calendário.
-                  </p>
+                  <p className="text-[10px] text-muted-foreground">Ponto azul indica dia com agenda.</p>
                 </CardContent>
               </Card>
             </div>
@@ -2191,6 +2191,8 @@ function AppointmentsTable({
         const appointmentPhotos = photos.filter((photo) => photo.appointment_id === appointment.id);
         const beforeCount = appointmentPhotos.filter((photo) => photo.photo_type === 'before').length;
         const afterCount = appointmentPhotos.filter((photo) => photo.photo_type === 'after').length;
+        const isCompleted = appointment.status === 'completed';
+        const isCancelled = appointment.status === 'cancelled';
 
         return (
           <Card key={appointment.id} className={cn(appointment.status === 'completed' && 'border-green-300')}>
@@ -2219,25 +2221,42 @@ function AppointmentsTable({
                   </div>
                 </div>
                 <div className="flex flex-wrap gap-2">
-                  <Button size="sm" variant="outline" disabled={!canManage || appointment.status === 'completed'} onClick={() => onEditAppointment(appointment)}>
+                  <Button size="sm" variant="outline" disabled={!canManage} onClick={() => onEditAppointment(appointment)}>
                     <Pencil className="w-4 h-4 mr-1" />
                     Alterar
                   </Button>
-                  <Button size="sm" variant="outline" disabled={!canManage || appointment.status === 'completed'} onClick={() => onStatusChange(appointment, 'in_progress')}>
-                    Iniciar
-                  </Button>
-                  <Button size="sm" disabled={!canManage || appointment.status === 'completed'} onClick={() => onStatusChange(appointment, 'completed')}>
-                    <CheckCircle2 className="w-4 h-4 mr-1" />
-                    Concluir
-                  </Button>
-                  <Button size="sm" variant="destructive" disabled={!canManage || appointment.status === 'completed'} onClick={() => onStatusChange(appointment, 'cancelled')}>
-                    Cancelar
-                  </Button>
-                  {appointment.status === 'completed' && (
+                  {isCompleted ? (
                     <Button size="sm" variant="secondary" disabled={!canReopenAppointment(appointment)} onClick={() => onReopenAppointment(appointment)}>
                       <RotateCcw className="w-4 h-4 mr-1" />
                       Reabrir
                     </Button>
+                  ) : (
+                    <>
+                      <Button
+                        size="sm"
+                        variant="outline"
+                        disabled={!canManage || isCancelled || appointment.status === 'in_progress'}
+                        onClick={() => onStatusChange(appointment, 'in_progress')}
+                      >
+                        Iniciar
+                      </Button>
+                      <Button
+                        size="sm"
+                        disabled={!canManage || isCancelled}
+                        onClick={() => onStatusChange(appointment, 'completed')}
+                      >
+                        <CheckCircle2 className="w-4 h-4 mr-1" />
+                        Concluir
+                      </Button>
+                      <Button
+                        size="sm"
+                        variant="destructive"
+                        disabled={!canManage || isCancelled}
+                        onClick={() => onStatusChange(appointment, 'cancelled')}
+                      >
+                        Cancelar
+                      </Button>
+                    </>
                   )}
                 </div>
               </div>
