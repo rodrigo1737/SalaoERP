@@ -2122,12 +2122,13 @@ function WeeklyCleaningAgenda({
                           key={appointment.id}
                           type="button"
                           onClick={() => onSelectDate(appointment.start_time.slice(0, 10))}
-                          className="absolute left-2 right-2 rounded-lg border p-2 text-left shadow-sm transition-transform hover:scale-[1.01]"
+                          className="absolute left-2 right-2 flex flex-col items-start justify-start overflow-hidden rounded-lg border p-2 text-left shadow-sm transition-transform hover:scale-[1.01]"
                           style={{
                             top,
                             height,
-                            backgroundColor: hexToRgba(accentColor, 0.16),
-                            borderColor: hexToRgba(accentColor, 0.38),
+                            background: `linear-gradient(180deg, ${hexToRgba(accentColor, 0.18)} 0%, ${hexToRgba(accentColor, 0.1)} 100%)`,
+                            borderColor: hexToRgba(accentColor, 0.4),
+                            boxShadow: `inset 4px 0 0 ${hexToRgba(accentColor, 0.72)}`,
                           }}
                         >
                           <p className="text-xs font-semibold text-foreground">

@@ -63,8 +63,8 @@ const Index = () => {
 
   const getDefaultPage = () => {
     if (isSuperAdmin) return 'super-dashboard';
-    if (isCleaningTenant && canAccessPage('cleaning')) return 'cleaning';
     if (isAdmin) return 'dashboard';
+    if (isCleaningTenant && canAccessPage('cleaning')) return 'cleaning';
     if (canAccessPage('agenda')) return 'agenda';
     if (canAccessPage('commissions')) return 'commissions';
     return 'settings';
