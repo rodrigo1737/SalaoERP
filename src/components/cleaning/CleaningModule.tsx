@@ -1,10 +1,13 @@
 import { useCallback, useEffect, useMemo, useState, type ReactNode } from 'react';
-import { addMinutes, format, parseISO } from 'date-fns';
+import { addDays, addMinutes, differenceInMinutes, format, isSameDay, parseISO, startOfWeek } from 'date-fns';
 import { ptBR } from 'date-fns/locale';
 import {
   CalendarDays,
+  ChevronLeft,
+  ChevronRight,
   CheckCircle2,
   ClipboardCheck,
+  Clock,
   DollarSign,
   Home,
   KeyRound,
@@ -231,6 +234,33 @@ const normalizeLookup = (value?: string | null) => (value || '')
   .replace(/[\u0300-\u036f]/g, '')
   .toLowerCase()
   .trim();
+
+const WEEKLY_SLOT_HEIGHT = 56;
+const WEEKLY_DEFAULT_START_MINUTES = 7 * 60;
+const WEEKLY_DEFAULT_END_MINUTES = 20 * 60;
+
+const toDayIso = (date: Date) => format(date, 'yyyy-MM-dd');
+
+const minutesSinceMidnight = (date: Date) => date.getHours() * 60 + date.getMinutes();
+
+const formatMinutesLabel = (minutes: number) => {
+  const hour = Math.floor(minutes / 60);
+  const minute = minutes % 60;
+  return `${String(hour).padStart(2, '0')}:${String(minute).padStart(2, '0')}`;
+};
+
+const hexToRgba = (hexColor: string | null | undefined, alpha: number) => {
+  const sanitized = (hexColor || '#2563eb').replace('#', '');
+  const normalized = sanitized.length === 3
+    ? sanitized.split('').map((char) => char + char).join('')
+    : sanitized;
+
+  const red = parseInt(normalized.slice(0, 2), 16);
+  const green = parseInt(normalized.slice(2, 4), 16);
+  const blue = parseInt(normalized.slice(4, 6), 16);
+
+  return `rgba(${red}, ${green}, ${blue}, ${alpha})`;
+};
 
 const initialProperty = {
   client_id: '',
@@ -464,6 +494,50 @@ export function CleaningModule() {
       .map((date) => parseISO(`${date}T12:00:00`)),
     [appointments],
   );
+
+  const selectedWeekDays = useMemo(() => {
+    const weekStart = startOfWeek(selectedDateValue, { weekStartsOn: 1 });
+    return Array.from({ length: 5 }, (_, index) => addDays(weekStart, index));
+  }, [selectedDateValue]);
+
+  const weeklyAppointments = useMemo(
+    () => appointments.filter((appointment) => {
+      const appointmentDate = parseISO(appointment.start_time);
+      return selectedWeekDays.some((day) => isSameDay(appointmentDate, day));
+    }),
+    [appointments, selectedWeekDays],
+  );
+
+  const weeklyScheduleBounds = useMemo(() => {
+    if (weeklyAppointments.length === 0) {
+      return {
+        startMinutes: WEEKLY_DEFAULT_START_MINUTES,
+        endMinutes: WEEKLY_DEFAULT_END_MINUTES,
+      };
+    }
+
+    const earliest = Math.min(
+      WEEKLY_DEFAULT_START_MINUTES,
+      ...weeklyAppointments.map((appointment) => minutesSinceMidnight(parseISO(appointment.start_time))),
+    );
+    const latest = Math.max(
+      WEEKLY_DEFAULT_END_MINUTES,
+      ...weeklyAppointments.map((appointment) => minutesSinceMidnight(parseISO(appointment.end_time))),
+    );
+
+    return {
+      startMinutes: Math.floor(earliest / 30) * 30,
+      endMinutes: Math.ceil(latest / 30) * 30,
+    };
+  }, [weeklyAppointments]);
+
+  const weeklyTimeSlots = useMemo(() => {
+    const slots: number[] = [];
+    for (let minutes = weeklyScheduleBounds.startMinutes; minutes < weeklyScheduleBounds.endMinutes; minutes += 30) {
+      slots.push(minutes);
+    }
+    return slots;
+  }, [weeklyScheduleBounds]);
 
   const updateAppointmentDefaults = (field: string, value: string | number | boolean) => {
     const next = { ...appointmentForm, [field]: value };
@@ -1233,9 +1307,49 @@ export function CleaningModule() {
             </div>
 
             <div className="space-y-4">
-              <div className="flex flex-wrap items-center gap-3">
-                <Input className="w-48" type="date" value={selectedDate} onChange={(event) => setSelectedDate(event.target.value)} />
-                <Badge variant="outline">{format(selectedDateValue, "EEEE, dd 'de' MMMM", { locale: ptBR })}</Badge>
+              <div className="flex flex-wrap items-center justify-between gap-3">
+                <div className="flex flex-wrap items-center gap-3">
+                  <Input className="w-48" type="date" value={selectedDate} onChange={(event) => setSelectedDate(event.target.value)} />
+                  <Badge variant="outline">{format(selectedDateValue, "EEEE, dd 'de' MMMM", { locale: ptBR })}</Badge>
+                </div>
+                <div className="flex items-center gap-2">
+                  <Button
+                    variant="outline"
+                    size="icon"
+                    onClick={() => setSelectedDate(toDayIso(addDays(selectedDateValue, -7)))}
+                    aria-label="Semana anterior"
+                  >
+                    <ChevronLeft className="h-4 w-4" />
+                  </Button>
+                  <Button variant="outline" size="sm" onClick={() => setSelectedDate(todayISO())}>
+                    Hoje
+                  </Button>
+                  <Button
+                    variant="outline"
+                    size="icon"
+                    onClick={() => setSelectedDate(toDayIso(addDays(selectedDateValue, 7)))}
+                    aria-label="Próxima semana"
+                  >
+                    <ChevronRight className="h-4 w-4" />
+                  </Button>
+                </div>
+              </div>
+
+              <WeeklyCleaningAgenda
+                weekDays={selectedWeekDays}
+                timeSlots={weeklyTimeSlots}
+                appointments={weeklyAppointments}
+                professionals={cleaningProfessionals}
+                teams={teams}
+                selectedDate={selectedDate}
+                onSelectDate={(date) => setSelectedDate(date)}
+              />
+
+              <div className="space-y-2">
+                <div className="flex items-center gap-2">
+                  <Clock className="h-4 w-4 text-muted-foreground" />
+                  <h3 className="text-lg font-semibold text-foreground">Detalhes do dia</h3>
+                </div>
               </div>
               <AppointmentsTable
                 appointments={dashboard.dayAppointments}
@@ -1602,6 +1716,136 @@ function DataTable({ headers, children }: { headers: string[]; children: ReactNo
         <TableBody>{children}</TableBody>
       </Table>
     </div>
+  );
+}
+
+function WeeklyCleaningAgenda({
+  weekDays,
+  timeSlots,
+  appointments,
+  professionals,
+  teams,
+  selectedDate,
+  onSelectDate,
+}: {
+  weekDays: Date[];
+  timeSlots: number[];
+  appointments: CleaningAppointment[];
+  professionals: Array<{ id: string; name: string; nickname: string; schedule_color?: string | null }>;
+  teams: CleaningTeam[];
+  selectedDate: string;
+  onSelectDate: (date: string) => void;
+}) {
+  const totalHeight = timeSlots.length * WEEKLY_SLOT_HEIGHT;
+
+  const getAppointmentColor = (appointment: CleaningAppointment) => {
+    const professional = professionals.find((item) => item.id === appointment.professional_id);
+    const team = teams.find((item) => item.id === appointment.team_id);
+    return professional?.schedule_color || team?.color || '#2563eb';
+  };
+
+  return (
+    <Card className="overflow-hidden">
+      <CardHeader className="border-b pb-4">
+        <CardTitle className="text-lg">
+          Agenda semanal útil
+        </CardTitle>
+      </CardHeader>
+      <CardContent className="p-0">
+        <div className="overflow-x-auto">
+          <div className="grid min-w-[980px] grid-cols-[88px_repeat(5,minmax(170px,1fr))]">
+            <div className="border-r bg-muted/20" />
+            {weekDays.map((day) => {
+              const isSelected = selectedDate === toDayIso(day);
+              return (
+                <button
+                  key={day.toISOString()}
+                  type="button"
+                  onClick={() => onSelectDate(toDayIso(day))}
+                  className={cn(
+                    "border-b border-r px-3 py-3 text-left transition-colors hover:bg-muted/40",
+                    isSelected && "bg-primary/8",
+                  )}
+                >
+                  <p className="text-xs font-medium uppercase tracking-wide text-muted-foreground">
+                    {format(day, 'EEE', { locale: ptBR })}
+                  </p>
+                  <p className="text-lg font-semibold text-foreground">
+                    {format(day, 'dd/MM')}
+                  </p>
+                </button>
+              );
+            })}
+
+            <div className="border-r bg-muted/10">
+              {timeSlots.map((minutes) => (
+                <div
+                  key={minutes}
+                  className="flex h-14 items-start justify-end border-b px-3 pt-2 text-xs text-muted-foreground"
+                >
+                  {formatMinutesLabel(minutes)}
+                </div>
+              ))}
+            </div>
+
+            {weekDays.map((day) => {
+              const dayAppointments = appointments.filter((appointment) => isSameDay(parseISO(appointment.start_time), day));
+              return (
+                <div key={day.toISOString()} className="relative border-r">
+                  <div className="relative" style={{ height: totalHeight }}>
+                    {timeSlots.map((minutes) => (
+                      <div
+                        key={`${day.toISOString()}-${minutes}`}
+                        className="border-b"
+                        style={{ height: WEEKLY_SLOT_HEIGHT }}
+                      />
+                    ))}
+
+                    {dayAppointments.map((appointment) => {
+                      const start = parseISO(appointment.start_time);
+                      const end = parseISO(appointment.end_time);
+                      const startMinutes = minutesSinceMidnight(start);
+                      const durationMinutes = Math.max(30, differenceInMinutes(end, start));
+                      const top = ((startMinutes - timeSlots[0]) / 30) * WEEKLY_SLOT_HEIGHT;
+                      const height = Math.max((durationMinutes / 30) * WEEKLY_SLOT_HEIGHT - 6, 44);
+                      const accentColor = getAppointmentColor(appointment);
+
+                      return (
+                        <button
+                          key={appointment.id}
+                          type="button"
+                          onClick={() => onSelectDate(appointment.start_time.slice(0, 10))}
+                          className="absolute left-2 right-2 rounded-lg border p-2 text-left shadow-sm transition-transform hover:scale-[1.01]"
+                          style={{
+                            top,
+                            height,
+                            backgroundColor: hexToRgba(accentColor, 0.16),
+                            borderColor: hexToRgba(accentColor, 0.38),
+                          }}
+                        >
+                          <p className="text-xs font-semibold text-foreground">
+                            {format(start, 'HH:mm')} - {format(end, 'HH:mm')}
+                          </p>
+                          <p className="mt-1 line-clamp-2 text-sm font-semibold text-foreground">
+                            {appointment.client_name_snapshot}
+                          </p>
+                          <p className="line-clamp-2 text-xs text-muted-foreground">
+                            {appointment.service_name_snapshot}
+                          </p>
+                          <p className="mt-1 text-[11px] text-muted-foreground">
+                            {appointment.assignee_name_snapshot || 'Responsável não informado'}
+                          </p>
+                        </button>
+                      );
+                    })}
+                  </div>
+                </div>
+              );
+            })}
+          </div>
+        </div>
+      </CardContent>
+    </Card>
   );
 }
 
