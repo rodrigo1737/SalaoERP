@@ -14,6 +14,7 @@ import { useToast } from '@/hooks/use-toast';
 import { ArrowLeft, UserPlus, Shield, Loader2, Trash2, Edit } from 'lucide-react';
 import { validatePassword, getPasswordRequirementsMessage } from '@/lib/passwordValidation';
 import { getSupabaseErrorMessage } from '@/lib/supabaseErrors';
+import { CleaningStaffPermissions } from '@/components/cleaning/CleaningStaffPermissions';
 
 interface ProfessionalAccess {
   id: string;
@@ -641,6 +642,10 @@ const Admin: React.FC = () => {
             )}
           </CardContent>
         </Card>
+
+        <div className="mt-8">
+          <CleaningStaffPermissions />
+        </div>
 
         {/* Edit Permissions Dialog */}
         <Dialog open={isEditDialogOpen} onOpenChange={setIsEditDialogOpen}>

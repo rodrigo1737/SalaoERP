@@ -11,7 +11,6 @@ import {
   Loader2,
   Plus,
   RefreshCw,
-  ShieldCheck,
   Sparkles,
   Users,
 } from 'lucide-react';
@@ -173,22 +172,6 @@ interface CleaningPhoto {
   notes?: string | null;
 }
 
-interface StaffVisibility {
-  id?: string;
-  professional_id: string;
-  can_view_client_phone: boolean;
-  can_view_full_address: boolean;
-  can_view_access_instructions: boolean;
-  can_view_internal_notes: boolean;
-  can_view_customer_price: boolean;
-  can_view_own_commission: boolean;
-  can_view_financial_status: boolean;
-  can_view_team_schedule: boolean;
-  can_view_client_history: boolean;
-  can_manage_products_used: boolean;
-  can_cancel_own_appointment: boolean;
-}
-
 const db = supabase as any;
 const CLEANING_PAGE_SIZE = 1000;
 
@@ -227,20 +210,6 @@ const financialLabels: Record<FinancialStatus, string> = {
   commission_paid: 'Repassado',
   cancelled: 'Cancelado',
 };
-
-const visibilityLabels: Array<{ key: keyof Omit<StaffVisibility, 'id' | 'professional_id'>; label: string }> = [
-  { key: 'can_view_client_phone', label: 'Ver telefone do cliente' },
-  { key: 'can_view_full_address', label: 'Ver endereço completo' },
-  { key: 'can_view_access_instructions', label: 'Ver instruções de acesso' },
-  { key: 'can_view_internal_notes', label: 'Ver observações internas' },
-  { key: 'can_view_customer_price', label: 'Ver valor cobrado' },
-  { key: 'can_view_own_commission', label: 'Ver própria comissão' },
-  { key: 'can_view_financial_status', label: 'Ver status financeiro' },
-  { key: 'can_view_team_schedule', label: 'Ver agenda da equipe' },
-  { key: 'can_view_client_history', label: 'Ver histórico do cliente' },
-  { key: 'can_manage_products_used', label: 'Informar produtos utilizados' },
-  { key: 'can_cancel_own_appointment', label: 'Cancelar atendimento próprio' },
-];
 
 const money = new Intl.NumberFormat('pt-BR', { style: 'currency', currency: 'BRL' });
 
@@ -339,7 +308,6 @@ export function CleaningModule() {
   const [commissions, setCommissions] = useState<CleaningCommissionPayable[]>([]);
   const [checklistItems, setChecklistItems] = useState<CleaningChecklistItem[]>([]);
   const [photos, setPhotos] = useState<CleaningPhoto[]>([]);
-  const [visibility, setVisibility] = useState<StaffVisibility[]>([]);
   const [selectedDate, setSelectedDate] = useState(todayISO());
   const [propertyForm, setPropertyForm] = useState(initialProperty);
   const [serviceForm, setServiceForm] = useState(initialService);
@@ -440,9 +408,6 @@ export function CleaningModule() {
         canViewCommissions
           ? fetchCleaningPages<CleaningCommissionPayable>(() => db.from('cleaning_commission_payables').select('*').eq('tenant_id', tenantId).is('deleted_at', null).order('created_at', { ascending: false }))
           : Promise.resolve([]),
-        isAdmin
-          ? fetchCleaningPages<StaffVisibility>(() => db.from('cleaning_staff_visibility').select('*').eq('tenant_id', tenantId))
-          : Promise.resolve([]),
       ]);
 
       setProperties(propertiesData);
@@ -454,14 +419,13 @@ export function CleaningModule() {
       setPhotos(photosData);
       setFinancialEntries(financialData);
       setCommissions(commissionsData);
-      setVisibility(visibilityData);
     } catch (error) {
       console.error('Error loading cleaning module:', error);
       toast.error('Erro ao carregar o módulo de limpeza.');
     } finally {
       setLoading(false);
     }
-  }, [tenantId, cleaningEnabled, canOperateCleaning, canViewFinancial, canViewCommissions, isAdmin]);
+  }, [tenantId, cleaningEnabled, canOperateCleaning, canViewFinancial, canViewCommissions]);
 
   useEffect(() => {
     loadCleaningData();
@@ -1002,42 +966,6 @@ export function CleaningModule() {
     loadCleaningData();
   };
 
-  const saveVisibility = async (professionalId: string, key: keyof Omit<StaffVisibility, 'id' | 'professional_id'>, value: boolean) => {
-    if (!tenantId) return;
-    const current = visibility.find((item) => item.professional_id === professionalId);
-    const payload: StaffVisibility & { tenant_id: string } = {
-      tenant_id: tenantId,
-      professional_id: professionalId,
-      can_view_client_phone: current?.can_view_client_phone ?? true,
-      can_view_full_address: current?.can_view_full_address ?? true,
-      can_view_access_instructions: current?.can_view_access_instructions ?? true,
-      can_view_internal_notes: current?.can_view_internal_notes ?? false,
-      can_view_customer_price: current?.can_view_customer_price ?? false,
-      can_view_own_commission: current?.can_view_own_commission ?? false,
-      can_view_financial_status: current?.can_view_financial_status ?? false,
-      can_view_team_schedule: current?.can_view_team_schedule ?? false,
-      can_view_client_history: current?.can_view_client_history ?? false,
-      can_manage_products_used: current?.can_manage_products_used ?? false,
-      can_cancel_own_appointment: current?.can_cancel_own_appointment ?? false,
-      [key]: value,
-    };
-
-    const { error } = await db
-      .from('cleaning_staff_visibility')
-      .upsert(payload, { onConflict: 'tenant_id,professional_id' });
-
-    if (error) {
-      toast.error('Erro ao salvar permissão.');
-      return;
-    }
-
-    setVisibility((prev) => {
-      const exists = prev.some((item) => item.professional_id === professionalId);
-      if (exists) return prev.map((item) => (item.professional_id === professionalId ? payload : item));
-      return [...prev, payload];
-    });
-  };
-
   if (!cleaningEnabled) {
     return (
       <div className="p-6 space-y-4">
@@ -1073,7 +1001,7 @@ export function CleaningModule() {
         <div>
           <h1 className="text-4xl font-display font-bold text-foreground">Controle de Limpeza</h1>
           <p className="text-muted-foreground mt-1">
-            Agenda, imóveis, execução, repasses, conta corrente e permissões integrados ao ERP.
+            Agenda, imóveis, execução, repasses e conta corrente integrados ao ERP.
           </p>
         </div>
         <div className="flex flex-wrap gap-2">
@@ -1238,7 +1166,6 @@ export function CleaningModule() {
           <TabsTrigger value="services" disabled={!canOperateCleaning}>Serviços</TabsTrigger>
           <TabsTrigger value="teams" disabled={!canOperateCleaning}>Equipes</TabsTrigger>
           <TabsTrigger value="finance" disabled={!canViewFinancial}>Conta Corrente</TabsTrigger>
-          <TabsTrigger value="permissions" disabled={!isAdmin}>Permissões</TabsTrigger>
         </TabsList>
 
         <TabsContent value="agenda" className="space-y-4">
@@ -1539,37 +1466,6 @@ export function CleaningModule() {
           </div>
         </TabsContent>
 
-        <TabsContent value="permissions" className="space-y-4">
-          <Card>
-            <CardHeader>
-              <CardTitle className="flex items-center gap-2"><ShieldCheck className="w-5 h-5" /> Permissões de funcionário</CardTitle>
-            </CardHeader>
-            <CardContent className="space-y-4">
-              {cleaningProfessionals.map((professional) => {
-                const row = visibility.find((item) => item.professional_id === professional.id);
-                return (
-                  <div key={professional.id} className="rounded-lg border p-4">
-                    <div className="mb-3">
-                      <p className="font-medium">{professional.nickname || professional.name}</p>
-                      <p className="text-xs text-muted-foreground">Configure o que este funcionário visualiza no módulo limpeza.</p>
-                    </div>
-                    <div className="grid gap-3 md:grid-cols-2 xl:grid-cols-3">
-                      {visibilityLabels.map((option) => (
-                        <label key={option.key} className="flex items-center gap-2 text-sm">
-                          <Checkbox
-                            checked={Boolean(row?.[option.key])}
-                            onCheckedChange={(checked) => saveVisibility(professional.id, option.key, Boolean(checked))}
-                          />
-                          {option.label}
-                        </label>
-                      ))}
-                    </div>
-                  </div>
-                );
-              })}
-            </CardContent>
-          </Card>
-        </TabsContent>
       </Tabs>
     </div>
   );
