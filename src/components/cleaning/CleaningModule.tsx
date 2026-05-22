@@ -2114,36 +2114,48 @@ function WeeklyCleaningAgenda({
                       const startMinutes = minutesSinceMidnight(start);
                       const durationMinutes = Math.max(30, differenceInMinutes(end, start));
                       const top = ((startMinutes - timeSlots[0]) / 30) * WEEKLY_SLOT_HEIGHT;
-                      const height = Math.max((durationMinutes / 30) * WEEKLY_SLOT_HEIGHT - 6, 44);
+                      const reservationHeight = Math.max((durationMinutes / 30) * WEEKLY_SLOT_HEIGHT, 44);
                       const accentColor = getAppointmentColor(appointment);
 
                       return (
-                        <button
+                        <div
                           key={appointment.id}
-                          type="button"
-                          onClick={() => onSelectDate(appointment.start_time.slice(0, 10))}
-                          className="absolute left-2 right-2 flex flex-col items-start justify-start overflow-hidden rounded-lg border p-2 text-left shadow-sm transition-transform hover:scale-[1.01]"
-                          style={{
-                            top,
-                            height,
-                            background: `linear-gradient(180deg, ${hexToRgba(accentColor, 0.24)} 0%, ${hexToRgba(accentColor, 0.16)} 100%)`,
-                            borderColor: hexToRgba(accentColor, 0.46),
-                            boxShadow: `inset 4px 0 0 ${hexToRgba(accentColor, 0.8)}`,
-                          }}
+                          className="absolute left-2 right-2"
+                          style={{ top, height: reservationHeight }}
                         >
-                          <p className="text-xs font-semibold text-foreground">
-                            {format(start, 'HH:mm')} - {format(end, 'HH:mm')}
-                          </p>
-                          <p className="mt-1 line-clamp-2 text-sm font-semibold text-foreground">
-                            {appointment.client_name_snapshot}
-                          </p>
-                          <p className="line-clamp-2 text-xs text-muted-foreground">
-                            {appointment.service_name_snapshot}
-                          </p>
-                          <p className="mt-1 text-[11px] text-muted-foreground">
-                            {appointment.assignee_name_snapshot || 'Responsável não informado'}
-                          </p>
-                        </button>
+                          <div
+                            className="absolute inset-0 rounded-xl border"
+                            style={{
+                              background: `linear-gradient(180deg, ${hexToRgba(accentColor, 0.12)} 0%, ${hexToRgba(accentColor, 0.08)} 100%)`,
+                              borderColor: hexToRgba(accentColor, 0.18),
+                              boxShadow: `inset 4px 0 0 ${hexToRgba(accentColor, 0.34)}`,
+                            }}
+                          />
+
+                          <button
+                            type="button"
+                            onClick={() => onSelectDate(appointment.start_time.slice(0, 10))}
+                            className="absolute left-0 right-0 top-0 flex min-h-[78px] flex-col items-start justify-start overflow-hidden rounded-xl border px-3 py-2 text-left shadow-sm transition-transform hover:scale-[1.01]"
+                            style={{
+                              background: `linear-gradient(180deg, ${hexToRgba(accentColor, 0.18)} 0%, ${hexToRgba(accentColor, 0.12)} 100%)`,
+                              borderColor: hexToRgba(accentColor, 0.28),
+                              boxShadow: `inset 4px 0 0 ${hexToRgba(accentColor, 0.68)}`,
+                            }}
+                          >
+                            <p className="text-xs font-semibold text-foreground">
+                              {format(start, 'HH:mm')} - {format(end, 'HH:mm')}
+                            </p>
+                            <p className="mt-1 line-clamp-2 text-sm font-semibold text-foreground">
+                              {appointment.client_name_snapshot}
+                            </p>
+                            <p className="line-clamp-2 text-xs text-muted-foreground">
+                              {appointment.service_name_snapshot}
+                            </p>
+                            <p className="mt-1 text-[11px] text-muted-foreground">
+                              {appointment.assignee_name_snapshot || 'Responsável não informado'}
+                            </p>
+                          </button>
+                        </div>
                       );
                     })}
                   </div>
