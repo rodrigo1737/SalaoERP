@@ -2127,14 +2127,14 @@ function WeeklyCleaningAgenda({
                             className="pointer-events-none absolute inset-y-0 left-0 right-0"
                             style={{
                               zIndex: 1,
-                              backgroundColor: hexToRgba(accentColor, 0.24),
+                              backgroundColor: hexToRgba(accentColor, 0.3),
                               backgroundImage: [
-                                `linear-gradient(180deg, ${hexToRgba(accentColor, 0.28)} 0%, ${hexToRgba(accentColor, 0.16)} 100%)`,
-                                `repeating-linear-gradient(180deg, ${hexToRgba(accentColor, 0.1)} 0px, ${hexToRgba(accentColor, 0.1)} ${WEEKLY_SLOT_HEIGHT - 1}px, ${hexToRgba(accentColor, 0.03)} ${WEEKLY_SLOT_HEIGHT - 1}px, ${hexToRgba(accentColor, 0.03)} ${WEEKLY_SLOT_HEIGHT}px)`,
+                                `linear-gradient(180deg, ${hexToRgba(accentColor, 0.34)} 0%, ${hexToRgba(accentColor, 0.22)} 100%)`,
+                                `repeating-linear-gradient(180deg, ${hexToRgba(accentColor, 0.14)} 0px, ${hexToRgba(accentColor, 0.14)} ${WEEKLY_SLOT_HEIGHT - 1}px, ${hexToRgba(accentColor, 0.05)} ${WEEKLY_SLOT_HEIGHT - 1}px, ${hexToRgba(accentColor, 0.05)} ${WEEKLY_SLOT_HEIGHT}px)`,
                               ].join(', '),
-                              borderTop: `1px solid ${hexToRgba(accentColor, 0.16)}`,
-                              borderBottom: `1px solid ${hexToRgba(accentColor, 0.16)}`,
-                              boxShadow: `inset 4px 0 0 ${hexToRgba(accentColor, 0.45)}`,
+                              borderTop: `1px solid ${hexToRgba(accentColor, 0.22)}`,
+                              borderBottom: `1px solid ${hexToRgba(accentColor, 0.22)}`,
+                              boxShadow: `inset 4px 0 0 ${hexToRgba(accentColor, 0.52)}`,
                             }}
                           />
 
@@ -2144,9 +2144,9 @@ function WeeklyCleaningAgenda({
                             className="absolute left-3 right-3 top-0 flex min-h-[78px] flex-col items-start justify-start overflow-hidden rounded-xl border px-3 py-2 text-left shadow-sm transition-transform hover:scale-[1.01]"
                             style={{
                               zIndex: 2,
-                              background: `linear-gradient(180deg, ${hexToRgba(accentColor, 0.3)} 0%, ${hexToRgba(accentColor, 0.2)} 100%)`,
-                              borderColor: hexToRgba(accentColor, 0.4),
-                              boxShadow: `inset 4px 0 0 ${hexToRgba(accentColor, 0.68)}`,
+                              background: `linear-gradient(180deg, ${hexToRgba(accentColor, 0.38)} 0%, ${hexToRgba(accentColor, 0.26)} 100%)`,
+                              borderColor: hexToRgba(accentColor, 0.48),
+                              boxShadow: `inset 4px 0 0 ${hexToRgba(accentColor, 0.74)}`,
                             }}
                           >
                             <p className="text-xs font-semibold text-foreground">
