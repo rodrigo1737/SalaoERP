@@ -2120,31 +2120,32 @@ function WeeklyCleaningAgenda({
                       return (
                         <div
                           key={appointment.id}
-                          className="absolute left-2 right-2"
+                          className="absolute left-0 right-0"
                           style={{ top, height: reservationHeight }}
                         >
                           <div
-                            className="pointer-events-none absolute inset-0 rounded-xl border"
+                            className="pointer-events-none absolute inset-y-0 left-0 right-0"
                             style={{
                               zIndex: 1,
-                              backgroundColor: hexToRgba(accentColor, 0.18),
+                              backgroundColor: hexToRgba(accentColor, 0.24),
                               backgroundImage: [
-                                `linear-gradient(180deg, ${hexToRgba(accentColor, 0.2)} 0%, ${hexToRgba(accentColor, 0.12)} 100%)`,
-                                `repeating-linear-gradient(180deg, ${hexToRgba(accentColor, 0.06)} 0px, ${hexToRgba(accentColor, 0.06)} ${WEEKLY_SLOT_HEIGHT - 2}px, ${hexToRgba(accentColor, 0.01)} ${WEEKLY_SLOT_HEIGHT - 2}px, ${hexToRgba(accentColor, 0.01)} ${WEEKLY_SLOT_HEIGHT}px)`,
+                                `linear-gradient(180deg, ${hexToRgba(accentColor, 0.28)} 0%, ${hexToRgba(accentColor, 0.16)} 100%)`,
+                                `repeating-linear-gradient(180deg, ${hexToRgba(accentColor, 0.1)} 0px, ${hexToRgba(accentColor, 0.1)} ${WEEKLY_SLOT_HEIGHT - 1}px, ${hexToRgba(accentColor, 0.03)} ${WEEKLY_SLOT_HEIGHT - 1}px, ${hexToRgba(accentColor, 0.03)} ${WEEKLY_SLOT_HEIGHT}px)`,
                               ].join(', '),
-                              borderColor: hexToRgba(accentColor, 0.3),
-                              boxShadow: `inset 4px 0 0 ${hexToRgba(accentColor, 0.42)}`,
+                              borderTop: `1px solid ${hexToRgba(accentColor, 0.16)}`,
+                              borderBottom: `1px solid ${hexToRgba(accentColor, 0.16)}`,
+                              boxShadow: `inset 4px 0 0 ${hexToRgba(accentColor, 0.45)}`,
                             }}
                           />
 
                           <button
                             type="button"
                             onClick={() => onSelectDate(appointment.start_time.slice(0, 10))}
-                            className="absolute left-0 right-0 top-0 flex min-h-[78px] flex-col items-start justify-start overflow-hidden rounded-xl border px-3 py-2 text-left shadow-sm transition-transform hover:scale-[1.01]"
+                            className="absolute left-3 right-3 top-0 flex min-h-[78px] flex-col items-start justify-start overflow-hidden rounded-xl border px-3 py-2 text-left shadow-sm transition-transform hover:scale-[1.01]"
                             style={{
                               zIndex: 2,
-                              background: `linear-gradient(180deg, ${hexToRgba(accentColor, 0.24)} 0%, ${hexToRgba(accentColor, 0.16)} 100%)`,
-                              borderColor: hexToRgba(accentColor, 0.32),
+                              background: `linear-gradient(180deg, ${hexToRgba(accentColor, 0.3)} 0%, ${hexToRgba(accentColor, 0.2)} 100%)`,
+                              borderColor: hexToRgba(accentColor, 0.4),
                               boxShadow: `inset 4px 0 0 ${hexToRgba(accentColor, 0.68)}`,
                             }}
                           >
