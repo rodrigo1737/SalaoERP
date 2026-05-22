@@ -61,7 +61,7 @@ const Auth: React.FC = () => {
         title: "Bem-vindo!",
         description: "Login realizado com sucesso",
       });
-      navigate('/');
+      navigate('/app/dashboard', { replace: true });
     }
   };
 

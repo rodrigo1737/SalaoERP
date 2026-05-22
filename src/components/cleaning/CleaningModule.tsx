@@ -2126,9 +2126,9 @@ function WeeklyCleaningAgenda({
                           style={{
                             top,
                             height,
-                            background: `linear-gradient(180deg, ${hexToRgba(accentColor, 0.18)} 0%, ${hexToRgba(accentColor, 0.1)} 100%)`,
-                            borderColor: hexToRgba(accentColor, 0.4),
-                            boxShadow: `inset 4px 0 0 ${hexToRgba(accentColor, 0.72)}`,
+                            background: `linear-gradient(180deg, ${hexToRgba(accentColor, 0.24)} 0%, ${hexToRgba(accentColor, 0.16)} 100%)`,
+                            borderColor: hexToRgba(accentColor, 0.46),
+                            boxShadow: `inset 4px 0 0 ${hexToRgba(accentColor, 0.8)}`,
                           }}
                         >
                           <p className="text-xs font-semibold text-foreground">
