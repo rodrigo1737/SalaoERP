@@ -2124,11 +2124,13 @@ function WeeklyCleaningAgenda({
                           style={{ top, height: reservationHeight }}
                         >
                           <div
-                            className="absolute inset-0 rounded-xl border"
+                            className="pointer-events-none absolute inset-0 rounded-xl border"
                             style={{
-                              background: `linear-gradient(180deg, ${hexToRgba(accentColor, 0.12)} 0%, ${hexToRgba(accentColor, 0.08)} 100%)`,
-                              borderColor: hexToRgba(accentColor, 0.18),
-                              boxShadow: `inset 4px 0 0 ${hexToRgba(accentColor, 0.34)}`,
+                              zIndex: 1,
+                              background: hexToRgba(accentColor, 0.14),
+                              borderColor: hexToRgba(accentColor, 0.24),
+                              boxShadow: `inset 4px 0 0 ${hexToRgba(accentColor, 0.3)}`,
+                              backdropFilter: 'blur(1px)',
                             }}
                           />
 
@@ -2137,8 +2139,9 @@ function WeeklyCleaningAgenda({
                             onClick={() => onSelectDate(appointment.start_time.slice(0, 10))}
                             className="absolute left-0 right-0 top-0 flex min-h-[78px] flex-col items-start justify-start overflow-hidden rounded-xl border px-3 py-2 text-left shadow-sm transition-transform hover:scale-[1.01]"
                             style={{
-                              background: `linear-gradient(180deg, ${hexToRgba(accentColor, 0.18)} 0%, ${hexToRgba(accentColor, 0.12)} 100%)`,
-                              borderColor: hexToRgba(accentColor, 0.28),
+                              zIndex: 2,
+                              background: `linear-gradient(180deg, ${hexToRgba(accentColor, 0.24)} 0%, ${hexToRgba(accentColor, 0.16)} 100%)`,
+                              borderColor: hexToRgba(accentColor, 0.32),
                               boxShadow: `inset 4px 0 0 ${hexToRgba(accentColor, 0.68)}`,
                             }}
                           >
