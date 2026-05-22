@@ -2127,10 +2127,13 @@ function WeeklyCleaningAgenda({
                             className="pointer-events-none absolute inset-0 rounded-xl border"
                             style={{
                               zIndex: 1,
-                              background: hexToRgba(accentColor, 0.14),
-                              borderColor: hexToRgba(accentColor, 0.24),
-                              boxShadow: `inset 4px 0 0 ${hexToRgba(accentColor, 0.3)}`,
-                              backdropFilter: 'blur(1px)',
+                              backgroundColor: hexToRgba(accentColor, 0.18),
+                              backgroundImage: [
+                                `linear-gradient(180deg, ${hexToRgba(accentColor, 0.2)} 0%, ${hexToRgba(accentColor, 0.12)} 100%)`,
+                                `repeating-linear-gradient(180deg, ${hexToRgba(accentColor, 0.06)} 0px, ${hexToRgba(accentColor, 0.06)} ${WEEKLY_SLOT_HEIGHT - 2}px, ${hexToRgba(accentColor, 0.01)} ${WEEKLY_SLOT_HEIGHT - 2}px, ${hexToRgba(accentColor, 0.01)} ${WEEKLY_SLOT_HEIGHT}px)`,
+                              ].join(', '),
+                              borderColor: hexToRgba(accentColor, 0.3),
+                              boxShadow: `inset 4px 0 0 ${hexToRgba(accentColor, 0.42)}`,
                             }}
                           />
 
