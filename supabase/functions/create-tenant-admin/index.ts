@@ -1,5 +1,6 @@
 import { corsHeaders, jsonResponse } from "../_shared/cors.ts";
 import { getAdminClient, requireSuperAdmin } from "../_shared/admin.ts";
+import { getPasswordErrors } from "../_shared/password.ts";
 
 Deno.serve(async (req) => {
   if (req.method === "OPTIONS") {
@@ -13,6 +14,14 @@ Deno.serve(async (req) => {
     const { tenantId, adminEmail, adminPassword, adminName } = await req.json();
     if (!tenantId || !adminEmail || !adminPassword) {
       return jsonResponse({ error: "tenantId, adminEmail and adminPassword are required" }, 400);
+    }
+
+    const passwordErrors = getPasswordErrors(String(adminPassword));
+    if (passwordErrors.length > 0) {
+      return jsonResponse({
+        error: "A senha do admin não atende aos requisitos.",
+        details: passwordErrors,
+      }, 400);
     }
 
     const email = String(adminEmail).trim().toLowerCase();

@@ -62,7 +62,7 @@ Deno.serve(async (req) => {
 
     const { data: tenant, error: tenantError } = await supabaseAdmin
       .from("tenants")
-      .select("id, status, package_type")
+      .select("id, status, package_type, booking_slug, subscription_due_date")
       .eq("id", tenantId)
       .maybeSingle();
 
@@ -80,6 +80,21 @@ Deno.serve(async (req) => {
 
     if (String(tenant.status || "").toLowerCase() !== "active") {
       return jsonResponse({ error: "Este tenant está inativo." }, 403);
+    }
+
+    if (!tenant.booking_slug) {
+      return jsonResponse({ error: "O agendamento online não está habilitado para este tenant." }, 403);
+    }
+
+    if (tenant.subscription_due_date) {
+      const today = new Date();
+      today.setHours(0, 0, 0, 0);
+      const dueDate = new Date(tenant.subscription_due_date);
+      dueDate.setHours(0, 0, 0, 0);
+
+      if (dueDate < today) {
+        return jsonResponse({ error: "O agendamento online deste tenant está temporariamente indisponível." }, 403);
+      }
     }
 
     if (preferredProfessionalId) {

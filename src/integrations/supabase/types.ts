@@ -1149,6 +1149,49 @@ export type Database = {
     }
     Functions: {
       can_tenant_modify: { Args: { _tenant_id: string }; Returns: boolean }
+      get_public_booking_professionals: {
+        Args: { _slug: string }
+        Returns: {
+          nickname: string | null
+          photo_url: string | null
+          professional_id: string
+          professional_name: string
+        }[]
+      }
+      get_public_booking_service_professionals: {
+        Args: { _slug: string }
+        Returns: {
+          duration_minutes: number | null
+          professional_id: string
+          service_id: string
+        }[]
+      }
+      get_public_booking_services: {
+        Args: { _slug: string }
+        Returns: {
+          break_time_minutes: number | null
+          category: string | null
+          default_price: number
+          description: string | null
+          duration_minutes: number
+          price_type: string
+          service_id: string
+          service_name: string
+        }[]
+      }
+      get_public_booking_tenant: {
+        Args: { _slug: string }
+        Returns: {
+          booking_slug: string
+          logo_url: string | null
+          package_type: string | null
+          primary_color: string | null
+          tenant_id: string
+          tenant_name: string
+          working_hours_end: number | null
+          working_hours_start: number | null
+        }[]
+      }
       get_user_tenant_id: { Args: { _user_id: string }; Returns: string }
       has_permission: {
         Args: {

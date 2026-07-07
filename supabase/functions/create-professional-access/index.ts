@@ -1,5 +1,6 @@
 import { corsHeaders, jsonResponse } from "../_shared/cors.ts";
 import { getAdminClient, requireTenantAdmin } from "../_shared/admin.ts";
+import { getPasswordErrors } from "../_shared/password.ts";
 
 const allowedPermissions = new Set([
   "view_schedule",
@@ -23,6 +24,14 @@ Deno.serve(async (req) => {
     }
 
     await requireTenantAdmin(req, supabaseAdmin, tenantId);
+
+    const passwordErrors = getPasswordErrors(String(password));
+    if (passwordErrors.length > 0) {
+      return jsonResponse({
+        error: "A senha do profissional não atende aos requisitos.",
+        details: passwordErrors,
+      }, 400);
+    }
 
     const normalizedEmail = String(email).trim().toLowerCase();
     const selectedPermissions = Array.isArray(permissions)

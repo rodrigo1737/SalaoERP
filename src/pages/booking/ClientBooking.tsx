@@ -12,10 +12,17 @@ import { toast } from 'sonner';
 import { format, addMinutes, isBefore, isToday, startOfDay, parseISO, setHours, setMinutes } from 'date-fns';
 import { ptBR } from 'date-fns/locale';
 import { cn } from '@/lib/utils';
+import {
+  fetchPublicBookingProfessionals,
+  fetchPublicBookingServiceProfessionals,
+  fetchPublicBookingServices,
+  fetchPublicBookingTenant,
+} from '@/lib/publicBooking';
 
 interface TenantInfo {
   id: string;
   name: string;
+  booking_slug?: string;
 }
 
 interface Professional {
@@ -81,60 +88,57 @@ const ClientBooking: React.FC = () => {
   useEffect(() => {
     const fetchData = async () => {
       setLoading(true);
+      const bookingSlug = tenant.booking_slug;
+      if (!bookingSlug) {
+        setLoading(false);
+        return;
+      }
 
-      // Fetch services available for online booking
-      const { data: servData } = await supabase
-        .from('services')
-        .select('id, name, description, category, duration_minutes, break_time_minutes, default_price, price_type')
-        .eq('tenant_id', tenant.id)
-        .eq('is_active', true)
-        .eq('allow_online_booking', true)
-        .order('name');
+      const { data: tenantData } = await fetchPublicBookingTenant(bookingSlug);
+      if (tenantData?.working_hours_start != null && tenantData?.working_hours_end != null) {
+        setWorkingHours({
+          start: tenantData.working_hours_start,
+          end: tenantData.working_hours_end,
+        });
+      }
+
+      const { data: servData } = await fetchPublicBookingServices(bookingSlug);
 
       if (servData) {
-        setServices(servData);
+        setServices(servData.map((service) => ({
+          id: service.service_id,
+          name: service.service_name,
+          description: service.description || undefined,
+          category: service.category || undefined,
+          duration_minutes: service.duration_minutes,
+          break_time_minutes: service.break_time_minutes || undefined,
+          default_price: Number(service.default_price),
+          price_type: service.price_type,
+        })));
       }
 
-      // Fetch active professionals
-      const { data: profData } = await supabase
-        .from('professionals')
-        .select('id, name, nickname, photo_url')
-        .eq('tenant_id', tenant.id)
-        .eq('is_active', true)
-        .eq('has_schedule', true)
-        .order('name');
+      const { data: profData } = await fetchPublicBookingProfessionals(bookingSlug);
 
       if (profData) {
-        setProfessionals(profData);
+        setProfessionals(profData.map((professional) => ({
+          id: professional.professional_id,
+          name: professional.professional_name,
+          nickname: professional.nickname || professional.professional_name,
+          photo_url: professional.photo_url || undefined,
+        })));
       }
 
-      const { data: serviceProfessionalData } = await supabase
-        .from('service_professionals')
-        .select('service_id, professional_id, duration_minutes')
-        .eq('tenant_id', tenant.id);
+      const { data: serviceProfessionalData } = await fetchPublicBookingServiceProfessionals(bookingSlug);
 
       if (serviceProfessionalData) {
         setServiceProfessionals(serviceProfessionalData);
-      }
-
-      const { data: settingsData } = await supabase
-        .from('tenant_settings')
-        .select('working_hours_start, working_hours_end')
-        .eq('tenant_id', tenant.id)
-        .maybeSingle();
-
-      if (settingsData?.working_hours_start != null && settingsData?.working_hours_end != null) {
-        setWorkingHours({
-          start: settingsData.working_hours_start,
-          end: settingsData.working_hours_end,
-        });
       }
 
       setLoading(false);
     };
 
     fetchData();
-  }, [tenant.id]);
+  }, [tenant.booking_slug, tenant.id]);
 
   // Fetch appointments for selected date with real-time updates
   const fetchAppointments = useCallback(async () => {
@@ -355,8 +359,6 @@ const ClientBooking: React.FC = () => {
       </div>
     );
   }
-
-  // TODO: retomar bloqueio por email_confirmed_at quando o disparo de confirmação estiver configurado.
 
   return (
     <div className="space-y-6">

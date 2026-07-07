@@ -1,9 +1,9 @@
 import React, { useState, useEffect } from 'react';
 import { Outlet, useParams, useNavigate } from 'react-router-dom';
-import { supabase } from '@/integrations/supabase/client';
 import { ClientAuthProvider } from '@/contexts/ClientAuthContext';
 import { Loader2, Calendar } from 'lucide-react';
 import { hasServiceBookingPackage } from '@/lib/tenantSegments';
+import { fetchPublicBookingTenant } from '@/lib/publicBooking';
 
 interface TenantInfo {
   id: string;
@@ -30,13 +30,7 @@ const BookingLayout: React.FC = () => {
       }
 
       try {
-        // Fetch tenant by booking slug
-        const { data: tenantData, error: tenantError } = await supabase
-          .from('tenants')
-          .select('id, name, booking_slug, subscription_due_date, package_type')
-          .eq('booking_slug', slug)
-          .eq('status', 'active')
-          .maybeSingle();
+        const { data: tenantData, error: tenantError } = await fetchPublicBookingTenant(slug);
 
         if (tenantError) {
           console.error('Error fetching tenant:', tenantError);
@@ -51,37 +45,22 @@ const BookingLayout: React.FC = () => {
           return;
         }
 
-        if (!hasServiceBookingPackage(tenantData)) {
+        const normalizedTenant = {
+          id: tenantData.tenant_id,
+          name: tenantData.tenant_name,
+          booking_slug: tenantData.booking_slug,
+          logo_url: tenantData.logo_url || undefined,
+          primary_color: tenantData.primary_color || undefined,
+          package_type: tenantData.package_type || undefined,
+        };
+
+        if (!hasServiceBookingPackage(normalizedTenant)) {
           setError('Agendamento online indisponível para este segmento');
           setLoading(false);
           return;
         }
 
-        if (tenantData.subscription_due_date) {
-          const today = new Date();
-          today.setHours(0, 0, 0, 0);
-          const dueDate = new Date(tenantData.subscription_due_date);
-          dueDate.setHours(0, 0, 0, 0);
-
-          if (dueDate < today) {
-            setError('Agendamento online indisponível no momento');
-            setLoading(false);
-            return;
-          }
-        }
-
-        // Fetch tenant settings for logo/colors
-        const { data: settingsData } = await supabase
-          .from('tenant_settings')
-          .select('logo_url, primary_color')
-          .eq('tenant_id', tenantData.id)
-          .maybeSingle();
-
-        setTenant({
-          ...tenantData,
-          logo_url: settingsData?.logo_url || undefined,
-          primary_color: settingsData?.primary_color || undefined,
-        });
+        setTenant(normalizedTenant);
         setLoading(false);
       } catch (err) {
         console.error('Error:', err);

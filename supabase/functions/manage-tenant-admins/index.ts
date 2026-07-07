@@ -1,15 +1,6 @@
 import { corsHeaders, jsonResponse } from "../_shared/cors.ts";
 import { getAdminClient, requireSuperAdmin } from "../_shared/admin.ts";
-
-function getPasswordErrors(password: string) {
-  const errors = [];
-  if (password.length < 8) errors.push("Mínimo 8 caracteres");
-  if (!/[A-Z]/.test(password)) errors.push("Uma letra maiúscula");
-  if (!/[a-z]/.test(password)) errors.push("Uma letra minúscula");
-  if (!/[0-9]/.test(password)) errors.push("Um número");
-  if (!/[^A-Za-z0-9]/.test(password)) errors.push("Um caractere especial");
-  return errors;
-}
+import { getPasswordErrors } from "../_shared/password.ts";
 
 Deno.serve(async (req) => {
   if (req.method === "OPTIONS") {

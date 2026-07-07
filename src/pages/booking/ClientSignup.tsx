@@ -1,7 +1,6 @@
 import React, { useState, useEffect, useRef } from 'react';
 import { useNavigate, useOutletContext, Link } from 'react-router-dom';
 import { useClientAuth } from '@/contexts/ClientAuthContext';
-import { supabase } from '@/integrations/supabase/client';
 import { Button } from '@/components/ui/button';
 import { Input } from '@/components/ui/input';
 import { Label } from '@/components/ui/label';
@@ -18,10 +17,12 @@ import { ptBR } from 'date-fns/locale';
 import { cn } from '@/lib/utils';
 import { z } from 'zod';
 import { strongPasswordSchema, getPasswordRequirementsMessage } from '@/lib/passwordValidation';
+import { fetchPublicBookingProfessionals, fetchPublicBookingServices } from '@/lib/publicBooking';
 
 interface TenantInfo {
   id: string;
   name: string;
+  booking_slug?: string;
 }
 
 interface Professional {
@@ -67,6 +68,7 @@ const ClientSignup: React.FC = () => {
     termsAccepted: false,
     photoUrl: null as string | null,
   });
+  const [selectedPhotoFile, setSelectedPhotoFile] = useState<File | null>(null);
 
   const [professionals, setProfessionals] = useState<Professional[]>([]);
   const [services, setServices] = useState<Service[]>([]);
@@ -83,35 +85,33 @@ const ClientSignup: React.FC = () => {
 
   useEffect(() => {
     const fetchData = async () => {
-      // Fetch professionals
-      const { data: profData } = await supabase
-        .from('professionals')
-        .select('id, name, nickname, photo_url')
-        .eq('tenant_id', tenant.id)
-        .eq('is_active', true)
-        .eq('has_schedule', true)
-        .order('name');
+      const bookingSlug = tenant.booking_slug;
+      if (!bookingSlug) return;
+
+      const { data: profData } = await fetchPublicBookingProfessionals(bookingSlug);
 
       if (profData) {
-        setProfessionals(profData);
+        setProfessionals(profData.map((professional) => ({
+          id: professional.professional_id,
+          name: professional.professional_name,
+          nickname: professional.nickname || professional.professional_name,
+          photo_url: professional.photo_url || undefined,
+        })));
       }
 
-      // Fetch services available for online booking
-      const { data: servData } = await supabase
-        .from('services')
-        .select('id, name, category')
-        .eq('tenant_id', tenant.id)
-        .eq('is_active', true)
-        .eq('allow_online_booking', true)
-        .order('name');
+      const { data: servData } = await fetchPublicBookingServices(bookingSlug);
 
       if (servData) {
-        setServices(servData);
+        setServices(servData.map((service) => ({
+          id: service.service_id,
+          name: service.service_name,
+          category: service.category || undefined,
+        })));
       }
     };
 
     fetchData();
-  }, [tenant.id]);
+  }, [tenant.booking_slug]);
 
   const handlePhotoSelect = async (event: React.ChangeEvent<HTMLInputElement>) => {
     const file = event.target.files?.[0];
@@ -127,28 +127,15 @@ const ClientSignup: React.FC = () => {
       return;
     }
 
-    setIsUploadingPhoto(true);
-
     try {
-      const fileExt = file.name.split('.').pop();
-      const fileName = `${Date.now()}-${Math.random().toString(36).substring(7)}.${fileExt}`;
-      const filePath = `${tenant.id}/clients/${fileName}`;
-
-      const { error: uploadError } = await supabase.storage
-        .from('client-photos')
-        .upload(filePath, file, { upsert: false });
-
-      if (uploadError) throw uploadError;
-
-      const { data: { publicUrl } } = supabase.storage
-        .from('client-photos')
-        .getPublicUrl(filePath);
-
-      setFormData(prev => ({ ...prev, photoUrl: publicUrl }));
-      toast.success('Foto enviada!');
+      setIsUploadingPhoto(true);
+      const previewUrl = URL.createObjectURL(file);
+      setSelectedPhotoFile(file);
+      setFormData(prev => ({ ...prev, photoUrl: previewUrl }));
+      toast.success('Foto selecionada! O envio será concluído ao criar a conta.');
     } catch (error) {
       console.error('Upload error:', error);
-      toast.error('Erro ao enviar foto');
+      toast.error('Erro ao preparar foto');
     } finally {
       setIsUploadingPhoto(false);
     }
@@ -181,7 +168,7 @@ const ClientSignup: React.FC = () => {
       tenant.id,
       formData.preferredProfessionalId || undefined,
       formData.preferredServiceIds.length > 0 ? formData.preferredServiceIds : undefined,
-      formData.photoUrl
+      selectedPhotoFile
     );
 
     setIsSubmitting(false);
@@ -195,7 +182,7 @@ const ClientSignup: React.FC = () => {
     } else if (needsEmailConfirmation) {
       setPendingConfirmationEmail(formData.email);
       toast.success('Conta criada!', {
-        description: 'A confirmação por email está temporariamente desativada. Retomaremos esse fluxo depois.',
+        description: 'Enviamos um email de confirmação para liberar o acesso ao agendamento.',
       });
     } else {
       toast.success('Conta criada com sucesso!', {
@@ -229,7 +216,7 @@ const ClientSignup: React.FC = () => {
           <CardHeader className="text-center">
             <CardTitle className="text-2xl">Confirme seu email</CardTitle>
             <CardDescription>
-              A confirmação por email para {pendingConfirmationEmail} está temporariamente desativada. Faça login quando o acesso estiver liberado.
+              Enviamos um link de confirmação para {pendingConfirmationEmail}. Confirme o cadastro antes de fazer login.
             </CardDescription>
           </CardHeader>
           <CardContent className="space-y-4">
@@ -237,7 +224,7 @@ const ClientSignup: React.FC = () => {
               Ir para login
             </Button>
             <p className="text-center text-xs text-muted-foreground">
-              Retomaremos o envio automático de confirmação em uma próxima etapa.
+              Se não encontrar o email, verifique a caixa de spam e promoções.
             </p>
           </CardContent>
         </Card>

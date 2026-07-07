@@ -26,7 +26,7 @@ interface ClientAuthContextType {
     tenantId: string,
     preferredProfessionalId?: string,
     preferredServiceIds?: string[],
-    photoUrl?: string | null
+    photoFile?: File | null
   ) => Promise<{ error: Error | null; needsEmailConfirmation?: boolean }>;
   resendSignupConfirmation: (email: string) => Promise<{ error: Error | null }>;
   signOut: () => Promise<void>;
@@ -34,7 +34,7 @@ interface ClientAuthContextType {
 }
 
 const ClientAuthContext = createContext<ClientAuthContextType | undefined>(undefined);
-const CLIENT_EMAIL_CONFIRMATION_ENABLED = false;
+const CLIENT_EMAIL_CONFIRMATION_ENABLED = (import.meta.env.VITE_CLIENT_EMAIL_CONFIRMATION_REQUIRED ?? 'true') !== 'false';
 
 export const useClientAuth = () => {
   const context = useContext(ClientAuthContext);
@@ -88,7 +88,7 @@ export const ClientAuthProvider: React.FC<{ children: React.ReactNode; tenantId?
     },
   ) => {
     const existingAccount = await fetchClientAccount(currentUser.id);
-    if (existingAccount) return existingAccount;
+    if (existingAccount && !payload) return existingAccount;
 
     const { data, error } = await supabase.functions.invoke('finalize-client-account', {
       body: payload ?? {},
@@ -105,6 +105,26 @@ export const ClientAuthProvider: React.FC<{ children: React.ReactNode; tenantId?
 
     return await fetchClientAccount(currentUser.id);
   }, [fetchClientAccount]);
+
+  const uploadClientPhoto = useCallback(async (tenantIdForPhoto: string, userId: string, file: File) => {
+    const fileExt = file.name.split('.').pop() || 'jpg';
+    const fileName = `${Date.now()}-${Math.random().toString(36).slice(2)}.${fileExt}`;
+    const filePath = `${tenantIdForPhoto}/${userId}/${fileName}`;
+
+    const { error: uploadError } = await supabase.storage
+      .from('client-photos')
+      .upload(filePath, file, { upsert: false });
+
+    if (uploadError) {
+      throw uploadError;
+    }
+
+    const { data } = supabase.storage
+      .from('client-photos')
+      .getPublicUrl(filePath);
+
+    return data.publicUrl;
+  }, []);
 
   const refreshClientAccount = useCallback(async () => {
     if (user) {
@@ -123,10 +143,9 @@ export const ClientAuthProvider: React.FC<{ children: React.ReactNode; tenantId?
         if (currentSession?.user) {
           // Defer data fetching to avoid deadlocks
           setTimeout(async () => {
+            const emailConfirmed = Boolean(currentSession.user.email_confirmed_at);
             let account = await fetchClientAccount(currentSession.user.id);
-            // TODO: retomar confirmação por email no agendamento online.
-            // Enquanto o disparo estiver desativado, criamos/recuperamos a conta sem exigir email_confirmed_at.
-            if (!account) {
+            if (!account && (!CLIENT_EMAIL_CONFIRMATION_ENABLED || emailConfirmed)) {
               try {
                 account = await finalizeClientAccount(currentSession.user);
               } catch (error) {
@@ -150,9 +169,8 @@ export const ClientAuthProvider: React.FC<{ children: React.ReactNode; tenantId?
       
       if (currentSession?.user) {
         fetchClientAccount(currentSession.user.id).then(async account => {
-          // TODO: retomar confirmação por email no agendamento online.
-          // Enquanto o disparo estiver desativado, criamos/recuperamos a conta sem exigir email_confirmed_at.
-          if (!account) {
+          const emailConfirmed = Boolean(currentSession.user.email_confirmed_at);
+          if (!account && (!CLIENT_EMAIL_CONFIRMATION_ENABLED || emailConfirmed)) {
             try {
               account = await finalizeClientAccount(currentSession.user);
             } catch (error) {
@@ -193,7 +211,7 @@ export const ClientAuthProvider: React.FC<{ children: React.ReactNode; tenantId?
     signupTenantId: string,
     preferredProfessionalId?: string,
     preferredServiceIds?: string[],
-    photoUrl?: string | null
+    photoFile?: File | null
   ) => {
     try {
       // Sign up with Supabase Auth
@@ -201,7 +219,6 @@ export const ClientAuthProvider: React.FC<{ children: React.ReactNode; tenantId?
         email: email.trim(),
         password,
         options: {
-          // TODO: habilitar quando retomarmos o disparo de confirmação por email.
           ...(CLIENT_EMAIL_CONFIRMATION_ENABLED
             ? { emailRedirectTo: window.location.href.replace(/\/cadastro.*$/, '/login') }
             : {}),
@@ -212,7 +229,7 @@ export const ClientAuthProvider: React.FC<{ children: React.ReactNode; tenantId?
             client_signup_birth_date: birthDate,
             client_signup_preferred_professional_id: preferredProfessionalId || null,
             client_signup_preferred_service_ids: preferredServiceIds || [],
-            client_signup_photo_url: photoUrl || null,
+            client_signup_photo_url: null,
           },
         },
       });
@@ -231,22 +248,35 @@ export const ClientAuthProvider: React.FC<{ children: React.ReactNode; tenantId?
 
       if (!authData.session) {
         return {
-          error: new Error('Cadastro criado, mas a confirmação por email está temporariamente desativada. Faça login após a liberação da conta.'),
+          error: new Error('Cadastro criado, mas nenhuma sessão foi iniciada automaticamente. Confirme seu email antes de continuar.'),
         };
       }
 
-      const account = await finalizeClientAccount(authData.user, {
+      let account = await finalizeClientAccount(authData.user, {
         tenantId: signupTenantId,
         fullName,
         phone,
         birthDate,
         preferredProfessionalId,
         preferredServiceIds,
-        photoUrl,
+        photoUrl: null,
       });
 
       if (!account) {
         return { error: new Error('Erro ao criar conta de cliente') };
+      }
+
+      if (photoFile) {
+        const photoUrl = await uploadClientPhoto(signupTenantId, authData.user.id, photoFile);
+        account = await finalizeClientAccount(authData.user, {
+          tenantId: signupTenantId,
+          fullName,
+          phone,
+          birthDate,
+          preferredProfessionalId,
+          preferredServiceIds,
+          photoUrl,
+        });
       }
 
       return { error: null };
@@ -257,8 +287,6 @@ export const ClientAuthProvider: React.FC<{ children: React.ReactNode; tenantId?
   };
 
   const resendSignupConfirmation = async (email: string) => {
-    // TODO: retomar quando o fluxo de disparo de email estiver configurado.
-    // Mantemos a função como no-op para não quebrar telas que ainda chamem o contexto.
     if (!CLIENT_EMAIL_CONFIRMATION_ENABLED) {
       return { error: null };
     }
