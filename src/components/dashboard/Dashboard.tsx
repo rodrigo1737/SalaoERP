@@ -74,27 +74,46 @@ export function Dashboard({ onNavigate }: DashboardProps) {
   // Para tenants de limpeza, os agendamentos vêm de `cleaning_appointments`.
   // Para os demais, mantém a fonte do DataContext (`appointments`).
   const [cleaningAppointments, setCleaningAppointments] = useState<DashboardAppointment[]>([]);
+  const [cleaningFinancialEntries, setCleaningFinancialEntries] = useState<Array<{
+    amount: number;
+    entry_type: string;
+    status: string;
+    created_at: string;
+  }>>([]);
   const [cleaningLoading, setCleaningLoading] = useState(false);
 
   useEffect(() => {
     let cancelled = false;
     if (!isCleaningSegment || !tenantId) {
       setCleaningAppointments([]);
+      setCleaningFinancialEntries([]);
       return;
     }
     setCleaningLoading(true);
-    supabase
-      .from('cleaning_appointments')
-      .select('id, start_time, end_time, status, client_id, client_name_snapshot, service_name_snapshot, assignee_name_snapshot')
-      .eq('tenant_id', tenantId)
-      .is('deleted_at', null)
-      .neq('status', 'cancelled')
-      .order('start_time', { ascending: true })
-      .then(({ data, error }) => {
+    Promise.all([
+      supabase
+        .from('cleaning_appointments')
+        .select('id, start_time, end_time, status, client_id, client_name_snapshot, service_name_snapshot, assignee_name_snapshot')
+        .eq('tenant_id', tenantId)
+        .is('deleted_at', null)
+        .neq('status', 'cancelled')
+        .order('start_time', { ascending: true }),
+      supabase
+        .from('cleaning_financial_entries')
+        .select('amount, entry_type, status, created_at')
+        .eq('tenant_id', tenantId)
+        .is('deleted_at', null)
+        .order('created_at', { ascending: false }),
+    ]).then(([appointmentsResponse, financialResponse]) => {
         if (cancelled) return;
-        if (error) {
+        const { data, error } = appointmentsResponse;
+        const { data: financialData, error: financialError } = financialResponse;
+
+        if (error || financialError) {
           console.error('Erro carregando cleaning_appointments para o Dashboard', error);
+          console.error('Erro carregando cleaning_financial_entries para o Dashboard', financialError);
           setCleaningAppointments([]);
+          setCleaningFinancialEntries([]);
         } else {
           const mapped: DashboardAppointment[] = (data || []).map((row) => ({
             id: row.id,
@@ -107,6 +126,12 @@ export function Dashboard({ onNavigate }: DashboardProps) {
             professional: { nickname: row.assignee_name_snapshot },
           }));
           setCleaningAppointments(mapped);
+          setCleaningFinancialEntries((financialData || []).map((entry) => ({
+            amount: Number(entry.amount || 0),
+            entry_type: entry.entry_type,
+            status: entry.status,
+            created_at: entry.created_at,
+          })));
         }
         setCleaningLoading(false);
       });
@@ -130,23 +155,33 @@ export function Dashboard({ onNavigate }: DashboardProps) {
     const endOfMonth   = new Date(today.getFullYear(), today.getMonth() + 1, 0, 23, 59, 59, 999);
 
     // ITEM 19: ambos (hoje e mês) calculados a partir da mesma fonte: transactions de tipo income
-    const incomeTransactions = transactions.filter(t => t.type === 'income');
+    const cleaningRevenueEntries = cleaningFinancialEntries.filter(entry => (
+      (entry.entry_type === 'receivable' || entry.entry_type === 'received')
+      && entry.status !== 'cancelled'
+    ));
+    const cleaningExpenseEntries = cleaningFinancialEntries.filter(entry => (
+      (entry.entry_type === 'expense' || entry.entry_type === 'commission_payment')
+      && entry.status !== 'cancelled'
+    ));
 
-    const todayRevenue = incomeTransactions
+    const incomeTransactions = transactions.filter(t => t.type === 'income');
+    const expenseTransactions = transactions.filter(t => t.type === 'expense');
+
+    const todayRevenue = (isCleaningSegment ? cleaningRevenueEntries : incomeTransactions)
       .filter(t => {
         const d = new Date(t.created_at);
         return d >= today && d <= endOfToday;
       })
       .reduce((sum, t) => sum + Number(t.amount), 0);
 
-    const todayExpense = transactions
+    const todayExpense = (isCleaningSegment ? cleaningExpenseEntries : expenseTransactions)
       .filter(t => {
         const d = new Date(t.created_at);
-        return t.type === 'expense' && d >= today && d <= endOfToday;
+        return d >= today && d <= endOfToday;
       })
       .reduce((sum, t) => sum + Number(t.amount), 0);
 
-    const monthRevenue = incomeTransactions
+    const monthRevenue = (isCleaningSegment ? cleaningRevenueEntries : incomeTransactions)
       .filter(t => {
         const tDate = new Date(t.created_at);
         return tDate >= startOfMonth && tDate <= endOfMonth;
@@ -194,7 +229,7 @@ export function Dashboard({ onNavigate }: DashboardProps) {
         ? currentCashSession.opening_balance + cashSessionIncome - cashSessionExpense 
         : 0,
     };
-  }, [sourceAppointments, transactions, clients, currentCashSession]);
+  }, [sourceAppointments, transactions, clients, currentCashSession, isCleaningSegment, cleaningFinancialEntries]);
 
   const upcomingAppointments = useMemo(() => {
     const now = new Date();

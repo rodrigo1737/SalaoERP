@@ -11,3 +11,6 @@ verify_jwt = true
 
 [functions.manage-super-admins]
 verify_jwt = true
+
+[functions.finalize-client-account]
+verify_jwt = true

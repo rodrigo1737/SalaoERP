@@ -1,6 +1,7 @@
 import React, { createContext, useContext, useEffect, useState, useCallback } from 'react';
 import { User, Session } from '@supabase/supabase-js';
 import { supabase } from '@/integrations/supabase/client';
+import { getSupabaseErrorMessage } from '@/lib/supabaseErrors';
 
 interface ClientAccount {
   id: string;
@@ -74,69 +75,36 @@ export const ClientAuthProvider: React.FC<{ children: React.ReactNode; tenantId?
     }
   }, [tenantId]);
 
-  const createClientAccountFromMetadata = useCallback(async (currentUser: User) => {
-    const metadata = currentUser.user_metadata || {};
-    const signupTenantId = metadata.client_signup_tenant_id || tenantId;
-    const fullName = metadata.full_name;
-    const phone = metadata.client_signup_phone;
-
-    if (!signupTenantId || !fullName || !phone) return null;
-
+  const finalizeClientAccount = useCallback(async (
+    currentUser: User,
+    payload?: {
+      tenantId?: string;
+      fullName?: string;
+      phone?: string;
+      birthDate?: string | null;
+      preferredProfessionalId?: string;
+      preferredServiceIds?: string[];
+      photoUrl?: string | null;
+    },
+  ) => {
     const existingAccount = await fetchClientAccount(currentUser.id);
     if (existingAccount) return existingAccount;
 
-    const { data: clientData, error: clientError } = await supabase
-      .from('clients')
-      .insert({
-        name: String(fullName).trim(),
-        phone: String(phone).trim(),
-        email: currentUser.email,
-        birth_date: metadata.client_signup_birth_date || null,
-        tenant_id: signupTenantId,
-        photo_url: metadata.client_signup_photo_url || null,
-      })
-      .select()
-      .single();
+    const { data, error } = await supabase.functions.invoke('finalize-client-account', {
+      body: payload ?? {},
+    });
 
-    if (clientError) {
-      console.error('Error creating client after email confirmation:', clientError);
-      return null;
+    if (error) {
+      console.error('Error finalizing client account:', error);
+      throw new Error(await getSupabaseErrorMessage(error, data, 'Erro ao finalizar conta do cliente'));
     }
 
-    const { data: accountData, error: accountError } = await supabase
-      .from('client_accounts')
-      .insert({
-        user_id: currentUser.id,
-        client_id: clientData.id,
-        tenant_id: signupTenantId,
-        preferred_professional_id: metadata.client_signup_preferred_professional_id || null,
-        terms_accepted_at: new Date().toISOString(),
-      })
-      .select()
-      .single();
-
-    if (accountError) {
-      console.error('Error creating client account after email confirmation:', accountError);
-      return null;
+    if (data?.account) {
+      return data.account as ClientAccount;
     }
 
-    const preferredServiceIds = Array.isArray(metadata.client_signup_preferred_service_ids)
-      ? metadata.client_signup_preferred_service_ids
-      : [];
-
-    if (preferredServiceIds.length > 0) {
-      await supabase
-        .from('client_preferred_services')
-        .insert(
-          preferredServiceIds.map((serviceId: string) => ({
-            client_account_id: accountData.id,
-            service_id: serviceId,
-          }))
-        );
-    }
-
-    return accountData;
-  }, [fetchClientAccount, tenantId]);
+    return await fetchClientAccount(currentUser.id);
+  }, [fetchClientAccount]);
 
   const refreshClientAccount = useCallback(async () => {
     if (user) {
@@ -159,7 +127,11 @@ export const ClientAuthProvider: React.FC<{ children: React.ReactNode; tenantId?
             // TODO: retomar confirmação por email no agendamento online.
             // Enquanto o disparo estiver desativado, criamos/recuperamos a conta sem exigir email_confirmed_at.
             if (!account) {
-              account = await createClientAccountFromMetadata(currentSession.user);
+              try {
+                account = await finalizeClientAccount(currentSession.user);
+              } catch (error) {
+                console.error('Error auto-finalizing client account after auth state change:', error);
+              }
             }
             setClientAccount(account);
             setLoading(false);
@@ -181,7 +153,11 @@ export const ClientAuthProvider: React.FC<{ children: React.ReactNode; tenantId?
           // TODO: retomar confirmação por email no agendamento online.
           // Enquanto o disparo estiver desativado, criamos/recuperamos a conta sem exigir email_confirmed_at.
           if (!account) {
-            account = await createClientAccountFromMetadata(currentSession.user);
+            try {
+              account = await finalizeClientAccount(currentSession.user);
+            } catch (error) {
+              console.error('Error auto-finalizing initial client account:', error);
+            }
           }
           setClientAccount(account);
           setLoading(false);
@@ -194,7 +170,7 @@ export const ClientAuthProvider: React.FC<{ children: React.ReactNode; tenantId?
     return () => {
       subscription.unsubscribe();
     };
-  }, [fetchClientAccount, createClientAccountFromMetadata]);
+  }, [fetchClientAccount, finalizeClientAccount]);
 
   const signIn = async (email: string, password: string) => {
     try {
@@ -259,8 +235,16 @@ export const ClientAuthProvider: React.FC<{ children: React.ReactNode; tenantId?
         };
       }
 
-      // Create client record
-      const account = await createClientAccountFromMetadata(authData.user);
+      const account = await finalizeClientAccount(authData.user, {
+        tenantId: signupTenantId,
+        fullName,
+        phone,
+        birthDate,
+        preferredProfessionalId,
+        preferredServiceIds,
+        photoUrl,
+      });
+
       if (!account) {
         return { error: new Error('Erro ao criar conta de cliente') };
       }
@@ -268,7 +252,7 @@ export const ClientAuthProvider: React.FC<{ children: React.ReactNode; tenantId?
       return { error: null };
     } catch (error) {
       console.error('Error in signUp:', error);
-      return { error: error as Error };
+      return { error: error instanceof Error ? error : new Error('Erro ao criar conta') };
     }
   };
 

@@ -1,0 +1,19 @@
+node_modules/
+.pnpm-store/
+dist/
+.vite/
+coverage/
+.DS_Store
+*.log
+
+# Local environment variants stay out of Git.
+.env.local
+.env.*.local
+
+# Editors
+.idea/
+.vscode/
+
+# OS / temp
+tmp/
+temp/
