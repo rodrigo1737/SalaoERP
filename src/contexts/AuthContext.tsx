@@ -117,7 +117,8 @@ export const AuthProvider: React.FC<{ children: React.ReactNode }> = ({ children
         setCurrentTenant(null);
       }
 
-      // Fetch user role
+      // Fetch user roles and derive the effective role.
+      // Some users can legitimately have more than one row (for example, admin + professional).
       let roleQuery = supabase
         .from('user_roles')
         .select('role')
@@ -129,12 +130,19 @@ export const AuthProvider: React.FC<{ children: React.ReactNode }> = ({ children
         roleQuery = roleQuery.is('tenant_id', null);
       }
 
-      const { data: roleData } = await roleQuery.maybeSingle();
-
-      if (roleData) {
-        setUserRole(roleData.role as UserRole);
-      } else {
+      const { data: roleRows, error: roleError } = await roleQuery;
+      if (roleError) {
+        console.error('Error fetching user roles:', roleError);
         setUserRole(null);
+      } else {
+        const roles = (roleRows || []).map((row) => row.role as UserRole).filter(Boolean);
+        if (roles.includes('admin')) {
+          setUserRole('admin');
+        } else if (roles.includes('professional')) {
+          setUserRole('professional');
+        } else {
+          setUserRole(null);
+        }
       }
 
       // Fetch permissions
