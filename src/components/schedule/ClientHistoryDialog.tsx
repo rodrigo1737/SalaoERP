@@ -37,6 +37,7 @@ import { supabase } from '@/integrations/supabase/client';
 import { Skeleton } from '@/components/ui/skeleton';
 import { useToast } from '@/hooks/use-toast';
 import { useData } from '@/context/DataContext';
+import { useAuth } from '@/contexts/AuthContext';
 
 interface ClientHistoryDialogProps {
   open: boolean;
@@ -114,6 +115,7 @@ export function ClientHistoryDialog({
 }: ClientHistoryDialogProps) {
   const { toast } = useToast();
   const { updateClient } = useData();
+  const { tenantId } = useAuth();
   
   const [activeTab, setActiveTab] = useState('cadastro');
   const [loading, setLoading] = useState(false);
@@ -134,10 +136,10 @@ export function ClientHistoryDialog({
   const [creditBalance, setCreditBalance] = useState(0);
 
   useEffect(() => {
-    if (open && clientId) {
+    if (open && clientId && tenantId) {
       fetchAllData();
     }
-  }, [open, clientId]);
+  }, [open, clientId, tenantId]);
 
   useEffect(() => {
     if (client) {
@@ -152,7 +154,7 @@ export function ClientHistoryDialog({
   }, [client]);
 
   const fetchAllData = async () => {
-    if (!clientId) return;
+    if (!clientId || !tenantId) return;
     
     setLoading(true);
     try {
@@ -161,6 +163,7 @@ export function ClientHistoryDialog({
         .from('clients')
         .select('*')
         .eq('id', clientId)
+        .eq('tenant_id', tenantId)
         .maybeSingle();
 
       if (clientError) throw clientError;
@@ -180,6 +183,7 @@ export function ClientHistoryDialog({
             professional:professionals(nickname, name)
           `)
           .eq('client_id', clientId)
+          .eq('tenant_id', tenantId)
           .order('start_time', { ascending: false }),
       );
 

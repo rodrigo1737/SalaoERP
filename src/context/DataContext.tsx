@@ -2,6 +2,7 @@ import React, { createContext, useContext, useState, useEffect, useRef, ReactNod
 import { supabase } from '@/integrations/supabase/client';
 import { useAuth } from '@/contexts/AuthContext';
 import { toast } from 'sonner';
+import { isCleaningControlTenant } from '@/lib/tenantSegments';
 
 export interface Client {
   id: string;
@@ -227,7 +228,7 @@ function joinCommissions(comms: Commission[], professionals: Professional[]): Co
 // ─── Provider ───────────────────────────────────────────────────────────────
 
 export const DataProvider: React.FC<{ children: ReactNode }> = ({ children }) => {
-  const { user, tenantId, isSuperAdmin, canModify } = useAuth();
+  const { user, tenantId, isSuperAdmin, canModify, currentTenant } = useAuth();
   const [loading, setLoading] = useState(true);
   const [clients, setClients] = useState<Client[]>([]);
   const [professionals, setProfessionals] = useState<Professional[]>([]);
@@ -239,6 +240,7 @@ export const DataProvider: React.FC<{ children: ReactNode }> = ({ children }) =>
   const [commissions, setCommissions] = useState<Commission[]>([]);
   const [currentCashSession, setCurrentCashSession] = useState<CashSession | null>(null);
   const realtimeChannelRef = useRef<ReturnType<typeof supabase.channel> | null>(null);
+  const isCleaningTenant = isCleaningControlTenant(currentTenant);
 
   const fetchAllPages = async <T,>(queryFactory: () => any): Promise<T[]> => {
     const rows: T[] = [];
@@ -382,12 +384,12 @@ export const DataProvider: React.FC<{ children: ReactNode }> = ({ children }) =>
       ] = await Promise.all([
         fetchClients(),
         fetchProfessionals(),
-        fetchServices(),
-        fetchProducts(),
-        fetchAppointments(),
-        fetchCash(),
+        isCleaningTenant ? Promise.resolve([] as Service[]) : fetchServices(),
+        isCleaningTenant ? Promise.resolve([] as Product[]) : fetchProducts(),
+        isCleaningTenant ? Promise.resolve([] as Appointment[]) : fetchAppointments(),
+        isCleaningTenant ? Promise.resolve([] as CashSession[]) : fetchCash(),
         fetchTransactions(),
-        fetchCommissions(),
+        isCleaningTenant ? Promise.resolve([] as Commission[]) : fetchCommissions(),
       ]);
 
       setClients(clientsData);
@@ -426,19 +428,19 @@ export const DataProvider: React.FC<{ children: ReactNode }> = ({ children }) =>
         newProfs = await fetchProfessionals();
         setProfessionals(newProfs);
       }
-      if (all || entities!.includes('services')) {
+      if (!isCleaningTenant && (all || entities!.includes('services'))) {
         newServices = await fetchServices();
         setServices(newServices);
       }
-      if (all || entities!.includes('products')) {
+      if (!isCleaningTenant && (all || entities!.includes('products'))) {
         newProducts = await fetchProducts();
         setProducts(newProducts);
       }
-      if (all || entities!.includes('appointments')) {
+      if (!isCleaningTenant && (all || entities!.includes('appointments'))) {
         const raw = await fetchAppointments();
         setAppointments(joinAppointments(raw, newClients, newProfs, newServices));
       }
-      if (all || entities!.includes('cash')) {
+      if (!isCleaningTenant && (all || entities!.includes('cash'))) {
         const cashData = await fetchCash();
         setCashSessions(cashData);
         setCurrentCashSession(cashData.find(s => s.status === 'open') ?? null);
@@ -447,7 +449,7 @@ export const DataProvider: React.FC<{ children: ReactNode }> = ({ children }) =>
         const txData = await fetchTransactions();
         setTransactions(txData);
       }
-      if (all || entities!.includes('commissions')) {
+      if (!isCleaningTenant && (all || entities!.includes('commissions'))) {
         const commData = await fetchCommissions();
         setCommissions(joinCommissions(commData, newProfs));
       }
@@ -461,32 +463,37 @@ export const DataProvider: React.FC<{ children: ReactNode }> = ({ children }) =>
     if (realtimeChannelRef.current) {
       supabase.removeChannel(realtimeChannelRef.current);
     }
-    const channel = supabase
-      .channel('db-changes')
-      .on('postgres_changes', { event: '*', schema: 'public', table: 'appointments', filter: `tenant_id=eq.${tenantId}` },
-        () => refreshData(['appointments']))
+    const channelName = isCleaningTenant ? 'db-changes-cleaning' : 'db-changes-full';
+    let channel = supabase
+      .channel(channelName)
       .on('postgres_changes', { event: '*', schema: 'public', table: 'clients', filter: `tenant_id=eq.${tenantId}` },
         () => refreshData(['clients']))
       .on('postgres_changes', { event: '*', schema: 'public', table: 'transactions', filter: `tenant_id=eq.${tenantId}` },
-        () => refreshData(['transactions', 'cash']))
-      .on('postgres_changes', { event: '*', schema: 'public', table: 'commissions', filter: `tenant_id=eq.${tenantId}` },
-        () => refreshData(['commissions']))
-      .on('postgres_changes', { event: '*', schema: 'public', table: 'products', filter: `tenant_id=eq.${tenantId}` },
-        () => refreshData(['products']))
-      .subscribe();
-    realtimeChannelRef.current = channel;
+        () => refreshData(isCleaningTenant ? ['transactions'] : ['transactions', 'cash']));
+
+    if (!isCleaningTenant) {
+      channel = channel
+        .on('postgres_changes', { event: '*', schema: 'public', table: 'products', filter: `tenant_id=eq.${tenantId}` },
+          () => refreshData(['products']))
+        .on('postgres_changes', { event: '*', schema: 'public', table: 'appointments', filter: `tenant_id=eq.${tenantId}` },
+          () => refreshData(['appointments']))
+        .on('postgres_changes', { event: '*', schema: 'public', table: 'commissions', filter: `tenant_id=eq.${tenantId}` },
+          () => refreshData(['commissions']));
+    }
+
+    realtimeChannelRef.current = channel.subscribe();
   };
 
   useEffect(() => {
     fetchData();
-  }, [user, tenantId]);
+  }, [user, tenantId, isCleaningTenant]);
 
   useEffect(() => {
     if (user && tenantId) setupRealtime();
     return () => {
       if (realtimeChannelRef.current) supabase.removeChannel(realtimeChannelRef.current);
     };
-  }, [user, tenantId]);
+  }, [user, tenantId, isCleaningTenant]);
 
   // ── guard helper ──
   const guardModify = (label = 'realizar esta operação') => {

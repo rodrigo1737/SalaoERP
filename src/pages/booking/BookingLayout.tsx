@@ -3,6 +3,7 @@ import { Outlet, useParams, useNavigate } from 'react-router-dom';
 import { supabase } from '@/integrations/supabase/client';
 import { ClientAuthProvider } from '@/contexts/ClientAuthContext';
 import { Loader2, Calendar } from 'lucide-react';
+import { hasServiceBookingPackage } from '@/lib/tenantSegments';
 
 interface TenantInfo {
   id: string;
@@ -10,6 +11,7 @@ interface TenantInfo {
   booking_slug: string;
   logo_url?: string;
   primary_color?: string;
+  package_type?: string;
 }
 
 const BookingLayout: React.FC = () => {
@@ -31,7 +33,7 @@ const BookingLayout: React.FC = () => {
         // Fetch tenant by booking slug
         const { data: tenantData, error: tenantError } = await supabase
           .from('tenants')
-          .select('id, name, booking_slug, subscription_due_date')
+          .select('id, name, booking_slug, subscription_due_date, package_type')
           .eq('booking_slug', slug)
           .eq('status', 'active')
           .maybeSingle();
@@ -45,6 +47,12 @@ const BookingLayout: React.FC = () => {
 
         if (!tenantData) {
           setError('Salão não encontrado ou indisponível');
+          setLoading(false);
+          return;
+        }
+
+        if (!hasServiceBookingPackage(tenantData)) {
+          setError('Agendamento online indisponível para este segmento');
           setLoading(false);
           return;
         }

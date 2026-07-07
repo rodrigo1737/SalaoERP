@@ -21,3 +21,8 @@ export const hasCleaningModulePackage = (tenant: TenantLike) => {
   const normalized = normalizeSegment(tenant?.package_type);
   return isCleaningControlPackage(normalized) || normalized === 'business_erp';
 };
+
+export const hasServiceBookingPackage = (tenant: TenantLike) => {
+  const normalized = normalizeSegment(tenant?.package_type);
+  return ['salon', 'aesthetic_clinic', 'business_erp'].includes(normalized);
+};

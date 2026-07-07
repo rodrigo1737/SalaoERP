@@ -132,19 +132,27 @@ const Index = () => {
     }
   };
 
+  const appShell = (
+    <div className="flex min-h-screen w-full bg-background">
+      <Sidebar currentPage={currentPage} onNavigate={handleNavigate} />
+      <main className="flex-1 min-h-screen overflow-x-hidden pl-4">
+        <TenantStatusBanner />
+        {renderPage()}
+      </main>
+    </div>
+  );
+
   return (
     <TenantSettingsProvider>
       <DataProvider>
         <StableDataProvider>
-        <StockProvider>
-          <div className="flex min-h-screen w-full bg-background">
-            <Sidebar currentPage={currentPage} onNavigate={handleNavigate} />
-            <main className="flex-1 min-h-screen overflow-x-hidden pl-4">
-              <TenantStatusBanner />
-              {renderPage()}
-            </main>
-          </div>
-        </StockProvider>
+          {isCleaningTenant ? (
+            appShell
+          ) : (
+            <StockProvider>
+              {appShell}
+            </StockProvider>
+          )}
         </StableDataProvider>
       </DataProvider>
     </TenantSettingsProvider>
