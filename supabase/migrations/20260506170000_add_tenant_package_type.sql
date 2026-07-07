@@ -9,7 +9,7 @@ ALTER TABLE public.tenants
 
 ALTER TABLE public.tenants
   ADD CONSTRAINT tenants_package_type_check
-  CHECK (package_type IN ('salon', 'aesthetic_clinic'));
+  CHECK (package_type IN ('salon', 'aesthetic_clinic', 'cleaning_control', 'business_erp'));
 
 COMMENT ON COLUMN public.tenants.package_type IS
   'Commercial package used to enable product modules. salon = current package; aesthetic_clinic = clinical/aesthetic module package.';
