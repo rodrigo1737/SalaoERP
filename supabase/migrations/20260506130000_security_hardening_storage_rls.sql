@@ -492,6 +492,18 @@ DROP POLICY IF EXISTS "Authenticated users can delete professional photos" ON st
 DROP POLICY IF EXISTS "Admins can upload their tenant logo" ON storage.objects;
 DROP POLICY IF EXISTS "Admins can update their tenant logo" ON storage.objects;
 DROP POLICY IF EXISTS "Admins can delete their tenant logo" ON storage.objects;
+DROP POLICY IF EXISTS "Tenant users can upload client photos" ON storage.objects;
+DROP POLICY IF EXISTS "Tenant users can view client photos" ON storage.objects;
+DROP POLICY IF EXISTS "Tenant users can update client photos" ON storage.objects;
+DROP POLICY IF EXISTS "Tenant users can delete client photos" ON storage.objects;
+DROP POLICY IF EXISTS "Tenant users can upload professional photos" ON storage.objects;
+DROP POLICY IF EXISTS "Tenant users can view professional photos" ON storage.objects;
+DROP POLICY IF EXISTS "Tenant users can update professional photos" ON storage.objects;
+DROP POLICY IF EXISTS "Tenant users can delete professional photos" ON storage.objects;
+DROP POLICY IF EXISTS "Tenant admins can upload salon logos" ON storage.objects;
+DROP POLICY IF EXISTS "Tenant admins can view salon logos" ON storage.objects;
+DROP POLICY IF EXISTS "Tenant admins can update salon logos" ON storage.objects;
+DROP POLICY IF EXISTS "Tenant admins can delete salon logos" ON storage.objects;
 
 CREATE POLICY "Tenant users can upload client photos"
 ON storage.objects
