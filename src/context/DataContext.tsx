@@ -210,18 +210,24 @@ function joinAppointments(
   professionals: Professional[],
   services: Service[],
 ): Appointment[] {
+  const clientsById = new Map(clients.map((client) => [client.id, client]));
+  const professionalsById = new Map(professionals.map((professional) => [professional.id, professional]));
+  const servicesById = new Map(services.map((service) => [service.id, service]));
+
   return appts.map(apt => ({
     ...apt,
-    client: clients.find(c => c.id === apt.client_id),
-    professional: professionals.find(p => p.id === apt.professional_id),
-    service: services.find(s => s.id === apt.service_id),
+    client: apt.client_id ? clientsById.get(apt.client_id) : undefined,
+    professional: apt.professional_id ? professionalsById.get(apt.professional_id) : undefined,
+    service: apt.service_id ? servicesById.get(apt.service_id) : undefined,
   }));
 }
 
 function joinCommissions(comms: Commission[], professionals: Professional[]): Commission[] {
+  const professionalsById = new Map(professionals.map((professional) => [professional.id, professional]));
+
   return comms.map(c => ({
     ...c,
-    professional: professionals.find(p => p.id === c.professional_id),
+    professional: professionalsById.get(c.professional_id),
   }));
 }
 
@@ -240,6 +246,7 @@ export const DataProvider: React.FC<{ children: ReactNode }> = ({ children }) =>
   const [commissions, setCommissions] = useState<Commission[]>([]);
   const [currentCashSession, setCurrentCashSession] = useState<CashSession | null>(null);
   const realtimeChannelRef = useRef<ReturnType<typeof supabase.channel> | null>(null);
+  const fetchRequestRef = useRef(0);
   const isCleaningTenant = isCleaningControlTenant(currentTenant);
 
   const fetchAllPages = async <T,>(queryFactory: () => any): Promise<T[]> => {
@@ -357,6 +364,8 @@ export const DataProvider: React.FC<{ children: ReactNode }> = ({ children }) =>
 
   // ── full initial load ──
   const fetchData = async () => {
+    const requestId = ++fetchRequestRef.current;
+
     if (!user || !tenantId) {
       setClients([]);
       setProfessionals([]);
@@ -370,7 +379,11 @@ export const DataProvider: React.FC<{ children: ReactNode }> = ({ children }) =>
       setLoading(false);
       return;
     }
+
     setLoading(true);
+    setTransactions([]);
+    setCommissions([]);
+
     try {
       const [
         clientsData,
@@ -379,8 +392,6 @@ export const DataProvider: React.FC<{ children: ReactNode }> = ({ children }) =>
         productsData,
         apptsData,
         cashData,
-        txData,
-        commData,
       ] = await Promise.all([
         fetchClients(),
         fetchProfessionals(),
@@ -388,23 +399,34 @@ export const DataProvider: React.FC<{ children: ReactNode }> = ({ children }) =>
         isCleaningTenant ? Promise.resolve([] as Product[]) : fetchProducts(),
         isCleaningTenant ? Promise.resolve([] as Appointment[]) : fetchAppointments(),
         isCleaningTenant ? Promise.resolve([] as CashSession[]) : fetchCash(),
-        fetchTransactions(),
-        isCleaningTenant ? Promise.resolve([] as Commission[]) : fetchCommissions(),
       ]);
+
+      if (requestId !== fetchRequestRef.current) return;
 
       setClients(clientsData);
       setProfessionals(professionalsData);
       setServices(servicesData);
       setProducts(productsData);
-      // ITEM 9: join feito localmente (sem segunda query) usando os dados já buscados
       setAppointments(joinAppointments(apptsData, clientsData, professionalsData, servicesData));
       setCashSessions(cashData);
-      setTransactions(txData);
-      setCommissions(joinCommissions(commData, professionalsData));
       setCurrentCashSession(cashData.find(s => s.status === 'open') ?? null);
+      setLoading(false);
+
+      Promise.all([
+        fetchTransactions(),
+        isCleaningTenant ? Promise.resolve([] as Commission[]) : fetchCommissions(),
+      ])
+        .then(([txData, commData]) => {
+          if (requestId !== fetchRequestRef.current) return;
+          setTransactions(txData);
+          setCommissions(joinCommissions(commData, professionalsData));
+        })
+        .catch((err) => {
+          if (requestId !== fetchRequestRef.current) return;
+          console.error('Error fetching background financial data:', err);
+        });
     } catch (err) {
       console.error('Error fetching data:', err);
-    } finally {
       setLoading(false);
     }
   };
