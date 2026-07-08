@@ -140,6 +140,7 @@ export function Schedule() {
   const isAdmin = userRole === 'admin';
   const canViewSchedule = isAdmin || hasPermission('view_schedule') || hasPermission('edit_schedule');
   const canEditSchedule = isAdmin || hasPermission('edit_schedule');
+  const canCloseBill = isAdmin || hasPermission('close_bill') || hasPermission('manage_cash_flow');
 
   const scheduleProfessionals = professionals.filter(p => p.is_active && p.has_schedule);
 
@@ -570,6 +571,15 @@ export function Schedule() {
   };
 
   const handleOpenCloseBill = () => {
+    if (!canCloseBill) {
+      toast({
+        variant: "destructive",
+        title: "Sem permissão",
+        description: "Seu acesso não permite receber ou encerrar comandas."
+      });
+      return;
+    }
+
     if (isCleaningTenant) {
       setIsAppointmentDetailOpen(false);
       toast({
@@ -1158,6 +1168,7 @@ export function Schedule() {
         services={services}
         serviceProfessionalLinks={serviceProfessionalLinks}
         isAdmin={isAdmin}
+        canCloseBill={canCloseBill}
         canOpenBill={!isCleaningTenant}
         canEditAppointment={canEditSchedule}
         onUpdateStatus={handleUpdateStatus}

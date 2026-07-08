@@ -83,6 +83,7 @@ interface AppointmentDetailDialogProps {
   services: Service[];
   serviceProfessionalLinks: ServiceProfessional[];
   isAdmin: boolean;
+  canCloseBill?: boolean;
   canOpenBill?: boolean;
   canEditAppointment: boolean;
   onUpdateStatus: (status: Appointment['status']) => void;
@@ -157,6 +158,7 @@ export function AppointmentDetailDialog({
   services,
   serviceProfessionalLinks,
   isAdmin,
+  canCloseBill = false,
   canOpenBill = true,
   canEditAppointment,
   onUpdateStatus,
@@ -488,7 +490,7 @@ export function AppointmentDetailDialog({
                   )}
                 </div>
               </div>
-              {isAdmin && canOpenBill && (
+              {canCloseBill && canOpenBill && (
                 <Button 
                   onClick={onOpenCloseBill}
                   disabled={appointment.status === 'completed' || appointment.status === 'cancelled'}

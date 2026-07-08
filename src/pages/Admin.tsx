@@ -18,7 +18,7 @@ import { CleaningStaffPermissions } from '@/components/cleaning/CleaningStaffPer
 
 type AccessRole = 'none' | 'owner' | 'admin' | 'professional' | 'staff';
 type AccessPresetId = 'reception' | 'professional' | 'financial' | 'custom';
-type PermissionId = 'view_schedule' | 'edit_schedule' | 'view_clients' | 'view_commissions' | 'manage_cash_flow';
+type PermissionId = 'view_schedule' | 'edit_schedule' | 'view_clients' | 'close_bill' | 'view_commissions' | 'manage_cash_flow';
 type NewAccessType = 'professional' | 'staff';
 
 interface InternalAccessRow {
@@ -42,6 +42,7 @@ const PERMISSIONS: { id: PermissionId; label: string }[] = [
   { id: 'view_schedule', label: 'Visualizar Agenda' },
   { id: 'edit_schedule', label: 'Alterar Agendamentos' },
   { id: 'view_clients', label: 'Visualizar Clientes' },
+  { id: 'close_bill', label: 'Receber e Encerrar Comanda' },
   { id: 'view_commissions', label: 'Visualizar Comissões' },
   { id: 'manage_cash_flow', label: 'Gerenciar Caixa' },
 ];
@@ -50,8 +51,8 @@ const ACCESS_PROFILES: { id: AccessPresetId; label: string; description: string;
   {
     id: 'reception',
     label: 'Recepção',
-    description: 'Agenda e clientes, sem acesso a comissões e caixa.',
-    permissions: ['view_schedule', 'edit_schedule', 'view_clients'],
+    description: 'Agenda, clientes e recebimento de comandas, sem acesso ao caixa completo.',
+    permissions: ['view_schedule', 'edit_schedule', 'view_clients', 'close_bill'],
   },
   {
     id: 'professional',

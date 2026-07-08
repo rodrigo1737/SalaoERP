@@ -6,6 +6,7 @@ const allowedPermissions = new Set([
   "view_schedule",
   "edit_schedule",
   "view_clients",
+  "close_bill",
   "view_commissions",
   "manage_cash_flow",
 ]);
