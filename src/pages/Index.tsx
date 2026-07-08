@@ -1,4 +1,4 @@
-import { useEffect } from 'react';
+import { useCallback, useEffect } from 'react';
 import { useParams, useNavigate } from 'react-router-dom';
 import { Sidebar } from '@/components/layout/Sidebar';
 import { TenantStatusBanner } from '@/components/layout/TenantStatusBanner';
@@ -26,6 +26,7 @@ import { hasCleaningModulePackage, isCleaningControlTenant } from '@/lib/tenantS
 import { SuppliersList } from '@/components/stock/SuppliersList';
 import { PurchaseEntry } from '@/components/stock/PurchaseEntry';
 import { StockMovements } from '@/components/stock/StockMovements';
+import { Loader2 } from 'lucide-react';
 
 // Páginas válidas por perfil
 const ADMIN_PAGES = ['dashboard', 'agenda', 'clients', 'professionals', 'services', 'products', 'aesthetics',
@@ -37,11 +38,11 @@ const CLEANING_BLOCKED_PAGES = ['agenda', 'services', 'products', 'suppliers', '
 const Index = () => {
   const { page } = useParams<{ page?: string }>();
   const navigate = useNavigate();
-  const { userRole, isSuperAdmin, hasPermission, currentTenant } = useAuth();
+  const { userRole, isSuperAdmin, hasPermission, currentTenant, loading } = useAuth();
   const isAdmin = userRole === 'admin';
   const isCleaningTenant = isCleaningControlTenant(currentTenant);
 
-  const canAccessPage = (targetPage: string) => {
+  const canAccessPage = useCallback((targetPage: string) => {
     if (isSuperAdmin) return SUPER_ADMIN_PAGES.includes(targetPage);
     if (isCleaningTenant && CLEANING_BLOCKED_PAGES.includes(targetPage)) return false;
     if (targetPage === 'aesthetics') {
@@ -59,35 +60,45 @@ const Index = () => {
     if (targetPage === 'cashier') return hasPermission('manage_cash_flow');
     if (targetPage === 'settings') return true;
     return PROFESSIONAL_PAGES.includes(targetPage);
-  };
+  }, [hasPermission, isAdmin, isCleaningTenant, isSuperAdmin, currentTenant]);
 
-  const getDefaultPage = () => {
+  const getDefaultPage = useCallback(() => {
     if (isSuperAdmin) return 'super-dashboard';
     if (isAdmin) return 'dashboard';
     if (isCleaningTenant && canAccessPage('cleaning')) return 'cleaning';
     if (canAccessPage('agenda')) return 'agenda';
     if (canAccessPage('commissions')) return 'commissions';
     return 'settings';
-  };
+  }, [canAccessPage, isAdmin, isCleaningTenant, isSuperAdmin]);
 
   // Redireciona para página padrão se nenhuma foi informada na URL
   useEffect(() => {
+    if (loading) return;
     if (!page) {
       navigate(`/app/${getDefaultPage()}`, { replace: true });
     }
-  }, [page, isSuperAdmin, isAdmin, navigate, hasPermission, currentTenant?.package_type]);
+  }, [page, navigate, getDefaultPage, loading]);
 
   // Redireciona profissional que tentou acessar página de admin
   useEffect(() => {
+    if (loading) return;
     if (!isSuperAdmin && page && !canAccessPage(page)) {
       navigate(`/app/${getDefaultPage()}`, { replace: true });
     }
     if (isSuperAdmin && page && !SUPER_ADMIN_PAGES.includes(page)) {
       navigate('/app/super-dashboard', { replace: true });
     }
-  }, [page, isSuperAdmin, isAdmin, navigate, hasPermission, currentTenant?.package_type]);
+  }, [page, isSuperAdmin, navigate, canAccessPage, getDefaultPage, loading]);
 
   const currentPage = page ?? getDefaultPage();
+
+  if (loading) {
+    return (
+      <div className="min-h-screen flex items-center justify-center bg-background">
+        <Loader2 className="h-8 w-8 animate-spin text-primary" />
+      </div>
+    );
+  }
 
   const handleNavigate = (targetPage: string) => {
     const resolvedPage = isCleaningTenant && targetPage === 'agenda' ? 'cleaning' : targetPage;
