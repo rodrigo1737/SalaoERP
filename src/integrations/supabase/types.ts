@@ -532,6 +532,7 @@ export type Database = {
           email: string
           full_name: string | null
           id: string
+          is_owner: boolean
           tenant_id: string | null
           updated_at: string
         }
@@ -540,6 +541,7 @@ export type Database = {
           email: string
           full_name?: string | null
           id: string
+          is_owner?: boolean
           tenant_id?: string | null
           updated_at?: string
         }
@@ -548,6 +550,7 @@ export type Database = {
           email?: string
           full_name?: string | null
           id?: string
+          is_owner?: boolean
           tenant_id?: string | null
           updated_at?: string
         }
@@ -1215,7 +1218,7 @@ export type Database = {
       }
     }
     Enums: {
-      app_role: "admin" | "professional"
+      app_role: "admin" | "professional" | "staff"
       payment_method_type: "pix" | "boleto" | "cartao" | "transferencia"
       permission_type:
         | "view_schedule"
@@ -1352,7 +1355,7 @@ export type CompositeTypes<
 export const Constants = {
   public: {
     Enums: {
-      app_role: ["admin", "professional"],
+      app_role: ["admin", "professional", "staff"],
       payment_method_type: ["pix", "boleto", "cartao", "transferencia"],
       permission_type: [
         "view_schedule",

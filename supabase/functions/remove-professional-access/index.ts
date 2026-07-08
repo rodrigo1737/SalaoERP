@@ -8,13 +8,25 @@ Deno.serve(async (req) => {
 
   try {
     const supabaseAdmin = getAdminClient();
-    const { tenantId, professionalId, userId } = await req.json();
+    const { tenantId, professionalId, userId, role } = await req.json();
+    const targetRole = role === "staff" ? "staff" : "professional";
 
-    if (!tenantId || !professionalId || !userId) {
-      return jsonResponse({ error: "tenantId, professionalId and userId are required" }, 400);
+    if (!tenantId || !userId) {
+      return jsonResponse({ error: "tenantId and userId are required" }, 400);
     }
 
     await requireTenantAdmin(req, supabaseAdmin, tenantId);
+
+    const { data: profile, error: profileError } = await supabaseAdmin
+      .from("profiles")
+      .select("is_owner")
+      .eq("id", userId)
+      .maybeSingle();
+
+    if (profileError) return jsonResponse({ error: profileError.message }, 400);
+    if (profile?.is_owner) {
+      return jsonResponse({ error: "O acesso do owner não pode ser removido." }, 403);
+    }
 
     const { error: permissionsError } = await supabaseAdmin
       .from("user_permissions")
@@ -29,17 +41,19 @@ Deno.serve(async (req) => {
       .delete()
       .eq("tenant_id", tenantId)
       .eq("user_id", userId)
-      .eq("role", "professional");
+      .eq("role", targetRole);
 
     if (roleError) return jsonResponse({ error: roleError.message }, 400);
 
-    const { error: unlinkError } = await supabaseAdmin
-      .from("professionals")
-      .update({ user_id: null })
-      .eq("tenant_id", tenantId)
-      .eq("id", professionalId);
+    if (professionalId) {
+      const { error: unlinkError } = await supabaseAdmin
+        .from("professionals")
+        .update({ user_id: null })
+        .eq("tenant_id", tenantId)
+        .eq("id", professionalId);
 
-    if (unlinkError) return jsonResponse({ error: unlinkError.message }, 400);
+      if (unlinkError) return jsonResponse({ error: unlinkError.message }, 400);
+    }
 
     const { data: remainingRoles, error: remainingRolesError } = await supabaseAdmin
       .from("user_roles")

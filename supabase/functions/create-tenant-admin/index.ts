@@ -43,6 +43,7 @@ Deno.serve(async (req) => {
         email,
         full_name: fullName,
         tenant_id: tenantId,
+        is_owner: true,
       }, { onConflict: "id" }),
       supabaseAdmin.from("user_roles").upsert({
         user_id: userId,

@@ -2,7 +2,7 @@ import React, { createContext, useContext, useEffect, useState, useCallback } fr
 import { User, Session } from '@supabase/supabase-js';
 import { supabase } from '@/integrations/supabase/client';
 
-type UserRole = 'admin' | 'professional' | null;
+type UserRole = 'admin' | 'professional' | 'staff' | null;
 type TenantPackageType = 'salon' | 'aesthetic_clinic' | 'cleaning_control' | 'business_erp';
 
 interface Professional {
@@ -24,6 +24,7 @@ interface AuthContextType {
   session: Session | null;
   userRole: UserRole;
   currentProfessional: Professional | null;
+  isOwner: boolean;
   isSuperAdmin: boolean;
   currentTenant: Tenant | null;
   tenantId: string | null;
@@ -52,6 +53,7 @@ export const AuthProvider: React.FC<{ children: React.ReactNode }> = ({ children
   const [userRole, setUserRole] = useState<UserRole>(null);
   const [currentProfessional, setCurrentProfessional] = useState<Professional | null>(null);
   const [userPermissions, setUserPermissions] = useState<string[]>([]);
+  const [isOwner, setIsOwner] = useState(false);
   const [isSuperAdmin, setIsSuperAdmin] = useState(false);
   const [currentTenant, setCurrentTenant] = useState<Tenant | null>(null);
   const [tenantId, setTenantId] = useState<string | null>(null);
@@ -72,11 +74,12 @@ export const AuthProvider: React.FC<{ children: React.ReactNode }> = ({ children
       // Fetch user profile to get tenant_id
       const { data: profileData } = await supabase
         .from('profiles')
-        .select('tenant_id')
+        .select('tenant_id, is_owner')
         .eq('id', userId)
         .maybeSingle();
 
       const profileTenantId = profileData?.tenant_id ?? null;
+      setIsOwner(Boolean(profileData?.is_owner));
 
       if (profileTenantId) {
         setTenantId(profileTenantId);
@@ -140,6 +143,8 @@ export const AuthProvider: React.FC<{ children: React.ReactNode }> = ({ children
           setUserRole('admin');
         } else if (roles.includes('professional')) {
           setUserRole('professional');
+        } else if (roles.includes('staff')) {
+          setUserRole('staff');
         } else {
           setUserRole(null);
         }
@@ -213,6 +218,7 @@ export const AuthProvider: React.FC<{ children: React.ReactNode }> = ({ children
           setUserRole(null);
           setUserPermissions([]);
           setCurrentProfessional(null);
+          setIsOwner(false);
           setIsSuperAdmin(false);
           setCurrentTenant(null);
           setTenantId(null);
@@ -282,6 +288,7 @@ export const AuthProvider: React.FC<{ children: React.ReactNode }> = ({ children
       setUserRole(null);
       setUserPermissions([]);
       setCurrentProfessional(null);
+      setIsOwner(false);
       setIsSuperAdmin(false);
       setCurrentTenant(null);
       setTenantId(null);
@@ -347,6 +354,7 @@ export const AuthProvider: React.FC<{ children: React.ReactNode }> = ({ children
       session,
       userRole,
       currentProfessional,
+      isOwner,
       isSuperAdmin,
       currentTenant,
       tenantId,

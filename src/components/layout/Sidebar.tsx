@@ -83,7 +83,7 @@ export function Sidebar({ currentPage, onNavigate }: SidebarProps) {
   const [mobileOpen, setMobileOpen] = useState(false);
   const [expandedMenus, setExpandedMenus] = useState<string[]>(['stock']); // Stock expanded by default
   const navigate = useNavigate();
-  const { user, userRole, isSuperAdmin, currentTenant, signOut, hasPermission } = useAuth();
+  const { user, userRole, isOwner, isSuperAdmin, currentTenant, signOut, hasPermission } = useAuth();
   const { settings: tenantSettings } = useTenantSettings();
   const isCleaningTenant = isCleaningControlTenant(currentTenant);
   const cleaningHiddenItems = ['agenda', 'services', 'products', 'stock', 'cashier', 'commissions'];
@@ -183,7 +183,17 @@ export function Sidebar({ currentPage, onNavigate }: SidebarProps) {
               {user.email}
             </p>
             <p className="text-xs text-sidebar-foreground/60 capitalize">
-              {isSuperAdmin ? 'Administrador Global' : (userRole === 'admin' ? 'Administrador' : userRole === 'professional' ? 'Profissional' : 'Usuário')}
+              {isSuperAdmin
+                ? 'Administrador Global'
+                : isOwner
+                  ? 'Owner'
+                  : userRole === 'admin'
+                    ? 'Administrador'
+                    : userRole === 'professional'
+                      ? 'Profissional'
+                      : userRole === 'staff'
+                        ? 'Equipe interna'
+                        : 'Usuário'}
             </p>
           </div>
         )}

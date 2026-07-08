@@ -38,7 +38,7 @@ import { Label } from '@/components/ui/label';
 import { Textarea } from '@/components/ui/textarea';
 import { Avatar, AvatarFallback, AvatarImage } from '@/components/ui/avatar';
 import { cn } from '@/lib/utils';
-import { Appointment } from '@/context/DataContext';
+import { Appointment, ServiceProfessional } from '@/context/DataContext';
 import { format } from 'date-fns';
 import { ptBR } from 'date-fns/locale';
 import { Calendar } from '@/components/ui/calendar';
@@ -48,6 +48,8 @@ import {
   PopoverTrigger,
 } from '@/components/ui/popover';
 import { ClientHistoryDialog } from './ClientHistoryDialog';
+import { getAvailableServicesForProfessional, getServiceDurationForProfessional, isServiceAvailableForProfessional } from '@/lib/serviceProfessionalAvailability';
+import { toast } from 'sonner';
 
 interface Professional {
   id: string;
@@ -79,6 +81,7 @@ interface AppointmentDetailDialogProps {
   appointments: Appointment[];
   professionals: Professional[];
   services: Service[];
+  serviceProfessionalLinks: ServiceProfessional[];
   isAdmin: boolean;
   canOpenBill?: boolean;
   canEditAppointment: boolean;
@@ -152,6 +155,7 @@ export function AppointmentDetailDialog({
   appointments,
   professionals,
   services,
+  serviceProfessionalLinks,
   isAdmin,
   canOpenBill = true,
   canEditAppointment,
@@ -176,6 +180,18 @@ export function AppointmentDetailDialog({
     end_time: string;
     notes: string;
   } | null>(null);
+
+  const getServicesForProfessional = (professionalId: string, currentServiceId?: string) => (
+    getAvailableServicesForProfessional(services, serviceProfessionalLinks, professionalId, currentServiceId)
+  );
+  const getProfessionalsForService = (serviceId: string, currentProfessionalId?: string) => (
+    !serviceId
+      ? professionals
+      : professionals.filter((professional) => (
+          isServiceAvailableForProfessional(serviceProfessionalLinks, professional.id, serviceId)
+          || professional.id === currentProfessionalId
+        ))
+  );
 
   // Initialize with appointment data
   useEffect(() => {
@@ -226,9 +242,41 @@ export function AppointmentDetailDialog({
       if (field === 'serviceId') {
         const service = services.find(s => s.id === value);
         if (service) {
+          const resolvedDuration = getServiceDurationForProfessional(
+            services,
+            serviceProfessionalLinks,
+            updatedRow.professionalId,
+            service.id,
+          ) ?? service.duration_minutes;
           updatedRow.value = service.default_price.toString();
-          updatedRow.duration = service.duration_minutes.toString();
-          updatedRow.endTime = calculateEndTime(updatedRow.startTime, service.duration_minutes.toString());
+          updatedRow.duration = resolvedDuration.toString();
+          updatedRow.endTime = calculateEndTime(updatedRow.startTime, resolvedDuration.toString());
+        }
+      }
+
+      if (field === 'professionalId' && updatedRow.serviceId) {
+        const stillAvailable = isServiceAvailableForProfessional(
+          serviceProfessionalLinks,
+          value,
+          updatedRow.serviceId,
+        );
+
+        if (!stillAvailable) {
+          updatedRow.serviceId = '';
+          updatedRow.value = '';
+          updatedRow.duration = '30';
+          updatedRow.endTime = calculateEndTime(updatedRow.startTime, '30');
+        } else {
+          const resolvedDuration = getServiceDurationForProfessional(
+            services,
+            serviceProfessionalLinks,
+            value,
+            updatedRow.serviceId,
+          );
+          if (resolvedDuration) {
+            updatedRow.duration = resolvedDuration.toString();
+            updatedRow.endTime = calculateEndTime(updatedRow.startTime, resolvedDuration.toString());
+          }
         }
       }
       
@@ -293,6 +341,21 @@ export function AppointmentDetailDialog({
     
     // Use the first (main) service row for the appointment
     const mainRow = serviceRows[0];
+    if (!mainRow.serviceId || !mainRow.professionalId) {
+      toast.error('Selecione o serviço e o profissional principal para salvar o agendamento.');
+      return;
+    }
+
+    const invalidRow = serviceRows.find((row) => (
+      !row.serviceId
+      || !row.professionalId
+      || !isServiceAvailableForProfessional(serviceProfessionalLinks, row.professionalId, row.serviceId)
+    ));
+
+    if (invalidRow) {
+      toast.error('Existe um serviço que não está habilitado para o profissional selecionado.');
+      return;
+    }
     
     const [startHour, startMin] = mainRow.startTime.split(':').map(Number);
     
@@ -501,7 +564,7 @@ export function AppointmentDetailDialog({
                           <SelectValue placeholder="Selecione" />
                         </SelectTrigger>
                         <SelectContent>
-                          {services.map(s => (
+                          {getServicesForProfessional(row.professionalId, row.serviceId).map(s => (
                             <SelectItem key={s.id} value={s.id}>{s.name}</SelectItem>
                           ))}
                         </SelectContent>
@@ -517,7 +580,7 @@ export function AppointmentDetailDialog({
                           <SelectValue placeholder="Selecione" />
                         </SelectTrigger>
                         <SelectContent>
-                          {professionals.map(p => (
+                          {getProfessionalsForService(row.serviceId, row.professionalId).map(p => (
                             <SelectItem key={p.id} value={p.id}>{p.nickname}</SelectItem>
                           ))}
                         </SelectContent>

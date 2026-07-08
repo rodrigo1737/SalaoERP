@@ -28,6 +28,7 @@ interface BillItemsEditorProps {
   items: BillItem[];
   onItemsChange: (items: BillItem[]) => void;
   services: Service[];
+  availableServices?: Service[];
   products: Product[];
   baseServiceName?: string;
   baseServiceValue?: number;
@@ -38,6 +39,7 @@ export function BillItemsEditor({
   items,
   onItemsChange,
   services,
+  availableServices,
   products,
   baseServiceName,
   baseServiceValue,
@@ -48,10 +50,12 @@ export function BillItemsEditor({
   const [selectedProductId, setSelectedProductId] = useState('');
   const [productQty, setProductQty] = useState('1');
 
+  const serviceOptions = availableServices ?? services;
+
   const handleAddService = () => {
     if (!selectedServiceId) return;
     
-    const service = services.find(s => s.id === selectedServiceId);
+    const service = serviceOptions.find(s => s.id === selectedServiceId);
     if (!service) return;
 
     const newItem: BillItem = {
@@ -222,7 +226,7 @@ export function BillItemsEditor({
                 <SelectValue placeholder="Selecionar serviço" />
               </SelectTrigger>
               <SelectContent>
-                {services.map(s => (
+                {serviceOptions.map(s => (
                   <SelectItem key={s.id} value={s.id}>
                     {s.name} - R$ {s.default_price.toFixed(2)}
                   </SelectItem>

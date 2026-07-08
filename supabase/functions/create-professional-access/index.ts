@@ -10,6 +10,8 @@ const allowedPermissions = new Set([
   "manage_cash_flow",
 ]);
 
+const allowedRoles = new Set(["professional", "staff"]);
+
 Deno.serve(async (req) => {
   if (req.method === "OPTIONS") {
     return new Response(null, { headers: corsHeaders });
@@ -17,7 +19,7 @@ Deno.serve(async (req) => {
 
   try {
     const supabaseAdmin = getAdminClient();
-    const { tenantId, email, password, fullName, permissions } = await req.json();
+    const { tenantId, email, password, fullName, permissions, role, professionalId } = await req.json();
 
     if (!tenantId || !email || !password || !fullName) {
       return jsonResponse({ error: "tenantId, email, password and fullName are required" }, 400);
@@ -34,6 +36,7 @@ Deno.serve(async (req) => {
     }
 
     const normalizedEmail = String(email).trim().toLowerCase();
+    const normalizedRole = allowedRoles.has(role) ? role : "professional";
     const selectedPermissions = Array.isArray(permissions)
       ? permissions.filter((permission) => allowedPermissions.has(permission))
       : [];
@@ -55,10 +58,11 @@ Deno.serve(async (req) => {
         email: normalizedEmail,
         full_name: fullName,
         tenant_id: tenantId,
+        is_owner: false,
       }, { onConflict: "id" }),
       supabaseAdmin.from("user_roles").upsert({
         user_id: userId,
-        role: "professional",
+        role: normalizedRole,
         tenant_id: tenantId,
       }, { onConflict: "user_id,role,tenant_id" }),
     ];
@@ -85,6 +89,25 @@ Deno.serve(async (req) => {
       if (permissionsError) {
         await supabaseAdmin.auth.admin.deleteUser(userId);
         return jsonResponse({ error: permissionsError.message }, 400);
+      }
+    }
+
+    if (professionalId) {
+      const { error: professionalError } = await supabaseAdmin
+        .from("professionals")
+        .update({
+          user_id: userId,
+          email: normalizedEmail,
+        })
+        .eq("tenant_id", tenantId)
+        .eq("id", professionalId);
+
+      if (professionalError) {
+        await supabaseAdmin.from("user_permissions").delete().eq("tenant_id", tenantId).eq("user_id", userId);
+        await supabaseAdmin.from("user_roles").delete().eq("tenant_id", tenantId).eq("user_id", userId);
+        await supabaseAdmin.from("profiles").delete().eq("id", userId);
+        await supabaseAdmin.auth.admin.deleteUser(userId);
+        return jsonResponse({ error: professionalError.message }, 400);
       }
     }
 

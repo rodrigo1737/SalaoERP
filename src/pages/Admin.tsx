@@ -1,35 +1,44 @@
-import React, { useState, useEffect, useCallback } from 'react';
+import React, { useCallback, useEffect, useState } from 'react';
 import { useNavigate } from 'react-router-dom';
+import { ArrowLeft, Edit, Loader2, Shield, Trash2, UserPlus } from 'lucide-react';
 import { useAuth } from '@/contexts/AuthContext';
 import { supabase } from '@/integrations/supabase/client';
 import { Button } from '@/components/ui/button';
-import { Input } from '@/components/ui/input';
-import { Label } from '@/components/ui/label';
 import { Card, CardContent, CardDescription, CardHeader, CardTitle } from '@/components/ui/card';
 import { Checkbox } from '@/components/ui/checkbox';
-import { Table, TableBody, TableCell, TableHead, TableHeader, TableRow } from '@/components/ui/table';
 import { Dialog, DialogContent, DialogDescription, DialogHeader, DialogTitle, DialogTrigger } from '@/components/ui/dialog';
+import { Input } from '@/components/ui/input';
+import { Label } from '@/components/ui/label';
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from '@/components/ui/select';
+import { Table, TableBody, TableCell, TableHead, TableHeader, TableRow } from '@/components/ui/table';
 import { useToast } from '@/hooks/use-toast';
-import { ArrowLeft, UserPlus, Shield, Loader2, Trash2, Edit } from 'lucide-react';
 import { validatePassword, getPasswordRequirementsMessage } from '@/lib/passwordValidation';
 import { getSupabaseErrorMessage } from '@/lib/supabaseErrors';
 import { CleaningStaffPermissions } from '@/components/cleaning/CleaningStaffPermissions';
 
-interface ProfessionalAccess {
-  id: string;
-  user_id: string | null;
+type AccessRole = 'none' | 'owner' | 'admin' | 'professional' | 'staff';
+type AccessPresetId = 'reception' | 'professional' | 'financial' | 'custom';
+type PermissionId = 'view_schedule' | 'edit_schedule' | 'view_clients' | 'view_commissions' | 'manage_cash_flow';
+type NewAccessType = 'professional' | 'staff';
+
+interface InternalAccessRow {
+  rowId: string;
+  professionalId: string | null;
+  userId: string | null;
   name: string;
-  nickname: string;
+  nickname: string | null;
   email: string | null;
-  full_name: string | null;
-  created_at: string;
-  is_active: boolean;
-  has_access: boolean;
-  permissions: string[];
+  fullName: string | null;
+  createdAt: string;
+  isActive: boolean;
+  hasAccess: boolean;
+  permissions: PermissionId[];
+  role: AccessRole;
+  isOwner: boolean;
+  professionalType: 'owner' | 'employee' | 'freelancer' | null;
 }
 
-const PERMISSIONS = [
+const PERMISSIONS: { id: PermissionId; label: string }[] = [
   { id: 'view_schedule', label: 'Visualizar Agenda' },
   { id: 'edit_schedule', label: 'Alterar Agendamentos' },
   { id: 'view_clients', label: 'Visualizar Clientes' },
@@ -37,7 +46,7 @@ const PERMISSIONS = [
   { id: 'manage_cash_flow', label: 'Gerenciar Caixa' },
 ];
 
-const ACCESS_PROFILES = [
+const ACCESS_PROFILES: { id: AccessPresetId; label: string; description: string; permissions: PermissionId[] }[] = [
   {
     id: 'reception',
     label: 'Recepção',
@@ -64,124 +73,200 @@ const ACCESS_PROFILES = [
   },
 ];
 
+const getPresetPermissions = (presetId: AccessPresetId) => (
+  ACCESS_PROFILES.find((profile) => profile.id === presetId)?.permissions ?? []
+);
+
+const deriveAccessRole = (
+  roleRows: string[],
+  isOwner: boolean,
+  professionalType: InternalAccessRow['professionalType'],
+): AccessRole => {
+  if (isOwner || (roleRows.includes('admin') && professionalType === 'owner')) return 'owner';
+  if (roleRows.includes('admin')) return 'admin';
+  if (roleRows.includes('staff')) return 'staff';
+  if (roleRows.includes('professional')) return 'professional';
+  return 'none';
+};
+
+const roleLabels: Record<AccessRole, string> = {
+  none: 'Sem acesso',
+  owner: 'Owner',
+  admin: 'Administrador',
+  professional: 'Profissional',
+  staff: 'Equipe interna',
+};
+
+const roleBadgeClasses: Record<AccessRole, string> = {
+  none: 'bg-muted text-muted-foreground',
+  owner: 'bg-primary text-primary-foreground',
+  admin: 'bg-primary/10 text-primary',
+  professional: 'bg-emerald-100 text-emerald-700',
+  staff: 'bg-amber-100 text-amber-700',
+};
+
 const Admin: React.FC = () => {
   const navigate = useNavigate();
   const { userRole, tenantId, loading: authLoading } = useAuth();
   const { toast } = useToast();
-  
-  const [professionals, setProfessionals] = useState<ProfessionalAccess[]>([]);
+
+  const [internalUsers, setInternalUsers] = useState<InternalAccessRow[]>([]);
   const [loading, setLoading] = useState(true);
   const [isAddDialogOpen, setIsAddDialogOpen] = useState(false);
   const [isEditDialogOpen, setIsEditDialogOpen] = useState(false);
-  const [selectedProfessional, setSelectedProfessional] = useState<ProfessionalAccess | null>(null);
+  const [selectedAccess, setSelectedAccess] = useState<InternalAccessRow | null>(null);
   const [isSubmitting, setIsSubmitting] = useState(false);
-  
-  const [newProfessional, setNewProfessional] = useState({
+  const [newAccess, setNewAccess] = useState({
+    accessType: 'professional' as NewAccessType,
     professionalId: '',
+    fullName: '',
     email: '',
     password: '',
-    profilePreset: 'professional',
-    permissions: [] as string[],
+    profilePreset: 'professional' as AccessPresetId,
+    permissions: getPresetPermissions('professional'),
   });
 
   useEffect(() => {
     if (!authLoading && userRole !== 'admin') {
       toast({
-        variant: "destructive",
-        title: "Acesso negado",
-        description: "Você não tem permissão para acessar esta página",
+        variant: 'destructive',
+        title: 'Acesso negado',
+        description: 'Você não tem permissão para acessar esta página.',
       });
       navigate('/');
     }
-  }, [userRole, authLoading, navigate, toast]);
+  }, [authLoading, navigate, toast, userRole]);
 
-  const fetchProfessionals = useCallback(async () => {
+  const fetchInternalUsers = useCallback(async () => {
     if (!tenantId) {
-      setProfessionals([]);
+      setInternalUsers([]);
       setLoading(false);
       return;
     }
 
     try {
-      const { data: professionalsData, error: professionalsError } = await supabase
-        .from('professionals')
-        .select('id, user_id, name, nickname, email, is_active, created_at')
-        .eq('tenant_id', tenantId)
-        .is('deleted_at', null)
-        .order('nickname');
-
-      if (professionalsError) throw professionalsError;
-
-      const professionalRows = professionalsData || [];
-      const userIds = professionalRows
-        .map((professional) => professional.user_id)
-        .filter(Boolean) as string[];
-
-      if (professionalRows.length === 0) {
-        setProfessionals([]);
-        setLoading(false);
-        return;
-      }
-
-      const uniqueUserIds = Array.from(new Set(userIds));
-      const [{ data: rolesData, error: rolesError }, { data: profilesData, error: profilesError }, { data: permissionsData, error: permissionsError }] = await Promise.all([
-        uniqueUserIds.length
-          ? supabase
-              .from('user_roles')
-              .select('user_id, role')
-              .eq('role', 'professional')
-              .eq('tenant_id', tenantId)
-              .in('user_id', uniqueUserIds)
-          : Promise.resolve({ data: [], error: null }),
-        uniqueUserIds.length
-          ? supabase
-              .from('profiles')
-              .select('id, email, full_name, created_at')
-              .eq('tenant_id', tenantId)
-              .in('id', uniqueUserIds)
-          : Promise.resolve({ data: [], error: null }),
-        uniqueUserIds.length
-          ? supabase
-              .from('user_permissions')
-              .select('user_id, permission')
-              .eq('tenant_id', tenantId)
-              .in('user_id', uniqueUserIds)
-          : Promise.resolve({ data: [], error: null }),
+      const [
+        { data: professionalsData, error: professionalsError },
+        { data: profilesData, error: profilesError },
+        { data: rolesData, error: rolesError },
+        { data: permissionsData, error: permissionsError },
+      ] = await Promise.all([
+        supabase
+          .from('professionals')
+          .select('id, user_id, name, nickname, email, is_active, created_at, type')
+          .eq('tenant_id', tenantId)
+          .is('deleted_at', null)
+          .order('nickname'),
+        supabase
+          .from('profiles')
+          .select('id, email, full_name, created_at, is_owner')
+          .eq('tenant_id', tenantId),
+        supabase
+          .from('user_roles')
+          .select('user_id, role')
+          .eq('tenant_id', tenantId),
+        supabase
+          .from('user_permissions')
+          .select('user_id, permission')
+          .eq('tenant_id', tenantId),
       ]);
 
-      if (rolesError) throw rolesError;
+      if (professionalsError) throw professionalsError;
       if (profilesError) throw profilesError;
+      if (rolesError) throw rolesError;
       if (permissionsError) throw permissionsError;
 
-      const professionalsWithPermissions = professionalRows.map((professional) => {
-        const profile = profilesData?.find((item: any) => item.id === professional.user_id);
-        const role = rolesData?.find((item: any) => item.user_id === professional.user_id);
+      const professionalRows = professionalsData ?? [];
+      const profileRows = profilesData ?? [];
+      const roleRows = rolesData ?? [];
+      const permissionRows = permissionsData ?? [];
+
+      const professionalByUserId = new Map<string, typeof professionalRows[number]>();
+      professionalRows.forEach((professional) => {
+        if (professional.user_id) {
+          professionalByUserId.set(professional.user_id, professional);
+        }
+      });
+
+      const profileById = new Map(profileRows.map((profile) => [profile.id, profile]));
+      const rolesByUserId = new Map<string, string[]>();
+      const permissionsByUserId = new Map<string, PermissionId[]>();
+
+      roleRows.forEach((role) => {
+        const current = rolesByUserId.get(role.user_id) ?? [];
+        current.push(role.role);
+        rolesByUserId.set(role.user_id, current);
+      });
+
+      permissionRows.forEach((permission) => {
+        const current = permissionsByUserId.get(permission.user_id) ?? [];
+        current.push(permission.permission as PermissionId);
+        permissionsByUserId.set(permission.user_id, current);
+      });
+
+      const userIds = new Set<string>([
+        ...profileRows.map((profile) => profile.id),
+        ...professionalRows.map((professional) => professional.user_id).filter(Boolean) as string[],
+        ...roleRows.map((role) => role.user_id),
+      ]);
+
+      const resolvedRows: InternalAccessRow[] = Array.from(userIds).map((userId) => {
+        const profile = profileById.get(userId);
+        const professional = professionalByUserId.get(userId) ?? null;
+        const roles = rolesByUserId.get(userId) ?? [];
+        const permissions = permissionsByUserId.get(userId) ?? [];
+        const role = deriveAccessRole(roles, Boolean(profile?.is_owner), professional?.type ?? null);
 
         return {
-          id: professional.id,
-          user_id: professional.user_id,
-          name: professional.name,
-          nickname: professional.nickname,
-          email: profile?.email || professional.email,
-          full_name: profile?.full_name || professional.name,
-          created_at: profile?.created_at || professional.created_at,
-          is_active: professional.is_active,
-          has_access: Boolean(professional.user_id && role),
-          permissions: professional.user_id
-            ? permissionsData
-              ?.filter((permission: any) => permission.user_id === professional.user_id)
-              .map((permission: any) => permission.permission) || []
-            : [],
+          rowId: `user:${userId}`,
+          professionalId: professional?.id ?? null,
+          userId,
+          name: professional?.name ?? profile?.full_name ?? profile?.email ?? 'Usuário interno',
+          nickname: professional?.nickname ?? null,
+          email: profile?.email ?? professional?.email ?? null,
+          fullName: profile?.full_name ?? professional?.name ?? null,
+          createdAt: profile?.created_at ?? professional?.created_at ?? new Date().toISOString(),
+          isActive: professional?.is_active ?? true,
+          hasAccess: roles.length > 0,
+          permissions,
+          role,
+          isOwner: Boolean(profile?.is_owner),
+          professionalType: professional?.type ?? null,
         };
       });
 
-      setProfessionals(professionalsWithPermissions);
+      const unlinkedProfessionals: InternalAccessRow[] = professionalRows
+        .filter((professional) => !professional.user_id)
+        .map((professional) => ({
+          rowId: `professional:${professional.id}`,
+          professionalId: professional.id,
+          userId: null,
+          name: professional.name,
+          nickname: professional.nickname,
+          email: professional.email ?? null,
+          fullName: professional.name,
+          createdAt: professional.created_at,
+          isActive: professional.is_active,
+          hasAccess: false,
+          permissions: [],
+          role: 'none',
+          isOwner: professional.type === 'owner',
+          professionalType: professional.type,
+        }));
+
+      const rows = [...resolvedRows, ...unlinkedProfessionals].sort((first, second) => {
+        if (first.role === 'owner' && second.role !== 'owner') return -1;
+        if (first.role !== 'owner' && second.role === 'owner') return 1;
+        return first.name.localeCompare(second.name, 'pt-BR');
+      });
+
+      setInternalUsers(rows);
     } catch (error) {
-      console.error('Error fetching professionals:', error);
+      console.error('Error fetching internal users:', error);
       toast({
-        variant: "destructive",
-        title: "Erro",
-        description: "Não foi possível carregar os profissionais",
+        variant: 'destructive',
+        title: 'Erro',
+        description: 'Não foi possível carregar os usuários internos.',
       });
     } finally {
       setLoading(false);
@@ -190,111 +275,162 @@ const Admin: React.FC = () => {
 
   useEffect(() => {
     if (userRole === 'admin' && tenantId) {
-      fetchProfessionals();
+      fetchInternalUsers();
     }
-  }, [userRole, tenantId, fetchProfessionals]);
+  }, [fetchInternalUsers, tenantId, userRole]);
 
-  const handleAddProfessional = async () => {
-    if (!tenantId) {
+  const resetNewAccess = (accessType: NewAccessType = 'professional') => {
+    const preset = accessType === 'staff' ? 'reception' : 'professional';
+    setNewAccess({
+      accessType,
+      professionalId: '',
+      fullName: '',
+      email: '',
+      password: '',
+      profilePreset: preset,
+      permissions: [...getPresetPermissions(preset)],
+    });
+  };
+
+  const openCreateForProfessional = (row: InternalAccessRow) => {
+    setNewAccess({
+      accessType: 'professional',
+      professionalId: row.professionalId ?? '',
+      fullName: row.name,
+      email: row.email ?? '',
+      password: '',
+      profilePreset: 'professional',
+      permissions: [...getPresetPermissions('professional')],
+    });
+    setIsAddDialogOpen(true);
+  };
+
+  const applyPreset = (presetId: AccessPresetId, mode: 'new' | 'edit') => {
+    const permissions = [...getPresetPermissions(presetId)];
+    if (mode === 'new') {
+      setNewAccess((prev) => ({
+        ...prev,
+        profilePreset: presetId,
+        permissions,
+      }));
+      return;
+    }
+
+    setSelectedAccess((prev) => prev ? ({
+      ...prev,
+      permissions,
+    }) : null);
+  };
+
+  const toggleNewPermission = (permissionId: PermissionId) => {
+    setNewAccess((prev) => ({
+      ...prev,
+      permissions: prev.permissions.includes(permissionId)
+        ? prev.permissions.filter((permission) => permission !== permissionId)
+        : [...prev.permissions, permissionId],
+    }));
+  };
+
+  const toggleEditPermission = (permissionId: PermissionId) => {
+    setSelectedAccess((prev) => prev ? ({
+      ...prev,
+      permissions: prev.permissions.includes(permissionId)
+        ? prev.permissions.filter((permission) => permission !== permissionId)
+        : [...prev.permissions, permissionId],
+    }) : null);
+  };
+
+  const handleAddAccess = async () => {
+    if (!tenantId) return;
+
+    const normalizedEmail = newAccess.email.trim().toLowerCase();
+    const passwordValidation = validatePassword(newAccess.password);
+    if (!normalizedEmail || !newAccess.password) {
       toast({
-        variant: "destructive",
-        title: "Erro",
-        description: "Tenant não identificado",
+        variant: 'destructive',
+        title: 'Campos obrigatórios',
+        description: 'Preencha email e senha para liberar o acesso.',
       });
       return;
     }
 
-    const selectedOperationalProfessional = professionals.find((professional) => professional.id === newProfessional.professionalId);
-
-    if (!selectedOperationalProfessional) {
-      toast({
-        variant: "destructive",
-        title: "Profissional obrigatório",
-        description: "Selecione um profissional cadastrado para criar o acesso",
-      });
-      return;
-    }
-
-    if (selectedOperationalProfessional.has_access || selectedOperationalProfessional.user_id) {
-      toast({
-        variant: "destructive",
-        title: "Acesso já existente",
-        description: "Este profissional já possui acesso ao sistema",
-      });
-      return;
-    }
-
-    if (!newProfessional.email || !newProfessional.password) {
-      toast({
-        variant: "destructive",
-        title: "Campos obrigatórios",
-        description: "Preencha email e senha",
-      });
-      return;
-    }
-
-    // Validate password strength
-    const passwordValidation = validatePassword(newProfessional.password);
     if (!passwordValidation.valid) {
       toast({
-        variant: "destructive",
-        title: "Senha fraca",
+        variant: 'destructive',
+        title: 'Senha fraca',
         description: `Requisitos: ${passwordValidation.errors.join(', ')}`,
       });
       return;
     }
 
-    setIsSubmitting(true);
+    let fullName = newAccess.fullName.trim();
+    let professionalId: string | undefined;
 
+    if (newAccess.accessType === 'professional') {
+      const professional = internalUsers.find((row) => row.professionalId === newAccess.professionalId);
+      if (!professional?.professionalId) {
+        toast({
+          variant: 'destructive',
+          title: 'Profissional obrigatório',
+          description: 'Selecione um profissional cadastrado para criar o acesso.',
+        });
+        return;
+      }
+
+      if (professional.hasAccess || professional.userId) {
+        toast({
+          variant: 'destructive',
+          title: 'Acesso já existente',
+          description: 'Este profissional já possui login cadastrado.',
+        });
+        return;
+      }
+
+      fullName = professional.name;
+      professionalId = professional.professionalId;
+    } else if (!fullName) {
+      toast({
+        variant: 'destructive',
+        title: 'Nome obrigatório',
+        description: 'Informe o nome do usuário interno.',
+      });
+      return;
+    }
+
+    setIsSubmitting(true);
     try {
       const { data, error } = await supabase.functions.invoke('create-professional-access', {
         body: {
           tenantId,
-          email: newProfessional.email,
-          password: newProfessional.password,
-          fullName: selectedOperationalProfessional.name,
-          permissions: newProfessional.permissions,
+          email: normalizedEmail,
+          password: newAccess.password,
+          fullName,
+          permissions: newAccess.permissions,
+          role: newAccess.accessType === 'staff' ? 'staff' : 'professional',
+          professionalId,
         },
       });
 
       if (error || data?.error) {
-        throw new Error(await getSupabaseErrorMessage(error, data, "Não foi possível adicionar o profissional"));
-      }
-
-      if (data?.userId) {
-        const { error: linkError } = await supabase
-          .from('professionals')
-          .update({
-            user_id: data.userId,
-            email: newProfessional.email.trim().toLowerCase(),
-          })
-          .eq('id', selectedOperationalProfessional.id)
-          .eq('tenant_id', tenantId);
-
-        if (linkError) throw linkError;
+        throw new Error(await getSupabaseErrorMessage(error, data, 'Não foi possível criar o acesso'));
       }
 
       toast({
-        title: "Acesso criado",
-        description: `${selectedOperationalProfessional.name} agora pode acessar o sistema`,
+        title: 'Acesso criado',
+        description: newAccess.accessType === 'staff'
+          ? `${fullName} agora pode acessar o sistema como equipe interna.`
+          : `${fullName} agora pode acessar o sistema como profissional.`,
       });
 
-      setNewProfessional({
-        professionalId: '',
-        email: '',
-        password: '',
-        profilePreset: 'professional',
-        permissions: [],
-      });
+      resetNewAccess();
       setIsAddDialogOpen(false);
-      fetchProfessionals();
+      await fetchInternalUsers();
     } catch (error: any) {
-      console.error('Error adding professional:', error);
-      const message = await getSupabaseErrorMessage(error, undefined, "Não foi possível adicionar o profissional");
+      console.error('Error creating access:', error);
       toast({
-        variant: "destructive",
-        title: "Erro ao adicionar",
-        description: message,
+        variant: 'destructive',
+        title: 'Erro ao criar acesso',
+        description: error.message || 'Não foi possível criar o acesso.',
       });
     } finally {
       setIsSubmitting(false);
@@ -302,58 +438,73 @@ const Admin: React.FC = () => {
   };
 
   const handleUpdatePermissions = async () => {
-    if (!selectedProfessional) return;
+    if (!tenantId || !selectedAccess?.userId) return;
+
+    if (selectedAccess.isOwner || selectedAccess.role === 'owner' || selectedAccess.role === 'admin') {
+      toast({
+        variant: 'destructive',
+        title: 'Acesso protegido',
+        description: 'O perfil de owner/administrador principal não pode ser alterado por esta tela.',
+      });
+      return;
+    }
 
     setIsSubmitting(true);
-
     try {
-      if (!selectedProfessional.user_id) throw new Error('Profissional sem acesso vinculado.');
-
-      // Delete existing permissions
-      await supabase
+      const { error: deleteError } = await supabase
         .from('user_permissions')
         .delete()
-        .eq('user_id', selectedProfessional.user_id)
-        .eq('tenant_id', tenantId);
+        .eq('tenant_id', tenantId)
+        .eq('user_id', selectedAccess.userId);
 
-      // Add new permissions
-      if (selectedProfessional.permissions.length > 0) {
-        const permissionsToInsert = selectedProfessional.permissions.map(permission => ({
-          user_id: selectedProfessional.user_id!,
-          permission: permission as 'view_schedule' | 'edit_schedule' | 'view_clients' | 'view_commissions' | 'manage_cash_flow',
-          tenant_id: tenantId,
-        }));
+      if (deleteError) throw deleteError;
 
-        const { error } = await supabase
+      if (selectedAccess.permissions.length > 0) {
+        const { error: insertError } = await supabase
           .from('user_permissions')
-          .insert(permissionsToInsert);
+          .insert(
+            selectedAccess.permissions.map((permission) => ({
+              user_id: selectedAccess.userId!,
+              tenant_id: tenantId,
+              permission,
+            })),
+          );
 
-        if (error) throw error;
+        if (insertError) throw insertError;
       }
 
       toast({
-        title: "Permissões atualizadas",
-        description: "As permissões foram atualizadas com sucesso",
+        title: 'Permissões atualizadas',
+        description: 'As permissões foram salvas com sucesso.',
       });
 
       setIsEditDialogOpen(false);
-      fetchProfessionals();
+      await fetchInternalUsers();
     } catch (error: any) {
       console.error('Error updating permissions:', error);
       toast({
-        variant: "destructive",
-        title: "Erro",
-        description: error.message || "Não foi possível atualizar as permissões",
+        variant: 'destructive',
+        title: 'Erro',
+        description: error.message || 'Não foi possível atualizar as permissões.',
       });
     } finally {
       setIsSubmitting(false);
     }
   };
 
-  const handleDeleteProfessional = async (professional: ProfessionalAccess) => {
-    if (!professional.user_id) return;
+  const handleDeleteAccess = async (row: InternalAccessRow) => {
+    if (!tenantId || !row.userId) return;
 
-    if (!confirm(`Deseja remover o acesso de ${professional.name}?`)) {
+    if (row.isOwner || row.role === 'owner' || row.role === 'admin') {
+      toast({
+        variant: 'destructive',
+        title: 'Acesso protegido',
+        description: 'O owner/administrador principal não pode ser removido por esta tela.',
+      });
+      return;
+    }
+
+    if (!confirm(`Deseja remover o acesso de ${row.name}?`)) {
       return;
     }
 
@@ -361,70 +512,32 @@ const Admin: React.FC = () => {
       const { data, error } = await supabase.functions.invoke('remove-professional-access', {
         body: {
           tenantId,
-          professionalId: professional.id,
-          userId: professional.user_id,
+          professionalId: row.professionalId,
+          userId: row.userId,
+          role: row.role === 'staff' ? 'staff' : 'professional',
         },
       });
 
       if (error || data?.error) {
-        throw new Error(await getSupabaseErrorMessage(error, data, "Não foi possível remover o acesso"));
+        throw new Error(await getSupabaseErrorMessage(error, data, 'Não foi possível remover o acesso'));
       }
 
       toast({
-        title: "Acesso removido",
+        title: 'Acesso removido',
         description: data?.accountDeleted
-          ? "O acesso foi removido e a conta de login foi encerrada."
-          : "O acesso foi removido. A conta foi preservada porque existe outro vínculo ativo.",
+          ? 'O login foi removido e a conta foi encerrada.'
+          : 'O vínculo de acesso foi removido. A conta foi preservada porque ainda existe outro vínculo.',
       });
 
-      fetchProfessionals();
+      await fetchInternalUsers();
     } catch (error: any) {
-      console.error('Error deleting professional:', error);
+      console.error('Error deleting access:', error);
       toast({
-        variant: "destructive",
-        title: "Erro",
-        description: error.message || "Não foi possível remover o profissional",
+        variant: 'destructive',
+        title: 'Erro',
+        description: error.message || 'Não foi possível remover o acesso.',
       });
     }
-  };
-
-  const toggleNewPermission = (permissionId: string) => {
-    setNewProfessional(prev => ({
-      ...prev,
-      permissions: prev.permissions.includes(permissionId)
-        ? prev.permissions.filter(p => p !== permissionId)
-        : [...prev.permissions, permissionId],
-    }));
-  };
-
-  const toggleEditPermission = (permissionId: string) => {
-    if (!selectedProfessional) return;
-    
-    setSelectedProfessional(prev => prev ? ({
-      ...prev,
-      permissions: prev.permissions.includes(permissionId)
-        ? prev.permissions.filter(p => p !== permissionId)
-        : [...prev.permissions, permissionId],
-    }) : null);
-  };
-
-  const applyPreset = (presetId: string, mode: 'new' | 'edit') => {
-    const preset = ACCESS_PROFILES.find((item) => item.id === presetId);
-    if (!preset) return;
-
-    if (mode === 'new') {
-      setNewProfessional((prev) => ({
-        ...prev,
-        profilePreset: presetId,
-        permissions: [...preset.permissions],
-      }));
-      return;
-    }
-
-    setSelectedProfessional((prev) => prev ? ({
-      ...prev,
-      permissions: [...preset.permissions],
-    }) : null);
   };
 
   if (authLoading || loading) {
@@ -441,85 +554,147 @@ const Admin: React.FC = () => {
 
   return (
     <div className="min-h-screen bg-background">
-      <div className="container mx-auto p-6 max-w-6xl">
-        {/* Header */}
-        <div className="flex items-center justify-between mb-8">
+      <div className="container mx-auto max-w-7xl p-6">
+        <div className="mb-8 flex items-center justify-between gap-4">
           <div className="flex items-center gap-4">
             <Button variant="ghost" size="icon" onClick={() => navigate('/')}>
               <ArrowLeft className="h-5 w-5" />
             </Button>
             <div>
-              <h1 className="text-3xl font-display font-bold text-foreground">
-                Administração
-              </h1>
+              <h1 className="text-3xl font-display font-bold text-foreground">Administração</h1>
               <p className="text-muted-foreground">
-                Gerencie logins internos, como recepção, profissionais e financeiro.
+                Gerencie owners, profissionais e usuários internos como recepção e financeiro.
               </p>
             </div>
           </div>
 
-          <Dialog open={isAddDialogOpen} onOpenChange={setIsAddDialogOpen}>
+          <Dialog
+            open={isAddDialogOpen}
+            onOpenChange={(open) => {
+              setIsAddDialogOpen(open);
+              if (!open) resetNewAccess();
+            }}
+          >
             <DialogTrigger asChild>
-              <Button>
+              <Button onClick={() => resetNewAccess()}>
                 <UserPlus className="mr-2 h-4 w-4" />
                 Criar Acesso
               </Button>
             </DialogTrigger>
-            <DialogContent className="max-w-md max-h-[90vh] overflow-hidden p-0 gap-0 flex flex-col">
-              <DialogHeader className="px-6 pt-6 pb-4 border-b">
-                <DialogTitle>Criar Acesso de Profissional</DialogTitle>
+            <DialogContent className="max-w-lg max-h-[90vh] overflow-hidden p-0 gap-0 flex flex-col">
+              <DialogHeader className="border-b px-6 pt-6 pb-4">
+                <DialogTitle>Criar acesso interno</DialogTitle>
                 <DialogDescription>
-                  Selecione um profissional já cadastrado, informe o login e escolha o perfil de acesso.
+                  Profissionais podem ter login vinculado à própria agenda. Recepção e financeiro podem existir sem vínculo com profissional.
                 </DialogDescription>
               </DialogHeader>
-              
+
               <div className="flex-1 overflow-y-auto px-6 py-4 space-y-4">
-                <div className="space-y-2">
-                  <Label>Profissional</Label>
-                  <Select
-                    value={newProfessional.professionalId}
-                    onValueChange={(value) => {
-                      const professional = professionals.find((item) => item.id === value);
-                      setNewProfessional(prev => ({
+                <div className="space-y-3">
+                  <Label>Tipo de acesso</Label>
+                  <div className="grid grid-cols-2 gap-2">
+                    <button
+                      type="button"
+                      className={`rounded-lg border p-3 text-left transition-colors ${
+                        newAccess.accessType === 'professional'
+                          ? 'border-primary bg-primary/5'
+                          : 'border-border hover:bg-muted/40'
+                      }`}
+                      onClick={() => setNewAccess((prev) => ({
                         ...prev,
-                        professionalId: value,
-                        email: professional?.email || prev.email,
-                      }));
-                    }}
-                  >
-                    <SelectTrigger>
-                      <SelectValue placeholder="Selecionar profissional sem acesso" />
-                    </SelectTrigger>
-                    <SelectContent>
-                      {professionals
-                        .filter((professional) => !professional.has_access && !professional.user_id)
-                        .map((professional) => (
-                          <SelectItem key={professional.id} value={professional.id}>
-                            {professional.nickname || professional.name}
-                          </SelectItem>
-                        ))}
-                    </SelectContent>
-                  </Select>
+                        accessType: 'professional',
+                        professionalId: '',
+                        fullName: '',
+                        profilePreset: 'professional',
+                        permissions: [...getPresetPermissions('professional')],
+                      }))}
+                    >
+                      <div className="text-sm font-medium text-foreground">Profissional</div>
+                      <div className="text-xs text-muted-foreground">Vinculado ao cadastro operacional.</div>
+                    </button>
+                    <button
+                      type="button"
+                      className={`rounded-lg border p-3 text-left transition-colors ${
+                        newAccess.accessType === 'staff'
+                          ? 'border-primary bg-primary/5'
+                          : 'border-border hover:bg-muted/40'
+                      }`}
+                      onClick={() => setNewAccess((prev) => ({
+                        ...prev,
+                        accessType: 'staff',
+                        professionalId: '',
+                        fullName: '',
+                        profilePreset: 'reception',
+                        permissions: [...getPresetPermissions('reception')],
+                      }))}
+                    >
+                      <div className="text-sm font-medium text-foreground">Equipe interna</div>
+                      <div className="text-xs text-muted-foreground">Recepção, financeiro ou acesso administrativo interno.</div>
+                    </button>
+                  </div>
                 </div>
 
+                {newAccess.accessType === 'professional' ? (
+                  <div className="space-y-2">
+                    <Label>Profissional</Label>
+                    <Select
+                      value={newAccess.professionalId}
+                      onValueChange={(value) => {
+                        const professional = internalUsers.find((row) => row.professionalId === value);
+                        setNewAccess((prev) => ({
+                          ...prev,
+                          professionalId: value,
+                          fullName: professional?.name ?? '',
+                          email: professional?.email ?? prev.email,
+                          profilePreset: 'professional',
+                          permissions: [...getPresetPermissions('professional')],
+                        }));
+                      }}
+                    >
+                      <SelectTrigger>
+                        <SelectValue placeholder="Selecionar profissional sem acesso" />
+                      </SelectTrigger>
+                      <SelectContent>
+                        {internalUsers
+                          .filter((row) => row.professionalId && !row.hasAccess && !row.userId)
+                          .map((row) => (
+                            <SelectItem key={row.professionalId!} value={row.professionalId!}>
+                              {row.nickname || row.name}
+                            </SelectItem>
+                          ))}
+                      </SelectContent>
+                    </Select>
+                  </div>
+                ) : (
+                  <div className="space-y-2">
+                    <Label htmlFor="staff-name">Nome</Label>
+                    <Input
+                      id="staff-name"
+                      value={newAccess.fullName}
+                      onChange={(event) => setNewAccess((prev) => ({ ...prev, fullName: event.target.value }))}
+                      placeholder="Nome do usuário interno"
+                    />
+                  </div>
+                )}
+
                 <div className="space-y-2">
-                  <Label htmlFor="email">Email</Label>
+                  <Label htmlFor="internal-email">Email</Label>
                   <Input
-                    id="email"
+                    id="internal-email"
                     type="email"
-                    value={newProfessional.email}
-                    onChange={(e) => setNewProfessional(prev => ({ ...prev, email: e.target.value }))}
-                    placeholder="email@exemplo.com"
+                    value={newAccess.email}
+                    onChange={(event) => setNewAccess((prev) => ({ ...prev, email: event.target.value }))}
+                    placeholder="email@empresa.com"
                   />
                 </div>
 
                 <div className="space-y-2">
-                  <Label htmlFor="password">Senha</Label>
+                  <Label htmlFor="internal-password">Senha</Label>
                   <Input
-                    id="password"
+                    id="internal-password"
                     type="password"
-                    value={newProfessional.password}
-                    onChange={(e) => setNewProfessional(prev => ({ ...prev, password: e.target.value }))}
+                    value={newAccess.password}
+                    onChange={(event) => setNewAccess((prev) => ({ ...prev, password: event.target.value }))}
                     placeholder={getPasswordRequirementsMessage()}
                   />
                   <p className="text-xs text-muted-foreground">{getPasswordRequirementsMessage()}</p>
@@ -533,7 +708,7 @@ const Admin: React.FC = () => {
                         key={profile.id}
                         type="button"
                         className={`rounded-lg border p-3 text-left transition-colors ${
-                          newProfessional.profilePreset === profile.id
+                          newAccess.profilePreset === profile.id
                             ? 'border-primary bg-primary/5'
                             : 'border-border hover:bg-muted/40'
                         }`}
@@ -548,11 +723,11 @@ const Admin: React.FC = () => {
 
                 <div className="space-y-3">
                   <Label>Permissões</Label>
-                  {PERMISSIONS.map(permission => (
+                  {PERMISSIONS.map((permission) => (
                     <div key={permission.id} className="flex items-center space-x-2">
                       <Checkbox
                         id={`new-${permission.id}`}
-                        checked={newProfessional.permissions.includes(permission.id)}
+                        checked={newAccess.permissions.includes(permission.id)}
                         onCheckedChange={() => toggleNewPermission(permission.id)}
                       />
                       <Label htmlFor={`new-${permission.id}`} className="font-normal cursor-pointer">
@@ -561,19 +736,17 @@ const Admin: React.FC = () => {
                     </div>
                   ))}
                 </div>
+              </div>
 
-                <Button 
-                  onClick={handleAddProfessional} 
-                  className="w-full sticky bottom-0" 
-                  disabled={isSubmitting}
-                >
+              <div className="border-t px-6 py-4">
+                <Button onClick={handleAddAccess} className="w-full" disabled={isSubmitting}>
                   {isSubmitting ? (
                     <>
                       <Loader2 className="mr-2 h-4 w-4 animate-spin" />
                       Cadastrando...
                     </>
                   ) : (
-                    'Criar Acesso'
+                    'Criar acesso'
                   )}
                 </Button>
               </div>
@@ -581,29 +754,30 @@ const Admin: React.FC = () => {
           </Dialog>
         </div>
 
-        {/* Professionals Table */}
         <Card>
           <CardHeader>
             <CardTitle className="flex items-center gap-2">
               <Shield className="h-5 w-5 text-primary" />
-              Acessos de Profissionais
+              Usuários internos
             </CardTitle>
             <CardDescription>
-              Use esta tela para criar logins internos. Exemplo: recepção pode ter agenda e clientes, sem visualizar comissões ou caixa.
+              Owners ficam protegidos. Profissionais enxergam apenas a própria agenda e as próprias comissões. Recepção pode operar sem vínculo com profissional.
             </CardDescription>
           </CardHeader>
           <CardContent>
-            {professionals.length === 0 ? (
+            {internalUsers.length === 0 ? (
               <div className="text-center py-12 text-muted-foreground">
                 <UserPlus className="h-12 w-12 mx-auto mb-4 opacity-50" />
-                <p>Nenhum profissional cadastrado</p>
-                <p className="text-sm">Cadastre profissionais no menu Profissionais antes de liberar acessos.</p>
+                <p>Nenhum usuário interno encontrado.</p>
+                <p className="text-sm">Cadastre profissionais ou crie um acesso interno para recepção/financeiro.</p>
               </div>
             ) : (
               <Table>
                 <TableHeader>
                   <TableRow>
                     <TableHead>Nome</TableHead>
+                    <TableHead>Tipo</TableHead>
+                    <TableHead>Vínculo</TableHead>
                     <TableHead>Email</TableHead>
                     <TableHead>Status</TableHead>
                     <TableHead>Permissões</TableHead>
@@ -611,92 +785,98 @@ const Admin: React.FC = () => {
                   </TableRow>
                 </TableHeader>
                 <TableBody>
-                  {professionals.map(professional => (
-                    <TableRow key={professional.id}>
-                      <TableCell className="font-medium">
-                        {professional.name}
-                        <p className="text-xs font-normal text-muted-foreground">{professional.nickname}</p>
-                      </TableCell>
-                      <TableCell>{professional.email || '-'}</TableCell>
-                      <TableCell>
-                        {professional.has_access ? (
-                          <span className="inline-flex items-center rounded-full bg-primary/10 px-2 py-0.5 text-xs text-primary">
-                            Com acesso
+                  {internalUsers.map((row) => {
+                    const isProtected = row.role === 'owner' || row.role === 'admin' || row.isOwner;
+                    const canManage = row.hasAccess && !isProtected && !!row.userId;
+                    return (
+                      <TableRow key={row.rowId}>
+                        <TableCell className="font-medium">
+                          {row.name}
+                          <p className="text-xs font-normal text-muted-foreground">
+                            {row.nickname || row.fullName || '-'}
+                          </p>
+                        </TableCell>
+                        <TableCell>
+                          <span className={`inline-flex items-center rounded-full px-2 py-0.5 text-xs ${roleBadgeClasses[row.role]}`}>
+                            {roleLabels[row.role]}
                           </span>
-                        ) : (
-                          <span className="inline-flex items-center rounded-full bg-muted px-2 py-0.5 text-xs text-muted-foreground">
-                            Sem acesso
-                          </span>
-                        )}
-                      </TableCell>
-                      <TableCell>
-                        <div className="flex flex-wrap gap-1">
-                          {!professional.has_access ? (
-                            <span className="text-muted-foreground text-sm">-</span>
-                          ) : professional.permissions.length === 0 ? (
-                            <span className="text-muted-foreground text-sm">Nenhuma</span>
+                        </TableCell>
+                        <TableCell>
+                          {row.professionalId
+                            ? `${row.professionalType === 'owner' ? 'Profissional proprietário' : 'Profissional operacional'}`
+                            : 'Sem vínculo com profissional'}
+                        </TableCell>
+                        <TableCell>{row.email || '-'}</TableCell>
+                        <TableCell>
+                          {row.hasAccess ? (
+                            <span className="inline-flex items-center rounded-full bg-primary/10 px-2 py-0.5 text-xs text-primary">
+                              Com acesso
+                            </span>
                           ) : (
-                            professional.permissions.map(perm => {
-                              const permInfo = PERMISSIONS.find(p => p.id === perm);
-                              return (
+                            <span className="inline-flex items-center rounded-full bg-muted px-2 py-0.5 text-xs text-muted-foreground">
+                              Sem acesso
+                            </span>
+                          )}
+                        </TableCell>
+                        <TableCell>
+                          <div className="flex flex-wrap gap-1">
+                            {!row.hasAccess ? (
+                              <span className="text-sm text-muted-foreground">-</span>
+                            ) : row.role === 'owner' || row.role === 'admin' ? (
+                              <span className="text-sm text-muted-foreground">Acesso administrativo total</span>
+                            ) : row.permissions.length === 0 ? (
+                              <span className="text-sm text-muted-foreground">Nenhuma</span>
+                            ) : (
+                              row.permissions.map((permission) => (
                                 <span
-                                  key={perm}
-                                  className="inline-flex items-center px-2 py-0.5 rounded-full text-xs bg-primary/10 text-primary"
+                                  key={`${row.rowId}-${permission}`}
+                                  className="inline-flex items-center rounded-full bg-primary/10 px-2 py-0.5 text-xs text-primary"
                                 >
-                                  {permInfo?.label || perm}
+                                  {PERMISSIONS.find((item) => item.id === permission)?.label || permission}
                                 </span>
-                              );
-                            })
-                          )}
-                        </div>
-                      </TableCell>
-                      <TableCell className="text-right">
-                        <div className="flex justify-end gap-2">
-                          {professional.has_access ? (
-                            <>
-                              <Button
-                                variant="ghost"
-                                size="icon"
-                                onClick={() => {
-                                  setSelectedProfessional(professional);
-                                  setIsEditDialogOpen(true);
-                                }}
-                                title="Editar permissões"
-                              >
-                                <Edit className="h-4 w-4" />
+                              ))
+                            )}
+                          </div>
+                        </TableCell>
+                        <TableCell className="text-right">
+                          <div className="flex justify-end gap-2">
+                            {canManage ? (
+                              <>
+                                <Button
+                                  variant="ghost"
+                                  size="icon"
+                                  onClick={() => {
+                                    setSelectedAccess(row);
+                                    setIsEditDialogOpen(true);
+                                  }}
+                                  title="Editar permissões"
+                                >
+                                  <Edit className="h-4 w-4" />
+                                </Button>
+                                <Button
+                                  variant="ghost"
+                                  size="icon"
+                                  className="text-destructive hover:text-destructive"
+                                  onClick={() => handleDeleteAccess(row)}
+                                  title="Remover acesso"
+                                >
+                                  <Trash2 className="h-4 w-4" />
+                                </Button>
+                              </>
+                            ) : row.role === 'none' && row.professionalId ? (
+                              <Button variant="outline" size="sm" onClick={() => openCreateForProfessional(row)}>
+                                Criar acesso
                               </Button>
-                              <Button
-                                variant="ghost"
-                                size="icon"
-                                className="text-destructive hover:text-destructive"
-                                onClick={() => handleDeleteProfessional(professional)}
-                                title="Remover acesso"
-                              >
-                                <Trash2 className="h-4 w-4" />
-                              </Button>
-                            </>
-                          ) : (
-                            <Button
-                              variant="outline"
-                              size="sm"
-                              onClick={() => {
-                                setNewProfessional({
-                                  professionalId: professional.id,
-                                  email: professional.email || '',
-                                  password: '',
-                                  profilePreset: 'reception',
-                                  permissions: ['view_schedule', 'edit_schedule', 'view_clients'],
-                                });
-                                setIsAddDialogOpen(true);
-                              }}
-                            >
-                              Criar acesso
-                            </Button>
-                          )}
-                        </div>
-                      </TableCell>
-                    </TableRow>
-                  ))}
+                            ) : isProtected ? (
+                              <span className="text-xs text-muted-foreground">Protegido</span>
+                            ) : (
+                              <span className="text-xs text-muted-foreground">-</span>
+                            )}
+                          </div>
+                        </TableCell>
+                      </TableRow>
+                    );
+                  })}
                 </TableBody>
               </Table>
             )}
@@ -707,16 +887,15 @@ const Admin: React.FC = () => {
           <CleaningStaffPermissions />
         </div>
 
-        {/* Edit Permissions Dialog */}
         <Dialog open={isEditDialogOpen} onOpenChange={setIsEditDialogOpen}>
-          <DialogContent className="max-w-md max-h-[90vh] overflow-hidden p-0 gap-0 flex flex-col">
-            <DialogHeader className="px-6 pt-6 pb-4 border-b">
-              <DialogTitle>Editar Permissões</DialogTitle>
+          <DialogContent className="max-w-lg max-h-[90vh] overflow-hidden p-0 gap-0 flex flex-col">
+            <DialogHeader className="border-b px-6 pt-6 pb-4">
+              <DialogTitle>Editar permissões</DialogTitle>
               <DialogDescription>
-                {selectedProfessional?.full_name || selectedProfessional?.email}
+                {selectedAccess?.fullName || selectedAccess?.email || selectedAccess?.name}
               </DialogDescription>
             </DialogHeader>
-            
+
             <div className="flex-1 overflow-y-auto px-6 py-4 space-y-4">
               <div className="space-y-3">
                 <Label>Perfis rápidos</Label>
@@ -726,7 +905,7 @@ const Admin: React.FC = () => {
                       key={profile.id}
                       type="button"
                       className={`rounded-lg border p-3 text-left transition-colors ${
-                        selectedProfessional?.permissions.join('|') === profile.permissions.join('|')
+                        selectedAccess?.permissions.join('|') === profile.permissions.join('|')
                           ? 'border-primary bg-primary/5'
                           : 'border-border hover:bg-muted/40'
                       }`}
@@ -741,11 +920,11 @@ const Admin: React.FC = () => {
 
               <div className="space-y-3">
                 <Label>Permissões</Label>
-                {PERMISSIONS.map(permission => (
+                {PERMISSIONS.map((permission) => (
                   <div key={permission.id} className="flex items-center space-x-2">
                     <Checkbox
                       id={`edit-${permission.id}`}
-                      checked={selectedProfessional?.permissions.includes(permission.id) || false}
+                      checked={selectedAccess?.permissions.includes(permission.id) || false}
                       onCheckedChange={() => toggleEditPermission(permission.id)}
                     />
                     <Label htmlFor={`edit-${permission.id}`} className="font-normal cursor-pointer">
@@ -754,19 +933,17 @@ const Admin: React.FC = () => {
                   </div>
                 ))}
               </div>
+            </div>
 
-              <Button 
-                onClick={handleUpdatePermissions} 
-                className="w-full sticky bottom-0" 
-                disabled={isSubmitting}
-              >
+            <div className="border-t px-6 py-4">
+              <Button onClick={handleUpdatePermissions} className="w-full" disabled={isSubmitting}>
                 {isSubmitting ? (
                   <>
                     <Loader2 className="mr-2 h-4 w-4 animate-spin" />
                     Salvando...
                   </>
                 ) : (
-                  'Salvar Permissões'
+                  'Salvar permissões'
                 )}
               </Button>
             </div>

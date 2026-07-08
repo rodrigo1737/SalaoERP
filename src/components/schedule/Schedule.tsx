@@ -39,7 +39,7 @@ import {
 import { Combobox } from '@/components/ui/combobox';
 import { Textarea } from '@/components/ui/textarea';
 import { useToast } from '@/hooks/use-toast';
-import { useData, Appointment } from '@/context/DataContext';
+import { useData, Appointment, ServiceProfessional } from '@/context/DataContext';
 import { useStock } from '@/context/StockContext';
 import { useAuth } from '@/contexts/AuthContext';
 import { useTenantSettings } from '@/contexts/TenantSettingsContext';
@@ -48,6 +48,7 @@ import { cn } from '@/lib/utils';
 import { BillItemsEditor, BillItem } from './BillItemsEditor';
 import { useNavigate } from 'react-router-dom';
 import { isCleaningControlTenant } from '@/lib/tenantSegments';
+import { getAvailableServicesForProfessional, getServiceDurationForProfessional, isServiceAvailableForProfessional } from '@/lib/serviceProfessionalAvailability';
 
 const appointmentStatusLabels: Record<string, string> = {
   pre_scheduled: 'Pré-Agendado',
@@ -157,6 +158,7 @@ export function Schedule() {
   const [billItems, setBillItems] = useState<BillItem[]>([]);
   const [scheduleLoading, setScheduleLoading] = useState(false);
   const [scheduleAppointmentsRaw, setScheduleAppointmentsRaw] = useState<Appointment[]>([]);
+  const [serviceProfessionalLinks, setServiceProfessionalLinks] = useState<ServiceProfessional[]>([]);
 
   const [formClient, setFormClient] = useState('');
   const [formService, setFormService] = useState('');
@@ -178,9 +180,13 @@ export function Schedule() {
     () => clients.map((client) => ({ value: client.id, label: client.name, sublabel: client.phone || undefined })),
     [clients],
   );
+  const availableSlotServices = useMemo(() => {
+    if (!selectedSlot?.professionalId) return services;
+    return getAvailableServicesForProfessional(services, serviceProfessionalLinks, selectedSlot.professionalId);
+  }, [selectedSlot?.professionalId, serviceProfessionalLinks, services]);
   const serviceOptions = useMemo(
-    () => services.map((service) => ({ value: service.id, label: service.name, sublabel: `R$ ${service.default_price.toFixed(2)}` })),
-    [services],
+    () => availableSlotServices.map((service) => ({ value: service.id, label: service.name, sublabel: `R$ ${service.default_price.toFixed(2)}` })),
+    [availableSlotServices],
   );
 
   const scheduleAppointments = useMemo(
@@ -197,7 +203,9 @@ export function Schedule() {
     ? scheduleProfessionals
     : currentProfessional
       ? scheduleProfessionals.filter(p => p.id === currentProfessional.id)
-      : [];
+      : canViewSchedule
+        ? scheduleProfessionals
+        : [];
   const filteredVisibleProfessionals = selectedProfessionalIds.length > 0
     ? baseVisibleProfessionals.filter(p => selectedProfessionalIds.includes(p.id))
     : baseVisibleProfessionals;
@@ -265,6 +273,35 @@ export function Schedule() {
       fetchScheduleAppointments(currentDate);
     }
   }, [authLoading, isCleaningTenant, tenantId, currentDate, fetchScheduleAppointments]);
+
+  useEffect(() => {
+    const fetchServiceLinks = async () => {
+      if (!tenantId || isCleaningTenant) {
+        setServiceProfessionalLinks([]);
+        return;
+      }
+
+      const { data, error } = await supabase
+        .from('service_professionals')
+        .select('id, service_id, professional_id, commission_rate, assistant_commission_rate, duration_minutes, tenant_id, created_at, updated_at')
+        .eq('tenant_id', tenantId);
+
+      if (error) {
+        console.error('Erro ao carregar vínculo de serviços por profissional:', error);
+        return;
+      }
+
+      setServiceProfessionalLinks((data as ServiceProfessional[]) ?? []);
+    };
+
+    void fetchServiceLinks();
+  }, [isCleaningTenant, tenantId]);
+
+  useEffect(() => {
+    if (!selectedSlot?.professionalId || !formService) return;
+    if (isServiceAvailableForProfessional(serviceProfessionalLinks, selectedSlot.professionalId, formService)) return;
+    setFormService('');
+  }, [formService, selectedSlot?.professionalId, serviceProfessionalLinks]);
 
   const navigateDate = (direction: 'prev' | 'next') => {
     const newDate = new Date(currentDate);
@@ -425,6 +462,42 @@ export function Schedule() {
     });
 
     if (service) {
+      if (selectedSlot?.professionalId && tenantId) {
+        const professional = professionalsById.get(selectedSlot.professionalId);
+        const { error } = await supabase.from('service_professionals').insert({
+          service_id: service.id,
+          professional_id: selectedSlot.professionalId,
+          commission_rate: professional?.commission_service ?? 50,
+          assistant_commission_rate: 0,
+          duration_minutes: service.duration_minutes,
+          tenant_id: tenantId,
+        });
+
+        if (!error) {
+          setServiceProfessionalLinks((prev) => [
+            ...prev,
+            {
+              id: crypto.randomUUID(),
+              service_id: service.id,
+              professional_id: selectedSlot.professionalId,
+              commission_rate: professional?.commission_service ?? 50,
+              assistant_commission_rate: 0,
+              duration_minutes: service.duration_minutes,
+              tenant_id: tenantId,
+              created_at: new Date().toISOString(),
+              updated_at: new Date().toISOString(),
+            },
+          ]);
+        } else {
+          console.error('Erro ao vincular serviço rápido ao profissional:', error);
+          toast({
+            variant: 'destructive',
+            title: 'Serviço criado sem vínculo',
+            description: 'O serviço foi cadastrado, mas o vínculo com o profissional precisa ser ajustado no cadastro de serviços.',
+          });
+        }
+      }
+
       setFormService(service.id);
       resetQuickServiceForm();
     }
@@ -449,12 +522,27 @@ export function Schedule() {
 
     if (!client || !service || !professional) return;
 
+    if (!isServiceAvailableForProfessional(serviceProfessionalLinks, professional.id, service.id)) {
+      toast({
+        variant: 'destructive',
+        title: 'Serviço não permitido',
+        description: `${professional.nickname} não está habilitado para este serviço.`,
+      });
+      return;
+    }
+
     const [hour, minute] = formTime.split(':').map(Number);
     const startTime = new Date(currentDate);
     startTime.setHours(hour, minute, 0, 0);
 
     const endTime = new Date(startTime);
-    endTime.setMinutes(endTime.getMinutes() + service.duration_minutes);
+    const resolvedDuration = getServiceDurationForProfessional(
+      services,
+      serviceProfessionalLinks,
+      professional.id,
+      service.id,
+    ) ?? service.duration_minutes;
+    endTime.setMinutes(endTime.getMinutes() + resolvedDuration);
 
     await addAppointment({
       client_id: client.id,
@@ -1068,6 +1156,7 @@ export function Schedule() {
         appointments={scheduleAppointments}
         professionals={scheduleProfessionals}
         services={services}
+        serviceProfessionalLinks={serviceProfessionalLinks}
         isAdmin={isAdmin}
         canOpenBill={!isCleaningTenant}
         canEditAppointment={canEditSchedule}
@@ -1119,6 +1208,14 @@ export function Schedule() {
               items={billItems}
               onItemsChange={setBillItems}
               services={services}
+              availableServices={selectedAppointment?.professional_id
+                ? getAvailableServicesForProfessional(
+                    services,
+                    serviceProfessionalLinks,
+                    selectedAppointment.professional_id,
+                    selectedAppointment.service_id,
+                  )
+                : services}
               products={products}
               baseServiceName={selectedAppointment?.service?.name}
               baseServiceValue={parseFloat(editValue) || selectedAppointment?.total_value || 0}

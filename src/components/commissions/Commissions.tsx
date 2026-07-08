@@ -60,7 +60,7 @@ interface PaymentDialogState {
 
 export function Commissions() {
   const { professionals, commissions, payCommission, payAllCommissions, refreshData } = useData();
-  const { userRole, currentProfessional } = useAuth();
+  const { userRole, currentProfessional, hasPermission } = useAuth();
   const { toast } = useToast();
   const [professionalFilter, setProfessionalFilter] = useState<string>('all');
   const [statusFilter, setStatusFilter] = useState<string>('all');
@@ -99,13 +99,16 @@ export function Commissions() {
   }, [refreshData]);
 
   const isAdmin = userRole === 'admin';
+  const canViewAllCommissions = isAdmin || (userRole === 'staff' && hasPermission('view_commissions'));
 
   // Filter commissions - professionals only see their own
-  const visibleCommissions = isAdmin
-    ? commissions
-    : currentProfessional
-      ? commissions.filter(c => c.professional_id === currentProfessional.id)
-      : [];
+  const visibleCommissions = useMemo(() => (
+    canViewAllCommissions
+      ? commissions
+      : currentProfessional
+        ? commissions.filter(c => c.professional_id === currentProfessional.id)
+        : []
+  ), [canViewAllCommissions, commissions, currentProfessional]);
 
   // Apply period filter
   const periodFilteredCommissions = useMemo(() => {
@@ -123,11 +126,13 @@ export function Commissions() {
   });
 
   // Filter professionals for display - professionals only see themselves
-  const visibleProfessionals = isAdmin
-    ? professionals
-    : currentProfessional
-      ? professionals.filter(p => p.id === currentProfessional.id)
-      : [];
+  const visibleProfessionals = useMemo(() => (
+    canViewAllCommissions
+      ? professionals
+      : currentProfessional
+        ? professionals.filter(p => p.id === currentProfessional.id)
+        : []
+  ), [canViewAllCommissions, currentProfessional, professionals]);
 
   // Group by professional using period-filtered commissions
   const commissionsByProfessional = visibleProfessionals.map(prof => {
