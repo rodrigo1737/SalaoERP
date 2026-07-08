@@ -198,6 +198,7 @@ export const AuthProvider: React.FC<{ children: React.ReactNode }> = ({ children
         setUser(session?.user ?? null);
         
         if (session?.user) {
+          setLoading(true);
           // Defer Supabase calls with setTimeout to prevent deadlock
           setTimeout(() => {
             if (isMounted) {
@@ -228,6 +229,7 @@ export const AuthProvider: React.FC<{ children: React.ReactNode }> = ({ children
       setUser(session?.user ?? null);
       
       if (session?.user) {
+        setLoading(true);
         fetchUserData(session.user.id, session.user.email || '').then(() => {
           if (isMounted) {
             setLoading(false);
