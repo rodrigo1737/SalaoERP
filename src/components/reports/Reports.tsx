@@ -41,6 +41,17 @@ import {
 
 type PeriodFilter = '7d' | '30d' | '90d' | '12m' | 'custom';
 
+type EffectiveCommission = {
+  id: string;
+  professional_id: string;
+  appointment_id?: string | null;
+  commission_value: number;
+  status: 'pending' | 'paid';
+  created_at: string;
+  paid_at?: string | null;
+  type: 'service' | 'product' | 'voucher';
+};
+
 const CHART_COLORS = [
   'hsl(215, 70%, 50%)',
   'hsl(38, 75%, 55%)',
@@ -51,6 +62,27 @@ const CHART_COLORS = [
   'hsl(280, 60%, 50%)',
   'hsl(45, 80%, 50%)',
 ];
+
+const parseLegacyNumber = (value: string) => {
+  const normalized = value
+    .replace(/[^\d,.-]/g, '')
+    .replace(/\.(?=\d{3}(?:\D|$))/g, '')
+    .replace(',', '.');
+  const parsed = Number(normalized);
+  return Number.isFinite(parsed) ? parsed : null;
+};
+
+const parseLegacyCommissionData = (notes?: string | null) => {
+  if (!notes) return { rate: null as number | null, value: null as number | null };
+
+  const rateMatch = notes.match(/Comiss[aã]o \(%\):\s*([0-9.,-]+)/i);
+  const valueMatch = notes.match(/Comiss[aã]o valor:\s*([0-9.,-]+)/i);
+
+  return {
+    rate: rateMatch ? parseLegacyNumber(rateMatch[1]) : null,
+    value: valueMatch ? parseLegacyNumber(valueMatch[1]) : null,
+  };
+};
 
 export function Reports() {
   const { transactions, appointments, commissions, clients, professionals, services, cashSessions } = useData();
@@ -103,6 +135,51 @@ export function Reports() {
       return isWithinInterval(date, { start: dateRange.start, end: dateRange.end });
     });
   }, [commissions, dateRange]);
+
+  const effectiveCommissions = useMemo<EffectiveCommission[]>(() => {
+    const realCommissions: EffectiveCommission[] = filteredCommissions.map((commission) => ({
+      id: commission.id,
+      professional_id: commission.professional_id,
+      appointment_id: commission.appointment_id,
+      commission_value: Number(commission.commission_value),
+      status: commission.status,
+      created_at: commission.created_at,
+      paid_at: commission.paid_at,
+      type: commission.type,
+    }));
+
+    const appointmentsWithCommission = new Set(
+      filteredCommissions
+        .map((commission) => commission.appointment_id)
+        .filter(Boolean),
+    );
+
+    const derivedLegacyCommissions = filteredAppointments
+      .filter((appointment) => appointment.status === 'completed' && appointment.professional_id && appointment.id)
+      .filter((appointment) => !appointmentsWithCommission.has(appointment.id))
+      .map((appointment) => {
+        const { rate, value } = parseLegacyCommissionData(appointment.notes);
+        const fallbackRate = appointment.professional?.commission_service ?? 0;
+        const effectiveRate = rate ?? fallbackRate;
+        const effectiveValue = value ?? ((Number(appointment.total_value) || 0) * effectiveRate) / 100;
+
+        if (!effectiveValue || effectiveValue <= 0) return null;
+
+        return {
+          id: `legacy-${appointment.id}`,
+          professional_id: appointment.professional_id!,
+          appointment_id: appointment.id,
+          commission_value: Number(effectiveValue),
+          status: 'paid' as const,
+          created_at: appointment.start_time,
+          paid_at: appointment.end_time,
+          type: 'service' as const,
+        };
+      })
+      .filter((commission): commission is EffectiveCommission => Boolean(commission));
+
+    return [...realCommissions, ...derivedLegacyCommissions];
+  }, [filteredAppointments, filteredCommissions]);
 
   // Cash Flow Data (including commission payments)
   const cashFlowData = useMemo(() => {
@@ -176,7 +253,7 @@ export function Reports() {
   const commissionsByProfessional = useMemo(() => {
     const data: Record<string, { name: string; total: number; pending: number; paid: number; count: number }> = {};
     
-    filteredCommissions.forEach(c => {
+    effectiveCommissions.forEach(c => {
       const prof = professionals.find(p => p.id === c.professional_id);
       const name = prof?.nickname || 'Desconhecido';
       
@@ -195,9 +272,9 @@ export function Reports() {
     });
     
     return Object.values(data).sort((a, b) => b.total - a.total);
-  }, [filteredCommissions, professionals]);
+  }, [effectiveCommissions, professionals]);
 
-  const totalCommissions = filteredCommissions.reduce((sum, c) => sum + Number(c.commission_value), 0);
+  const totalCommissions = effectiveCommissions.reduce((sum, c) => sum + Number(c.commission_value), 0);
   const pendingCommissions = filteredCommissions
     .filter(c => c.status === 'pending')
     .reduce((sum, c) => sum + Number(c.commission_value), 0);
@@ -222,7 +299,7 @@ export function Reports() {
       });
     
     // Add commissions
-    filteredCommissions.forEach(c => {
+    effectiveCommissions.forEach(c => {
       if (data[c.professional_id]) {
         data[c.professional_id].commissions += Number(c.commission_value);
       }
@@ -234,7 +311,7 @@ export function Reports() {
     });
     
     return Object.values(data).sort((a, b) => b.profit - a.profit);
-  }, [filteredAppointments, filteredCommissions, professionals]);
+  }, [filteredAppointments, effectiveCommissions, professionals]);
 
   // Most Profitable Clients
   const profitableClients = useMemo(() => {
