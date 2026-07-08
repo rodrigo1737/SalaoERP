@@ -31,6 +31,7 @@ import {
   onlyDigits,
   parseDate,
   parseDateTime,
+  parseMoney,
   RawRow,
   readWorkbookRows,
 } from './importUtils';
@@ -46,6 +47,7 @@ type AppointmentImportRow = {
   createdAt: string;
   status: 'pre_scheduled' | 'scheduled' | 'confirmed' | 'in_progress' | 'cancelled';
   booking_source: 'admin' | 'online';
+  totalValue: number;
   notes: string | null;
   duplicateKey: string;
 };
@@ -146,6 +148,7 @@ const parseImportRows = (rows: RawRow[]) => {
     }
 
     internalKeys.add(duplicateKey);
+    const importedValue = parseMoney(getField(row, ['Valor', 'Valor Total', 'Valor Serviço']));
     validRows.push({
       sourceRow: index + 2,
       clientName,
@@ -157,6 +160,7 @@ const parseImportRows = (rows: RawRow[]) => {
       createdAt,
       status,
       booking_source: normalizeText(asText(getField(row, 'Origem'))).includes('online') ? 'online' : 'admin',
+      totalValue: importedValue,
       notes:
         buildNotes([
           ['Observação', getField(row, 'Observação')],
@@ -197,6 +201,13 @@ const appointmentMatchKey = ({
   serviceId: string;
   startTime: string;
 }) => [clientId, professionalId, serviceId, startTime.slice(0, 16)].join(':');
+
+const hasClientMatch = (
+  clientMap: Map<string, ExistingClient>,
+  row: AppointmentImportRow,
+) =>
+  clientMap.has(clientMatchKey(row.clientName, row.clientPhone, row.clientEmail))
+  || clientMap.has(`name:${normalizeText(row.clientName)}`);
 
 export function AppointmentImportSettings() {
   const { tenantId, canModify } = useAuth();
@@ -377,7 +388,7 @@ export function AppointmentImportSettings() {
         }
       }
 
-      const missingClients = rows.filter((row) => !clientMap.has(clientMatchKey(row.clientName, row.clientPhone, row.clientEmail)));
+      const missingClients = rows.filter((row) => !hasClientMatch(clientMap, row));
       const uniqueMissingClients = Array.from(
         new Map(
           missingClients.map((row) => [
@@ -449,7 +460,7 @@ export function AppointmentImportSettings() {
           end_time: addMinutes(row.startTime, service.duration_minutes || 60),
           status: row.status,
           notes: row.notes,
-          total_value: service.default_price || 0,
+          total_value: row.totalValue || service.default_price || 0,
           booking_source: row.booking_source,
           created_at: row.createdAt,
         });

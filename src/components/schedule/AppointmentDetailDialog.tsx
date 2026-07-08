@@ -105,6 +105,46 @@ const statusOptions = [
   { value: 'cancelled', label: 'Cancelado', color: 'bg-destructive/50 text-destructive-foreground' },
 ];
 
+const isValidDateValue = (value: string | null | undefined) => {
+  if (!value) return false;
+  return !Number.isNaN(new Date(value).getTime());
+};
+
+const buildSafeStartDate = (appointment: Appointment) => {
+  if (isValidDateValue(appointment.start_time)) {
+    return new Date(appointment.start_time);
+  }
+
+  if (isValidDateValue(appointment.created_at)) {
+    return new Date(appointment.created_at);
+  }
+
+  return new Date();
+};
+
+const buildSafeEndDate = (appointment: Appointment, start: Date) => {
+  if (isValidDateValue(appointment.end_time)) {
+    const parsedEnd = new Date(appointment.end_time);
+    if (parsedEnd.getTime() > start.getTime()) {
+      return parsedEnd;
+    }
+  }
+
+  const fallbackDuration = Math.max(appointment.service?.duration_minutes || 60, 1);
+  return new Date(start.getTime() + fallbackDuration * 60 * 1000);
+};
+
+const formatTimeRangeLabel = (startValue: string, endValue: string) => {
+  const safeStart = isValidDateValue(startValue) ? new Date(startValue) : null;
+  const safeEnd = isValidDateValue(endValue) ? new Date(endValue) : null;
+
+  if (!safeStart || !safeEnd) {
+    return 'Horário importado';
+  }
+
+  return `${format(safeStart, 'HH:mm')} às ${format(safeEnd, 'HH:mm')}`;
+};
+
 export function AppointmentDetailDialog({
   open,
   onOpenChange,
@@ -140,9 +180,12 @@ export function AppointmentDetailDialog({
   // Initialize with appointment data
   useEffect(() => {
     if (appointment) {
-      const start = new Date(appointment.start_time);
-      const end = new Date(appointment.end_time);
-      const durationMinutes = (end.getTime() - start.getTime()) / (1000 * 60);
+      const start = buildSafeStartDate(appointment);
+      const end = buildSafeEndDate(appointment, start);
+      const durationMinutes = Math.max(
+        1,
+        Math.round((end.getTime() - start.getTime()) / (1000 * 60)),
+      );
       
       setSelectedDate(start);
       setNotes(appointment.notes || '');
@@ -315,8 +358,9 @@ export function AppointmentDetailDialog({
   };
 
   const handleWhatsApp = () => {
-    if (appointment?.client?.phone) {
-      const phone = appointment.client.phone.replace(/\D/g, '');
+    const phoneValue = appointment?.client?.phone;
+    if (phoneValue) {
+      const phone = phoneValue.replace(/\D/g, '');
       const formattedPhone = phone.startsWith('55') ? phone : `55${phone}`;
       window.open(`https://wa.me/${formattedPhone}`, '_blank', 'noopener,noreferrer');
     }
@@ -326,6 +370,8 @@ export function AppointmentDetailDialog({
 
   const canEdit = canEditAppointment && appointment.status !== 'completed' && appointment.status !== 'cancelled';
   const totalValue = serviceRows.reduce((sum, row) => sum + (parseFloat(row.value) || 0), 0);
+  const clientName = appointment.client?.name || 'Cliente importado';
+  const clientPhone = appointment.client?.phone || '';
 
   return (
     <Dialog open={open} onOpenChange={onOpenChange}>
@@ -353,27 +399,28 @@ export function AppointmentDetailDialog({
             <div className="flex items-start justify-between">
               <div className="flex items-center gap-3">
                 <Avatar className="w-12 h-12 border-2 border-border">
-                  <AvatarImage src={appointment.client?.photo_url || undefined} alt={appointment.client?.name} />
+                  <AvatarImage src={appointment.client?.photo_url || undefined} alt={clientName} />
                   <AvatarFallback className="bg-primary-soft text-primary text-lg font-semibold">
-                    {appointment.client?.name?.charAt(0) || '?'}
+                    {clientName.charAt(0) || '?'}
                   </AvatarFallback>
                 </Avatar>
                 <div>
                   <button 
-                    onClick={() => setShowClientHistory(true)}
+                    onClick={() => appointment.client_id && setShowClientHistory(true)}
                     className="flex items-center gap-1 text-lg font-semibold text-primary hover:underline cursor-pointer"
                     title="Ver histórico de atendimentos"
+                    disabled={!appointment.client_id}
                   >
-                    {appointment.client?.name}
+                    {clientName}
                     <History className="w-4 h-4 opacity-60" />
                   </button>
-                  {appointment.client?.phone && (
+                  {clientPhone && (
                     <button 
                       onClick={handleWhatsApp}
                       className="flex items-center gap-1 text-sm text-primary hover:underline"
                     >
                       <Phone className="w-3 h-3" />
-                      {appointment.client.phone}
+                      {clientPhone}
                     </button>
                   )}
                 </div>
@@ -624,7 +671,7 @@ export function AppointmentDetailDialog({
             <div className="space-y-4">
               <div>
                 <Label className="text-sm font-medium">Cliente</Label>
-                <p className="text-sm text-muted-foreground">{appointment.client?.name}</p>
+                <p className="text-sm text-muted-foreground">{clientName}</p>
               </div>
               <div>
                 <Label className="text-sm font-medium">Telefone</Label>
@@ -666,7 +713,7 @@ export function AppointmentDetailDialog({
                   <li key={apt.id} className="bg-muted/50 p-2 rounded-md text-sm">
                     <span className="font-medium">{apt.client?.name}</span>
                     {' - '}
-                    {format(new Date(apt.start_time), 'HH:mm')} às {format(new Date(apt.end_time), 'HH:mm')}
+                    {formatTimeRangeLabel(apt.start_time, apt.end_time)}
                     {apt.service && (
                       <span className="text-muted-foreground"> ({apt.service.name})</span>
                     )}
