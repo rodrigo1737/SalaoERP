@@ -51,8 +51,8 @@ const ACCESS_PROFILES: { id: AccessPresetId; label: string; description: string;
   {
     id: 'reception',
     label: 'Recepção',
-    description: 'Agenda, clientes e recebimento de comandas, sem acesso ao caixa completo.',
-    permissions: ['view_schedule', 'edit_schedule', 'view_clients', 'close_bill'],
+    description: 'Agenda, clientes, recebimento de comandas e operação de caixa.',
+    permissions: ['view_schedule', 'edit_schedule', 'view_clients', 'close_bill', 'manage_cash_flow'],
   },
   {
     id: 'professional',
