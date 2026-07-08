@@ -123,24 +123,6 @@ export function ClientHistoryDialog({
   // Credits
   const [creditBalance] = useState(0);
 
-  useEffect(() => {
-    if (open && clientId && tenantId) {
-      fetchClientData();
-    }
-  }, [open, clientId, tenantId, fetchClientData]);
-
-  useEffect(() => {
-    if (client) {
-      setEditedClient({
-        name: client.name,
-        phone: client.phone,
-        email: client.email,
-        birth_date: client.birth_date,
-        notes: client.notes,
-      });
-    }
-  }, [client]);
-
   const fetchClientData = useCallback(async () => {
     if (!clientId || !tenantId) return;
     
@@ -203,6 +185,24 @@ export function ClientHistoryDialog({
       setLoading(false);
     }
   }, [appointmentsLoaded, clientId, tenantId, toast]);
+
+  useEffect(() => {
+    if (open && clientId && tenantId) {
+      fetchClientData();
+    }
+  }, [open, clientId, tenantId, fetchClientData]);
+
+  useEffect(() => {
+    if (client) {
+      setEditedClient({
+        name: client.name,
+        phone: client.phone,
+        email: client.email,
+        birth_date: client.birth_date,
+        notes: client.notes,
+      });
+    }
+  }, [client]);
 
   useEffect(() => {
     if (!open) return;
