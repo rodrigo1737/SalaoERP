@@ -1,4 +1,4 @@
-import { useState, useEffect } from 'react';
+import { useState, useEffect, useCallback, useMemo } from 'react';
 import { format } from 'date-fns';
 import { ptBR } from 'date-fns/locale';
 import { 
@@ -68,16 +68,6 @@ interface AppointmentItem {
   professional: { nickname: string; name: string } | null;
 }
 
-interface TransactionItem {
-  id: string;
-  created_at: string;
-  amount: number;
-  type: string;
-  category: string;
-  description: string | null;
-  payment_method: string | null;
-}
-
 const statusLabels: Record<string, { label: string; color: string }> = {
   pre_scheduled: { label: 'Pré-Agendado', color: 'bg-orange-500' },
   scheduled: { label: 'Agendado', color: 'bg-blue-500' },
@@ -128,18 +118,16 @@ export function ClientHistoryDialog({
   
   // Appointments
   const [appointments, setAppointments] = useState<AppointmentItem[]>([]);
-  
-  // Transactions (Comandas)
-  const [transactions, setTransactions] = useState<TransactionItem[]>([]);
+  const [appointmentsLoaded, setAppointmentsLoaded] = useState(false);
   
   // Credits
-  const [creditBalance, setCreditBalance] = useState(0);
+  const [creditBalance] = useState(0);
 
   useEffect(() => {
     if (open && clientId && tenantId) {
-      fetchAllData();
+      fetchClientData();
     }
-  }, [open, clientId, tenantId]);
+  }, [open, clientId, tenantId, fetchClientData]);
 
   useEffect(() => {
     if (client) {
@@ -153,7 +141,7 @@ export function ClientHistoryDialog({
     }
   }, [client]);
 
-  const fetchAllData = async () => {
+  const fetchClientData = useCallback(async () => {
     if (!clientId || !tenantId) return;
     
     setLoading(true);
@@ -168,8 +156,23 @@ export function ClientHistoryDialog({
 
       if (clientError) throw clientError;
       setClient(clientData);
+    } catch (error) {
+      console.error('Error fetching client data:', error);
+      toast({
+        title: 'Erro',
+        description: 'Não foi possível carregar os dados do cliente.',
+        variant: 'destructive',
+      });
+    } finally {
+      setLoading(false);
+    }
+  }, [clientId, tenantId, toast]);
 
-      // Fetch appointments
+  const fetchAppointments = useCallback(async () => {
+    if (!clientId || !tenantId || appointmentsLoaded) return;
+
+    setLoading(true);
+    try {
       const appointmentsData = await fetchHistoryPages<AppointmentItem>(() =>
         supabase
           .from('appointments')
@@ -188,22 +191,33 @@ export function ClientHistoryDialog({
       );
 
       setAppointments(appointmentsData);
-
-      // Calculate credit balance from notes (simplified - in production you'd have a dedicated table)
-      // For now, we'll just show 0
-      setCreditBalance(0);
-
+      setAppointmentsLoaded(true);
     } catch (error) {
-      console.error('Error fetching client data:', error);
+      console.error('Error fetching client history:', error);
       toast({
         title: 'Erro',
-        description: 'Não foi possível carregar os dados do cliente.',
+        description: 'Não foi possível carregar o histórico do cliente.',
         variant: 'destructive',
       });
     } finally {
       setLoading(false);
     }
-  };
+  }, [appointmentsLoaded, clientId, tenantId, toast]);
+
+  useEffect(() => {
+    if (!open) return;
+    if ((activeTab === 'agendamentos' || activeTab === 'comandas') && !appointmentsLoaded) {
+      fetchAppointments();
+    }
+  }, [activeTab, appointmentsLoaded, open, fetchAppointments]);
+
+  useEffect(() => {
+    if (open) return;
+    setActiveTab('cadastro');
+    setSearchTerm('');
+    setAppointments([]);
+    setAppointmentsLoaded(false);
+  }, [open]);
 
   const handleSave = async () => {
     if (!clientId || !editedClient) return;
@@ -215,7 +229,7 @@ export function ClientHistoryDialog({
         title: 'Sucesso',
         description: 'Dados do cliente atualizados.',
       });
-      fetchAllData();
+      fetchClientData();
     } catch (error) {
       toast({
         title: 'Erro',
@@ -228,26 +242,31 @@ export function ClientHistoryDialog({
   };
 
   // Filter appointments by search term
-  const filteredAppointments = appointments.filter(apt => {
-    if (!searchTerm) return true;
+  const filteredAppointments = useMemo(() => {
+    if (!searchTerm) return appointments;
+
     const term = searchTerm.toLowerCase();
-    return (
+    return appointments.filter((apt) => (
       apt.service?.name?.toLowerCase().includes(term) ||
       apt.professional?.nickname?.toLowerCase().includes(term) ||
       apt.notes?.toLowerCase().includes(term)
-    );
-  });
+    ));
+  }, [appointments, searchTerm]);
 
   // Get completed appointments as "comandas"
-  const comandas = appointments.filter(apt => apt.status === 'completed');
-  const filteredComandas = comandas.filter(apt => {
-    if (!searchTerm) return true;
+  const comandas = useMemo(
+    () => appointments.filter((apt) => apt.status === 'completed'),
+    [appointments],
+  );
+  const filteredComandas = useMemo(() => {
+    if (!searchTerm) return comandas;
+
     const term = searchTerm.toLowerCase();
-    return (
+    return comandas.filter((apt) => (
       apt.service?.name?.toLowerCase().includes(term) ||
       apt.professional?.name?.toLowerCase().includes(term)
-    );
-  });
+    ));
+  }, [comandas, searchTerm]);
 
   // Stats
   const totalSpent = comandas.reduce((sum, apt) => sum + (apt.total_value || 0), 0);

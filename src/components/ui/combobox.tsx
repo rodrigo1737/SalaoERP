@@ -33,6 +33,7 @@ interface ComboboxProps {
   emptyMessage?: string
   className?: string
   disabled?: boolean
+  maxVisibleOptions?: number
 }
 
 export function Combobox({
@@ -44,10 +45,24 @@ export function Combobox({
   emptyMessage = "Nenhum resultado encontrado.",
   className,
   disabled = false,
+  maxVisibleOptions = 100,
 }: ComboboxProps) {
   const [open, setOpen] = React.useState(false)
+  const [search, setSearch] = React.useState("")
 
   const selectedOption = options.find((option) => option.value === value)
+  const normalizedSearch = search.trim().toLowerCase()
+  const filteredOptions = React.useMemo(() => {
+    if (!normalizedSearch) return options.slice(0, maxVisibleOptions)
+
+    return options
+      .filter((option) => {
+        const label = option.label.toLowerCase()
+        const sublabel = option.sublabel?.toLowerCase() || ""
+        return label.includes(normalizedSearch) || sublabel.includes(normalizedSearch)
+      })
+      .slice(0, maxVisibleOptions)
+  }, [maxVisibleOptions, normalizedSearch, options])
 
   return (
     <Popover open={open} onOpenChange={setOpen}>
@@ -67,11 +82,11 @@ export function Combobox({
       </PopoverTrigger>
       <PopoverContent className="w-[--radix-popover-trigger-width] p-0" align="start">
         <Command>
-          <CommandInput placeholder={searchPlaceholder} />
+          <CommandInput placeholder={searchPlaceholder} value={search} onValueChange={setSearch} />
           <CommandList>
             <CommandEmpty>{emptyMessage}</CommandEmpty>
             <CommandGroup>
-              {options.map((option) => (
+              {filteredOptions.map((option) => (
                 <CommandItem
                   key={option.value}
                   value={option.label}

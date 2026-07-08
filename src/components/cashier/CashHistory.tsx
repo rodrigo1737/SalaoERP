@@ -1,4 +1,4 @@
-import { useState } from 'react';
+import { useEffect, useState } from 'react';
 import { motion } from 'framer-motion';
 import { 
   Calendar,
@@ -21,7 +21,9 @@ import {
   CollapsibleContent,
   CollapsibleTrigger,
 } from '@/components/ui/collapsible';
-import { useData, CashSession, Transaction } from '@/context/DataContext';
+import { CashSession, Transaction } from '@/context/DataContext';
+import { useAuth } from '@/contexts/AuthContext';
+import { supabase } from '@/integrations/supabase/client';
 
 interface CashHistoryProps {
   onBack: () => void;
@@ -59,17 +61,63 @@ const paymentMethodLabels: Record<string, string> = {
 };
 
 export function CashHistory({ onBack }: CashHistoryProps) {
-  const { cashSessions, transactions } = useData();
+  const { tenantId } = useAuth();
   const [expandedSession, setExpandedSession] = useState<string | null>(null);
+  const [closedSessions, setClosedSessions] = useState<CashSession[]>([]);
+  const [sessionTransactions, setSessionTransactions] = useState<Record<string, Transaction[]>>({});
+  const [loading, setLoading] = useState(false);
 
-  // Get closed sessions, sorted by date
-  const closedSessions = cashSessions
-    .filter(s => s.status === 'closed')
-    .sort((a, b) => new Date(b.closed_at || b.opened_at).getTime() - new Date(a.closed_at || a.opened_at).getTime());
+  useEffect(() => {
+    const fetchSessions = async () => {
+      if (!tenantId) {
+        setClosedSessions([]);
+        return;
+      }
 
-  const getSessionTransactions = (sessionId: string) => {
-    return transactions.filter(t => t.cash_session_id === sessionId);
-  };
+      setLoading(true);
+      try {
+        const { data, error } = await supabase
+          .from('cash_sessions')
+          .select('*')
+          .eq('tenant_id', tenantId)
+          .eq('status', 'closed')
+          .order('closed_at', { ascending: false });
+
+        if (error) throw error;
+        setClosedSessions((data as CashSession[]) ?? []);
+      } catch (error) {
+        console.error('Erro ao carregar historico de caixa:', error);
+      } finally {
+        setLoading(false);
+      }
+    };
+
+    fetchSessions();
+  }, [tenantId]);
+
+  useEffect(() => {
+    const fetchSessionTransactions = async () => {
+      if (!tenantId || !expandedSession || sessionTransactions[expandedSession]) return;
+
+      try {
+        const { data, error } = await supabase
+          .from('transactions')
+          .select('*')
+          .eq('tenant_id', tenantId)
+          .eq('cash_session_id', expandedSession)
+          .order('created_at', { ascending: true });
+
+        if (error) throw error;
+        setSessionTransactions((prev) => ({ ...prev, [expandedSession]: (data as Transaction[]) ?? [] }));
+      } catch (error) {
+        console.error('Erro ao carregar movimentacoes do caixa:', error);
+      }
+    };
+
+    fetchSessionTransactions();
+  }, [expandedSession, sessionTransactions, tenantId]);
+
+  const getSessionTransactions = (sessionId: string) => sessionTransactions[sessionId] ?? [];
 
   const calculateSessionStats = (session: CashSession) => {
     const sessionTrans = getSessionTransactions(session.id);
@@ -116,7 +164,11 @@ export function CashHistory({ onBack }: CashHistoryProps) {
       </div>
 
       {/* Sessions List */}
-      {closedSessions.length === 0 ? (
+      {loading ? (
+        <Card className="p-12 border-0 shadow-lg text-center">
+          <p className="text-muted-foreground">Carregando histórico...</p>
+        </Card>
+      ) : closedSessions.length === 0 ? (
         <Card className="p-12 border-0 shadow-lg text-center">
           <FileText className="w-16 h-16 mx-auto mb-4 text-muted-foreground opacity-50" />
           <h2 className="text-xl font-display font-semibold text-foreground mb-2">

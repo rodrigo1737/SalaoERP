@@ -59,63 +59,167 @@ interface DashboardAppointment {
   professional?: { nickname?: string | null } | null;
 }
 
+interface DashboardStats {
+  todayRevenue: number;
+  todayAppointments: number;
+  clientsCount: number;
+  activeClients: number;
+  monthRevenue: number;
+  todayExpense: number;
+  todayNetBalance: number;
+  cashSessionIncome: number;
+  cashSessionExpense: number;
+  cashSessionBalance: number;
+}
+
+const startOfDay = (date: Date) => {
+  const value = new Date(date);
+  value.setHours(0, 0, 0, 0);
+  return value;
+};
+
+const endOfDay = (date: Date) => {
+  const value = new Date(date);
+  value.setHours(23, 59, 59, 999);
+  return value;
+};
+
 export function Dashboard({ onNavigate }: DashboardProps) {
-  const {
-    appointments,
-    clients,
-    professionals,
-    transactions,
-    currentCashSession,
-    loading
-  } = useData();
+  const { professionals } = useData();
   const { user, currentTenant, tenantId } = useAuth();
   const isCleaningSegment = isCleaningControlTenant(currentTenant);
+  const [dashboardLoading, setDashboardLoading] = useState(false);
+  const [dashboardStats, setDashboardStats] = useState<DashboardStats>({
+    todayRevenue: 0,
+    todayAppointments: 0,
+    clientsCount: 0,
+    activeClients: 0,
+    monthRevenue: 0,
+    todayExpense: 0,
+    todayNetBalance: 0,
+    cashSessionIncome: 0,
+    cashSessionExpense: 0,
+    cashSessionBalance: 0,
+  });
+  const [currentCashSession, setCurrentCashSession] = useState<{
+    id: string;
+    opened_at: string;
+    opening_balance: number;
+  } | null>(null);
+  const [upcomingAppointments, setUpcomingAppointments] = useState<DashboardAppointment[]>([]);
 
   // Para tenants de limpeza, os agendamentos vêm de `cleaning_appointments`.
   // Para os demais, mantém a fonte do DataContext (`appointments`).
-  const [cleaningAppointments, setCleaningAppointments] = useState<DashboardAppointment[]>([]);
-  const [cleaningFinancialEntries, setCleaningFinancialEntries] = useState<Array<{
-    amount: number;
-    entry_type: string;
-    status: string;
-    created_at: string;
-  }>>([]);
-  const [cleaningLoading, setCleaningLoading] = useState(false);
-
   useEffect(() => {
     let cancelled = false;
-    if (!isCleaningSegment || !tenantId) {
-      setCleaningAppointments([]);
-      setCleaningFinancialEntries([]);
+    if (!tenantId) {
+      setUpcomingAppointments([]);
+      setCurrentCashSession(null);
       return;
     }
-    setCleaningLoading(true);
-    Promise.all([
-      supabase
-        .from('cleaning_appointments')
-        .select('id, start_time, end_time, status, client_id, client_name_snapshot, service_name_snapshot, assignee_name_snapshot')
-        .eq('tenant_id', tenantId)
-        .is('deleted_at', null)
-        .neq('status', 'cancelled')
-        .order('start_time', { ascending: true }),
-      supabase
-        .from('cleaning_financial_entries')
-        .select('amount, entry_type, status, created_at')
-        .eq('tenant_id', tenantId)
-        .is('deleted_at', null)
-        .order('created_at', { ascending: false }),
-    ]).then(([appointmentsResponse, financialResponse]) => {
-        if (cancelled) return;
-        const { data, error } = appointmentsResponse;
-        const { data: financialData, error: financialError } = financialResponse;
 
-        if (error || financialError) {
-          console.error('Erro carregando cleaning_appointments para o Dashboard', error);
-          console.error('Erro carregando cleaning_financial_entries para o Dashboard', financialError);
-          setCleaningAppointments([]);
-          setCleaningFinancialEntries([]);
-        } else {
-          const mapped: DashboardAppointment[] = (data || []).map((row) => ({
+    const fetchDashboardData = async () => {
+      setDashboardLoading(true);
+
+      const now = new Date();
+      const todayStart = startOfDay(now);
+      const todayEnd = endOfDay(now);
+      const monthStart = new Date(now.getFullYear(), now.getMonth(), 1);
+      const tomorrowEnd = endOfDay(new Date(now.getFullYear(), now.getMonth(), now.getDate() + 1));
+      const thirtyDaysAgo = new Date(now);
+      thirtyDaysAgo.setDate(thirtyDaysAgo.getDate() - 30);
+
+      try {
+        if (isCleaningSegment) {
+          const [
+            todayAppointmentsResponse,
+            clientsCountResponse,
+            activeClientsResponse,
+            todayRevenueResponse,
+            todayExpenseResponse,
+            monthRevenueResponse,
+            upcomingResponse,
+          ] = await Promise.all([
+            supabase
+              .from('cleaning_appointments')
+              .select('id', { count: 'exact', head: true })
+              .eq('tenant_id', tenantId)
+              .is('deleted_at', null)
+              .neq('status', 'cancelled')
+              .gte('start_time', todayStart.toISOString())
+              .lte('start_time', todayEnd.toISOString()),
+            supabase
+              .from('clients')
+              .select('id', { count: 'exact', head: true })
+              .eq('tenant_id', tenantId)
+              .is('deleted_at', null),
+            supabase
+              .from('cleaning_appointments')
+              .select('client_id')
+              .eq('tenant_id', tenantId)
+              .is('deleted_at', null)
+              .gte('start_time', thirtyDaysAgo.toISOString())
+              .lte('start_time', todayEnd.toISOString()),
+            supabase
+              .from('cleaning_financial_entries')
+              .select('amount')
+              .eq('tenant_id', tenantId)
+              .is('deleted_at', null)
+              .in('entry_type', ['receivable', 'received'])
+              .neq('status', 'cancelled')
+              .gte('created_at', todayStart.toISOString())
+              .lte('created_at', todayEnd.toISOString()),
+            supabase
+              .from('cleaning_financial_entries')
+              .select('amount')
+              .eq('tenant_id', tenantId)
+              .is('deleted_at', null)
+              .in('entry_type', ['expense', 'commission_payment'])
+              .neq('status', 'cancelled')
+              .gte('created_at', todayStart.toISOString())
+              .lte('created_at', todayEnd.toISOString()),
+            supabase
+              .from('cleaning_financial_entries')
+              .select('amount')
+              .eq('tenant_id', tenantId)
+              .is('deleted_at', null)
+              .in('entry_type', ['receivable', 'received'])
+              .neq('status', 'cancelled')
+              .gte('created_at', monthStart.toISOString())
+              .lte('created_at', todayEnd.toISOString()),
+            supabase
+              .from('cleaning_appointments')
+              .select('id, start_time, end_time, status, client_id, client_name_snapshot, service_name_snapshot, assignee_name_snapshot')
+              .eq('tenant_id', tenantId)
+              .is('deleted_at', null)
+              .neq('status', 'cancelled')
+              .gte('start_time', now.toISOString())
+              .lte('start_time', tomorrowEnd.toISOString())
+              .order('start_time', { ascending: true })
+              .limit(4),
+          ]);
+
+          if (cancelled) return;
+
+          const todayRevenue = (todayRevenueResponse.data || []).reduce((sum, entry) => sum + Number(entry.amount || 0), 0);
+          const todayExpense = (todayExpenseResponse.data || []).reduce((sum, entry) => sum + Number(entry.amount || 0), 0);
+          const monthRevenue = (monthRevenueResponse.data || []).reduce((sum, entry) => sum + Number(entry.amount || 0), 0);
+          const activeClients = new Set((activeClientsResponse.data || []).map((item) => item.client_id).filter(Boolean)).size;
+
+          setDashboardStats({
+            todayRevenue,
+            todayAppointments: todayAppointmentsResponse.count || 0,
+            clientsCount: clientsCountResponse.count || 0,
+            activeClients,
+            monthRevenue,
+            todayExpense,
+            todayNetBalance: todayRevenue - todayExpense,
+            cashSessionIncome: todayRevenue,
+            cashSessionExpense: todayExpense,
+            cashSessionBalance: todayRevenue - todayExpense,
+          });
+          setCurrentCashSession(null);
+          setUpcomingAppointments(((upcomingResponse.data || []).map((row) => ({
             id: row.id,
             start_time: row.start_time,
             end_time: row.end_time,
@@ -124,120 +228,150 @@ export function Dashboard({ onNavigate }: DashboardProps) {
             client: { name: row.client_name_snapshot },
             service: { name: row.service_name_snapshot },
             professional: { nickname: row.assignee_name_snapshot },
-          }));
-          setCleaningAppointments(mapped);
-          setCleaningFinancialEntries((financialData || []).map((entry) => ({
-            amount: Number(entry.amount || 0),
-            entry_type: entry.entry_type,
-            status: entry.status,
-            created_at: entry.created_at,
-          })));
+          })) as DashboardAppointment[]));
+        } else {
+          const [
+            todayRevenueResponse,
+            todayAppointmentsResponse,
+            monthRevenueResponse,
+            upcomingResponse,
+            activeClientsResponse,
+            clientsCountResponse,
+            currentCashSessionResponse,
+          ] = await Promise.all([
+            supabase
+              .from('appointments')
+              .select('total_value')
+              .eq('tenant_id', tenantId)
+              .is('deleted_at', null)
+              .eq('status', 'completed')
+              .gte('start_time', todayStart.toISOString())
+              .lte('start_time', todayEnd.toISOString()),
+            supabase
+              .from('appointments')
+              .select('id', { count: 'exact', head: true })
+              .eq('tenant_id', tenantId)
+              .is('deleted_at', null)
+              .neq('status', 'cancelled')
+              .gte('start_time', todayStart.toISOString())
+              .lte('start_time', todayEnd.toISOString()),
+            supabase
+              .from('appointments')
+              .select('total_value')
+              .eq('tenant_id', tenantId)
+              .is('deleted_at', null)
+              .eq('status', 'completed')
+              .gte('start_time', monthStart.toISOString())
+              .lte('start_time', todayEnd.toISOString()),
+            supabase
+              .from('appointments')
+              .select(`
+                id,
+                start_time,
+                end_time,
+                status,
+                client_id,
+                client:clients(name),
+                service:services(name),
+                professional:professionals(nickname)
+              `)
+              .eq('tenant_id', tenantId)
+              .is('deleted_at', null)
+              .neq('status', 'cancelled')
+              .gte('start_time', now.toISOString())
+              .lte('start_time', tomorrowEnd.toISOString())
+              .order('start_time', { ascending: true })
+              .limit(4),
+            supabase
+              .from('appointments')
+              .select('client_id')
+              .eq('tenant_id', tenantId)
+              .is('deleted_at', null)
+              .gte('start_time', thirtyDaysAgo.toISOString())
+              .lte('start_time', todayEnd.toISOString()),
+            supabase
+              .from('clients')
+              .select('id', { count: 'exact', head: true })
+              .eq('tenant_id', tenantId)
+              .is('deleted_at', null),
+            supabase
+              .from('cash_sessions')
+              .select('id, opened_at, opening_balance')
+              .eq('tenant_id', tenantId)
+              .eq('status', 'open')
+              .order('opened_at', { ascending: false })
+              .limit(1)
+              .maybeSingle(),
+          ]);
+
+          if (cancelled) return;
+
+          const todayRevenue = (todayRevenueResponse.data || []).reduce((sum, item) => sum + Number(item.total_value || 0), 0);
+          const monthRevenue = (monthRevenueResponse.data || []).reduce((sum, item) => sum + Number(item.total_value || 0), 0);
+          const activeClients = new Set((activeClientsResponse.data || []).map((item) => item.client_id).filter(Boolean)).size;
+
+          let cashSessionIncome = 0;
+          let cashSessionExpense = 0;
+          let cashSessionBalance = 0;
+
+          if (currentCashSessionResponse.data?.id) {
+            const { data: sessionTransactions } = await supabase
+              .from('transactions')
+              .select('amount, type')
+              .eq('tenant_id', tenantId)
+              .eq('cash_session_id', currentCashSessionResponse.data.id);
+
+            cashSessionIncome = (sessionTransactions || [])
+              .filter((entry) => entry.type === 'income')
+              .reduce((sum, entry) => sum + Number(entry.amount || 0), 0);
+            cashSessionExpense = (sessionTransactions || [])
+              .filter((entry) => entry.type === 'expense')
+              .reduce((sum, entry) => sum + Number(entry.amount || 0), 0);
+            cashSessionBalance = Number(currentCashSessionResponse.data.opening_balance || 0) + cashSessionIncome - cashSessionExpense;
+          }
+
+          setDashboardStats({
+            todayRevenue,
+            todayAppointments: todayAppointmentsResponse.count || 0,
+            clientsCount: clientsCountResponse.count || 0,
+            activeClients,
+            monthRevenue,
+            todayExpense: 0,
+            todayNetBalance: todayRevenue,
+            cashSessionIncome,
+            cashSessionExpense,
+            cashSessionBalance,
+          });
+          setCurrentCashSession(currentCashSessionResponse.data || null);
+          setUpcomingAppointments((upcomingResponse.data as DashboardAppointment[]) || []);
         }
-        setCleaningLoading(false);
-      });
+      } catch (error) {
+        if (cancelled) return;
+        console.error('Erro ao carregar dashboard:', error);
+        setDashboardStats({
+          todayRevenue: 0,
+          todayAppointments: 0,
+          clientsCount: 0,
+          activeClients: 0,
+          monthRevenue: 0,
+          todayExpense: 0,
+          todayNetBalance: 0,
+          cashSessionIncome: 0,
+          cashSessionExpense: 0,
+          cashSessionBalance: 0,
+        });
+        setCurrentCashSession(null);
+        setUpcomingAppointments([]);
+      } finally {
+        if (!cancelled) setDashboardLoading(false);
+      }
+    };
+
+    fetchDashboardData();
     return () => {
       cancelled = true;
     };
   }, [isCleaningSegment, tenantId]);
-
-  // Fonte unificada para o restante do componente
-  const sourceAppointments: DashboardAppointment[] = isCleaningSegment
-    ? cleaningAppointments
-    : (appointments as DashboardAppointment[]);
-
-  const stats = useMemo(() => {
-    const today = new Date();
-    today.setHours(0, 0, 0, 0);
-    const endOfToday = new Date(today);
-    endOfToday.setHours(23, 59, 59, 999);
-
-    const startOfMonth = new Date(today.getFullYear(), today.getMonth(), 1);
-    const endOfMonth   = new Date(today.getFullYear(), today.getMonth() + 1, 0, 23, 59, 59, 999);
-
-    // ITEM 19: ambos (hoje e mês) calculados a partir da mesma fonte: transactions de tipo income
-    const cleaningRevenueEntries = cleaningFinancialEntries.filter(entry => (
-      (entry.entry_type === 'receivable' || entry.entry_type === 'received')
-      && entry.status !== 'cancelled'
-    ));
-    const cleaningExpenseEntries = cleaningFinancialEntries.filter(entry => (
-      (entry.entry_type === 'expense' || entry.entry_type === 'commission_payment')
-      && entry.status !== 'cancelled'
-    ));
-
-    const incomeTransactions = transactions.filter(t => t.type === 'income');
-    const expenseTransactions = transactions.filter(t => t.type === 'expense');
-
-    const todayRevenue = (isCleaningSegment ? cleaningRevenueEntries : incomeTransactions)
-      .filter(t => {
-        const d = new Date(t.created_at);
-        return d >= today && d <= endOfToday;
-      })
-      .reduce((sum, t) => sum + Number(t.amount), 0);
-
-    const todayExpense = (isCleaningSegment ? cleaningExpenseEntries : expenseTransactions)
-      .filter(t => {
-        const d = new Date(t.created_at);
-        return d >= today && d <= endOfToday;
-      })
-      .reduce((sum, t) => sum + Number(t.amount), 0);
-
-    const monthRevenue = (isCleaningSegment ? cleaningRevenueEntries : incomeTransactions)
-      .filter(t => {
-        const tDate = new Date(t.created_at);
-        return tDate >= startOfMonth && tDate <= endOfMonth;
-      })
-      .reduce((sum, t) => sum + Number(t.amount), 0);
-
-    // Filter today's appointments (para contagem — não para receita)
-    const todayAppts = sourceAppointments.filter(apt => {
-      const aptDate = new Date(apt.start_time);
-      return aptDate >= today && aptDate <= endOfToday;
-    });
-
-    // Active clients (clients with appointments in the last 30 days)
-    const thirtyDaysAgo = new Date();
-    thirtyDaysAgo.setDate(thirtyDaysAgo.getDate() - 30);
-    const activeClientIds = new Set(
-      sourceAppointments
-        .filter(apt => new Date(apt.start_time) >= thirtyDaysAgo && apt.client_id)
-        .map(apt => apt.client_id)
-    );
-
-    // Current cash session stats
-    const sessionTransactions = currentCashSession
-      ? transactions.filter(t => t.cash_session_id === currentCashSession.id)
-      : [];
-    
-    const cashSessionIncome = sessionTransactions
-      .filter(t => t.type === 'income')
-      .reduce((sum, t) => sum + Number(t.amount), 0);
-    
-    const cashSessionExpense = sessionTransactions
-      .filter(t => t.type === 'expense')
-      .reduce((sum, t) => sum + Number(t.amount), 0);
-
-    return {
-      todayRevenue,
-      todayAppointments: todayAppts.length,
-      activeClients: activeClientIds.size || clients.length,
-      monthRevenue,
-      todayExpense,
-      todayNetBalance: todayRevenue - todayExpense,
-      cashSessionIncome,
-      cashSessionExpense,
-      cashSessionBalance: currentCashSession 
-        ? currentCashSession.opening_balance + cashSessionIncome - cashSessionExpense 
-        : 0,
-    };
-  }, [sourceAppointments, transactions, clients, currentCashSession, isCleaningSegment, cleaningFinancialEntries]);
-
-  const upcomingAppointments = useMemo(() => {
-    const now = new Date();
-    return sourceAppointments
-      .filter(apt => new Date(apt.start_time) >= now && apt.status !== 'cancelled')
-      .sort((a, b) => new Date(a.start_time).getTime() - new Date(b.start_time).getTime())
-      .slice(0, 4);
-  }, [sourceAppointments]);
 
   const activeProfessionals = useMemo(() => {
     return professionals.filter(p => p.is_active).slice(0, 4);
@@ -246,34 +380,34 @@ export function Dashboard({ onNavigate }: DashboardProps) {
   const statCards = [
     {
       title: 'Faturamento Hoje',
-      value: formatCurrency(stats.todayRevenue),
+      value: formatCurrency(dashboardStats.todayRevenue),
       icon: DollarSign,
-      trend: stats.todayRevenue > 0 ? '+' + formatCurrency(stats.todayRevenue) : 'R$ 0',
-      trendUp: stats.todayRevenue > 0,
+      trend: dashboardStats.todayRevenue > 0 ? '+' + formatCurrency(dashboardStats.todayRevenue) : 'R$ 0',
+      trendUp: dashboardStats.todayRevenue > 0,
       color: 'primary',
     },
     {
       title: 'Agendamentos Hoje',
-      value: stats.todayAppointments.toString(),
+      value: dashboardStats.todayAppointments.toString(),
       icon: Calendar,
-      trend: stats.todayAppointments > 0 ? `${stats.todayAppointments} hoje` : 'Nenhum',
-      trendUp: stats.todayAppointments > 0,
+      trend: dashboardStats.todayAppointments > 0 ? `${dashboardStats.todayAppointments} hoje` : 'Nenhum',
+      trendUp: dashboardStats.todayAppointments > 0,
       color: 'success',
     },
     {
       title: 'Clientes Cadastrados',
-      value: clients.length.toString(),
+      value: dashboardStats.clientsCount.toString(),
       icon: Users,
-      trend: stats.activeClients > 0 ? `${stats.activeClients} ativos` : 'Nenhum',
-      trendUp: stats.activeClients > 0,
+      trend: dashboardStats.activeClients > 0 ? `${dashboardStats.activeClients} ativos` : 'Nenhum',
+      trendUp: dashboardStats.activeClients > 0,
       color: 'info',
     },
     {
       title: 'Faturamento Mensal',
-      value: formatCurrency(stats.monthRevenue),
+      value: formatCurrency(dashboardStats.monthRevenue),
       icon: TrendingUp,
-      trend: stats.monthRevenue > 0 ? 'Este mês' : 'Sem movimentos',
-      trendUp: stats.monthRevenue > 0,
+      trend: dashboardStats.monthRevenue > 0 ? 'Do dia 1 até hoje' : 'Sem movimentos',
+      trendUp: dashboardStats.monthRevenue > 0,
       color: 'accent',
     },
   ];
@@ -286,7 +420,7 @@ export function Dashboard({ onNavigate }: DashboardProps) {
   const primaryScheduleLabel = isCleaningSegment ? 'Ver Agenda Limpeza' : 'Ver Agenda';
   const newAppointmentLabel = isCleaningSegment ? 'Nova Limpeza' : 'Novo Agendamento';
 
-  if (loading || cleaningLoading) {
+  if (dashboardLoading) {
     return (
       <div className="p-6 lg:p-8 flex items-center justify-center min-h-[400px]">
         <div className="text-center">
@@ -335,15 +469,15 @@ export function Dashboard({ onNavigate }: DashboardProps) {
               <div className="flex-1 flex flex-wrap gap-4 sm:justify-end">
                 <div className="text-center sm:text-right">
                   <p className="text-xs text-muted-foreground">Entradas hoje</p>
-                  <p className="font-bold text-success">{formatCurrency(stats.todayRevenue)}</p>
+                  <p className="font-bold text-success">{formatCurrency(dashboardStats.todayRevenue)}</p>
                 </div>
                 <div className="text-center sm:text-right">
                   <p className="text-xs text-muted-foreground">Saídas hoje</p>
-                  <p className="font-bold text-destructive">{formatCurrency(stats.todayExpense)}</p>
+                  <p className="font-bold text-destructive">{formatCurrency(dashboardStats.todayExpense)}</p>
                 </div>
                 <div className="text-center sm:text-right">
                   <p className="text-xs text-muted-foreground">Saldo do dia</p>
-                  <p className="font-bold text-primary">{formatCurrency(stats.todayNetBalance)}</p>
+                  <p className="font-bold text-primary">{formatCurrency(dashboardStats.todayNetBalance)}</p>
                 </div>
                 <Button variant="outline" size="sm" onClick={() => onNavigate('cleaning')}>
                   Ver Fluxo
@@ -392,15 +526,15 @@ export function Dashboard({ onNavigate }: DashboardProps) {
               <div className="flex-1 flex flex-wrap gap-4 sm:justify-end">
                 <div className="text-center sm:text-right">
                   <p className="text-xs text-muted-foreground">Entradas</p>
-                  <p className="font-bold text-success">{formatCurrency(stats.cashSessionIncome)}</p>
+                  <p className="font-bold text-success">{formatCurrency(dashboardStats.cashSessionIncome)}</p>
                 </div>
                 <div className="text-center sm:text-right">
                   <p className="text-xs text-muted-foreground">Saídas</p>
-                  <p className="font-bold text-destructive">{formatCurrency(stats.cashSessionExpense)}</p>
+                  <p className="font-bold text-destructive">{formatCurrency(dashboardStats.cashSessionExpense)}</p>
                 </div>
                 <div className="text-center sm:text-right">
                   <p className="text-xs text-muted-foreground">Saldo</p>
-                  <p className="font-bold text-primary">{formatCurrency(stats.cashSessionBalance)}</p>
+                  <p className="font-bold text-primary">{formatCurrency(dashboardStats.cashSessionBalance)}</p>
                 </div>
                 <Button variant="outline" size="sm" onClick={() => onNavigate('cashier')}>
                   Ver Caixa

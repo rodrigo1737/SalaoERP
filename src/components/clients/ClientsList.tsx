@@ -54,6 +54,7 @@ import { Client } from '@/context/DataContext';
 import { useStableData } from '@/context/StableDataContext';
 import { ClientPhotoUpload } from './ClientPhotoUpload';
 import { useAuth } from '@/contexts/AuthContext';
+import { supabase } from '@/integrations/supabase/client';
 import {
   CadastroPageSize,
   CadastroViewMode,
@@ -79,10 +80,11 @@ const formatDateOnly = (value?: string) => {
 };
 
 export function ClientsList() {
-  const { clients, addClient, updateClient, deleteClient } = useStableData();
+  const { addClient, updateClient, deleteClient, refreshData } = useStableData();
   const { tenantId } = useAuth();
   const { toast } = useToast();
   const [searchQuery, setSearchQuery] = useState('');
+  const [debouncedSearchQuery, setDebouncedSearchQuery] = useState('');
   const [isDialogOpen, setIsDialogOpen] = useState(false);
   const [editingClient, setEditingClient] = useState<Client | null>(null);
   const [isSubmitting, setIsSubmitting] = useState(false);
@@ -90,6 +92,9 @@ export function ClientsList() {
   const [page, setPage] = useState(1);
   const [viewMode, setViewMode] = useState<CadastroViewMode>('cards');
   const [pageSize, setPageSize] = useState<CadastroPageSize>(DEFAULT_PAGE_SIZE);
+  const [clients, setClients] = useState<Client[]>([]);
+  const [loadingClients, setLoadingClients] = useState(false);
+  const [totalClients, setTotalClients] = useState(0);
 
   // Form state
   const [formName, setFormName] = useState('');
@@ -99,21 +104,24 @@ export function ClientsList() {
   const [formNotes, setFormNotes] = useState('');
   const [formPhotoUrl, setFormPhotoUrl] = useState<string | null>(null);
 
-  const filteredClients = clients.filter(client =>
-    client.name.toLowerCase().includes(searchQuery.toLowerCase()) ||
-    (client.phone && client.phone.includes(searchQuery))
-  );
-  // ITEM 10: paginação
-  const resolvedPageSize = resolvePageSize(pageSize, filteredClients.length);
-  const totalPages = Math.max(1, Math.ceil(filteredClients.length / resolvedPageSize));
+  const resolvedPageSize = resolvePageSize(pageSize, totalClients || clients.length);
+  const totalPages = pageSize === 'all'
+    ? 1
+    : Math.max(1, Math.ceil(totalClients / resolvedPageSize));
   const currentPage = Math.min(page, totalPages);
-  const pagedClients = pageSize === 'all'
-    ? filteredClients
-    : filteredClients.slice((currentPage - 1) * resolvedPageSize, currentPage * resolvedPageSize);
+  const pagedClients = clients;
 
   useEffect(() => {
     setPage(1);
   }, [searchQuery, pageSize, viewMode]);
+
+  useEffect(() => {
+    const timeout = window.setTimeout(() => {
+      setDebouncedSearchQuery(searchQuery.trim());
+    }, 250);
+
+    return () => window.clearTimeout(timeout);
+  }, [searchQuery]);
 
   useEffect(() => {
     if (page > totalPages) {
@@ -121,9 +129,82 @@ export function ClientsList() {
     }
   }, [page, totalPages]);
 
+  useEffect(() => {
+    const fetchClients = async () => {
+      if (!tenantId) {
+        setClients([]);
+        setTotalClients(0);
+        return;
+      }
+
+      setLoadingClients(true);
+      try {
+        const search = debouncedSearchQuery.replace(/[%]/g, '').replace(/,/g, ' ');
+
+        if (pageSize === 'all') {
+          const rows: Client[] = [];
+          let from = 0;
+          while (true) {
+            let query = supabase
+              .from('clients')
+              .select('*', { count: from === 0 ? 'exact' : undefined })
+              .eq('tenant_id', tenantId)
+              .is('deleted_at', null)
+              .order('name')
+              .range(from, from + 999);
+
+            if (search) {
+              query = query.or(`name.ilike.%${search}%,phone.ilike.%${search}%`);
+            }
+
+            const { data, count, error } = await query;
+            if (error) throw error;
+
+            const pageData = (data as Client[]) ?? [];
+            rows.push(...pageData);
+            if (from === 0) setTotalClients(count ?? pageData.length);
+            if (pageData.length < 1000) break;
+            from += 1000;
+          }
+
+          setClients(rows);
+        } else {
+          const from = (currentPage - 1) * resolvedPageSize;
+          const to = from + resolvedPageSize - 1;
+
+          let query = supabase
+            .from('clients')
+            .select('*', { count: 'exact' })
+            .eq('tenant_id', tenantId)
+            .is('deleted_at', null)
+            .order('name')
+            .range(from, to);
+
+          if (search) {
+            query = query.or(`name.ilike.%${search}%,phone.ilike.%${search}%`);
+          }
+
+          const { data, count, error } = await query;
+          if (error) throw error;
+
+          setClients((data as Client[]) ?? []);
+          setTotalClients(count ?? 0);
+        }
+      } catch (error) {
+        console.error('Erro ao carregar clientes:', error);
+        toast({ variant: 'destructive', title: 'Erro', description: 'Nao foi possivel carregar os clientes.' });
+      } finally {
+        setLoadingClients(false);
+      }
+    };
+
+    fetchClients();
+  }, [tenantId, debouncedSearchQuery, currentPage, pageSize, resolvedPageSize, toast]);
+
   const handleDelete = async () => {
     if (!deletingClient) return;
     await deleteClient(deletingClient.id);
+    await refreshData(['clients']);
     setDeletingClient(null);
   };
 
@@ -164,6 +245,7 @@ export function ClientsList() {
           notes: formNotes || undefined,
           photo_url: formPhotoUrl || undefined,
         });
+        await refreshData(['clients']);
         toast({ title: "Cliente atualizado", description: "Dados salvos com sucesso" });
       } else {
         await addClient({
@@ -174,6 +256,7 @@ export function ClientsList() {
           notes: formNotes || undefined,
           photo_url: formPhotoUrl || undefined,
         });
+        await refreshData(['clients']);
         toast({ title: "Cliente cadastrado", description: `${formName} foi adicionado` });
       }
 
@@ -194,7 +277,7 @@ export function ClientsList() {
             Clientes
           </h1>
           <p className="text-muted-foreground mt-1">
-            {filteredClients.length} cliente{filteredClients.length !== 1 ? 's' : ''} encontrado{filteredClients.length !== 1 ? 's' : ''}
+            {totalClients} cliente{totalClients !== 1 ? 's' : ''} encontrado{totalClients !== 1 ? 's' : ''}
           </p>
         </div>
         <Button onClick={openNewClient}>
@@ -220,13 +303,17 @@ export function ClientsList() {
           onViewModeChange={setViewMode}
           pageSize={pageSize}
           onPageSizeChange={setPageSize}
-          totalItems={filteredClients.length}
+          totalItems={totalClients}
           shownItems={pagedClients.length}
         />
       </div>
 
       {/* Clients Grid */}
-      {filteredClients.length === 0 ? (
+      {loadingClients ? (
+        <div className="text-center py-12 text-muted-foreground">
+          <p>Carregando clientes...</p>
+        </div>
+      ) : totalClients === 0 ? (
         <div className="text-center py-12 text-muted-foreground">
           <p>Nenhum cliente cadastrado</p>
           <p className="text-sm">Clique em "Novo Cliente" para adicionar</p>

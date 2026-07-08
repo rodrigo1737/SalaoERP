@@ -1,5 +1,5 @@
-import { useState, useMemo } from 'react';
-import { useData } from '@/context/DataContext';
+import { useState, useMemo, useEffect } from 'react';
+import { useStableData } from '@/context/StableDataContext';
 import { Card, CardContent, CardHeader, CardTitle, CardDescription } from '@/components/ui/card';
 import { Tabs, TabsContent, TabsList, TabsTrigger } from '@/components/ui/tabs';
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from '@/components/ui/select';
@@ -38,6 +38,9 @@ import {
   AreaChart,
   Area
 } from 'recharts';
+import { supabase } from '@/integrations/supabase/client';
+import { useAuth } from '@/contexts/AuthContext';
+import { Appointment, Commission, Transaction } from '@/context/DataContext';
 
 type PeriodFilter = '7d' | '30d' | '90d' | '12m' | 'custom';
 
@@ -85,9 +88,18 @@ const parseLegacyCommissionData = (notes?: string | null) => {
 };
 
 export function Reports() {
-  const { transactions, appointments, commissions, clients, professionals, services, cashSessions } = useData();
+  const { clients, professionals, services } = useStableData();
+  const { tenantId } = useAuth();
   const [period, setPeriod] = useState<PeriodFilter>('30d');
   const [inactiveDays, setInactiveDays] = useState('60');
+  const [transactions, setTransactions] = useState<Transaction[]>([]);
+  const [appointments, setAppointments] = useState<Appointment[]>([]);
+  const [commissions, setCommissions] = useState<Commission[]>([]);
+  const [inactiveBaseAppointments, setInactiveBaseAppointments] = useState<Array<Pick<Appointment, 'client_id' | 'start_time' | 'status'>>>([]);
+  const [loading, setLoading] = useState(false);
+  const clientsById = useMemo(() => new Map(clients.map((client) => [client.id, client])), [clients]);
+  const professionalsById = useMemo(() => new Map(professionals.map((professional) => [professional.id, professional])), [professionals]);
+  const servicesById = useMemo(() => new Map(services.map((service) => [service.id, service])), [services]);
 
   // Calculate date range based on period
   const dateRange = useMemo(() => {
@@ -114,27 +126,93 @@ export function Reports() {
     return { start, end };
   }, [period]);
 
+  useEffect(() => {
+    const fetchPeriodData = async () => {
+      if (!tenantId) {
+        setTransactions([]);
+        setAppointments([]);
+        setCommissions([]);
+        setInactiveBaseAppointments([]);
+        return;
+      }
+
+      setLoading(true);
+      try {
+        const [transactionsResponse, appointmentsResponse, commissionsResponse, inactiveAppointmentsResponse] = await Promise.all([
+          supabase
+            .from('transactions')
+            .select('*')
+            .eq('tenant_id', tenantId)
+            .gte('created_at', dateRange.start.toISOString())
+            .lte('created_at', dateRange.end.toISOString())
+            .order('created_at', { ascending: false }),
+          supabase
+            .from('appointments')
+            .select('*')
+            .eq('tenant_id', tenantId)
+            .is('deleted_at', null)
+            .gte('start_time', dateRange.start.toISOString())
+            .lte('start_time', dateRange.end.toISOString())
+            .order('start_time', { ascending: false }),
+          supabase
+            .from('commissions')
+            .select('*')
+            .eq('tenant_id', tenantId)
+            .gte('created_at', dateRange.start.toISOString())
+            .lte('created_at', dateRange.end.toISOString())
+            .order('created_at', { ascending: false }),
+          supabase
+            .from('appointments')
+            .select('client_id, start_time, status')
+            .eq('tenant_id', tenantId)
+            .is('deleted_at', null)
+            .eq('status', 'completed')
+            .order('start_time', { ascending: false }),
+        ]);
+
+        if (transactionsResponse.error) throw transactionsResponse.error;
+        if (appointmentsResponse.error) throw appointmentsResponse.error;
+        if (commissionsResponse.error) throw commissionsResponse.error;
+        if (inactiveAppointmentsResponse.error) throw inactiveAppointmentsResponse.error;
+
+        setTransactions((transactionsResponse.data as Transaction[]) ?? []);
+        setAppointments((appointmentsResponse.data as Appointment[]) ?? []);
+        setCommissions((commissionsResponse.data as Commission[]) ?? []);
+        setInactiveBaseAppointments((inactiveAppointmentsResponse.data as Array<Pick<Appointment, 'client_id' | 'start_time' | 'status'>>) ?? []);
+      } catch (error) {
+        console.error('Erro ao carregar relatórios:', error);
+        setTransactions([]);
+        setAppointments([]);
+        setCommissions([]);
+        setInactiveBaseAppointments([]);
+      } finally {
+        setLoading(false);
+      }
+    };
+
+    fetchPeriodData();
+  }, [dateRange.end, dateRange.start, tenantId]);
+
   // Filter data by period
   const filteredTransactions = useMemo(() => {
-    return transactions.filter(t => {
-      const date = new Date(t.created_at);
-      return isWithinInterval(date, { start: dateRange.start, end: dateRange.end });
-    });
-  }, [transactions, dateRange]);
+    return transactions;
+  }, [transactions]);
 
   const filteredAppointments = useMemo(() => {
-    return appointments.filter(a => {
-      const date = new Date(a.start_time);
-      return isWithinInterval(date, { start: dateRange.start, end: dateRange.end });
-    });
-  }, [appointments, dateRange]);
+    return appointments.map((appointment) => ({
+      ...appointment,
+      client: appointment.client_id ? clientsById.get(appointment.client_id) : undefined,
+      professional: appointment.professional_id ? professionalsById.get(appointment.professional_id) : undefined,
+      service: appointment.service_id ? servicesById.get(appointment.service_id) : undefined,
+    }));
+  }, [appointments, clientsById, professionalsById, servicesById]);
 
   const filteredCommissions = useMemo(() => {
-    return commissions.filter(c => {
-      const date = new Date(c.created_at);
-      return isWithinInterval(date, { start: dateRange.start, end: dateRange.end });
-    });
-  }, [commissions, dateRange]);
+    return commissions.map((commission) => ({
+      ...commission,
+      professional: professionalsById.get(commission.professional_id),
+    }));
+  }, [commissions, professionalsById]);
 
   const effectiveCommissions = useMemo<EffectiveCommission[]>(() => {
     const realCommissions: EffectiveCommission[] = filteredCommissions.map((commission) => ({
@@ -254,7 +332,7 @@ export function Reports() {
     const data: Record<string, { name: string; total: number; pending: number; paid: number; count: number }> = {};
     
     effectiveCommissions.forEach(c => {
-      const prof = professionals.find(p => p.id === c.professional_id);
+      const prof = professionalsById.get(c.professional_id);
       const name = prof?.nickname || 'Desconhecido';
       
       if (!data[c.professional_id]) {
@@ -272,7 +350,7 @@ export function Reports() {
     });
     
     return Object.values(data).sort((a, b) => b.total - a.total);
-  }, [effectiveCommissions, professionals]);
+  }, [effectiveCommissions, professionalsById]);
 
   const totalCommissions = effectiveCommissions.reduce((sum, c) => sum + Number(c.commission_value), 0);
   const pendingCommissions = filteredCommissions
@@ -286,7 +364,7 @@ export function Reports() {
     filteredAppointments
       .filter(a => a.status === 'completed' && a.professional_id)
       .forEach(a => {
-        const prof = professionals.find(p => p.id === a.professional_id);
+        const prof = a.professional || professionalsById.get(a.professional_id!);
         const name = prof?.nickname || 'Desconhecido';
         const revenue = Number(a.total_value) || 0;
         
@@ -311,7 +389,7 @@ export function Reports() {
     });
     
     return Object.values(data).sort((a, b) => b.profit - a.profit);
-  }, [filteredAppointments, effectiveCommissions, professionals]);
+  }, [filteredAppointments, effectiveCommissions, professionalsById]);
 
   // Most Profitable Clients
   const profitableClients = useMemo(() => {
@@ -320,7 +398,7 @@ export function Reports() {
     filteredAppointments
       .filter(a => a.status === 'completed' && a.client_id)
       .forEach(a => {
-        const client = clients.find(c => c.id === a.client_id);
+        const client = a.client || clientsById.get(a.client_id!);
         const name = client?.name || 'Desconhecido';
         const value = Number(a.total_value) || 0;
         
@@ -338,7 +416,7 @@ export function Reports() {
     });
     
     return Object.values(data).sort((a, b) => b.totalSpent - a.totalSpent).slice(0, 10);
-  }, [filteredAppointments, clients]);
+  }, [filteredAppointments, clientsById]);
 
   // Inactive Clients
   const inactiveClients = useMemo(() => {
@@ -347,7 +425,7 @@ export function Reports() {
     
     const clientLastVisit: Record<string, Date> = {};
     
-    appointments
+    inactiveBaseAppointments
       .filter(a => a.status === 'completed' && a.client_id)
       .forEach(a => {
         const visitDate = new Date(a.start_time);
@@ -376,7 +454,7 @@ export function Reports() {
         if (!b.daysSinceVisit) return 1;
         return b.daysSinceVisit - a.daysSinceVisit;
       });
-  }, [clients, appointments, inactiveDays]);
+  }, [clients, inactiveBaseAppointments, inactiveDays]);
 
   // Services Revenue
   const servicesRevenue = useMemo(() => {
@@ -385,7 +463,7 @@ export function Reports() {
     filteredAppointments
       .filter(a => a.status === 'completed' && a.service_id)
       .forEach(a => {
-        const service = services.find(s => s.id === a.service_id);
+        const service = a.service || servicesById.get(a.service_id!);
         const name = service?.name || 'Desconhecido';
         const revenue = Number(a.total_value) || 0;
         
@@ -398,7 +476,7 @@ export function Reports() {
       });
     
     return Object.values(data).sort((a, b) => b.revenue - a.revenue);
-  }, [filteredAppointments, services]);
+  }, [filteredAppointments, servicesById]);
 
   // Payment Methods Distribution
   const paymentMethodsData = useMemo(() => {
@@ -500,6 +578,14 @@ export function Reports() {
           </Select>
         </div>
       </div>
+
+      {loading && (
+        <Card>
+          <CardContent className="p-4 text-sm text-muted-foreground">
+            Carregando dados do período selecionado...
+          </CardContent>
+        </Card>
+      )}
 
       {/* KPI Cards */}
       <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-4 gap-4">

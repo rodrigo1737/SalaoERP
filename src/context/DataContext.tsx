@@ -381,6 +381,9 @@ export const DataProvider: React.FC<{ children: ReactNode }> = ({ children }) =>
     }
 
     setLoading(true);
+    setAppointments([]);
+    setCashSessions([]);
+    setCurrentCashSession(null);
     setTransactions([]);
     setCommissions([]);
 
@@ -390,15 +393,11 @@ export const DataProvider: React.FC<{ children: ReactNode }> = ({ children }) =>
         professionalsData,
         servicesData,
         productsData,
-        apptsData,
-        cashData,
       ] = await Promise.all([
         fetchClients(),
         fetchProfessionals(),
         isCleaningTenant ? Promise.resolve([] as Service[]) : fetchServices(),
         isCleaningTenant ? Promise.resolve([] as Product[]) : fetchProducts(),
-        isCleaningTenant ? Promise.resolve([] as Appointment[]) : fetchAppointments(),
-        isCleaningTenant ? Promise.resolve([] as CashSession[]) : fetchCash(),
       ]);
 
       if (requestId !== fetchRequestRef.current) return;
@@ -407,17 +406,19 @@ export const DataProvider: React.FC<{ children: ReactNode }> = ({ children }) =>
       setProfessionals(professionalsData);
       setServices(servicesData);
       setProducts(productsData);
-      setAppointments(joinAppointments(apptsData, clientsData, professionalsData, servicesData));
-      setCashSessions(cashData);
-      setCurrentCashSession(cashData.find(s => s.status === 'open') ?? null);
       setLoading(false);
 
       Promise.all([
+        isCleaningTenant ? Promise.resolve([] as Appointment[]) : fetchAppointments(),
+        isCleaningTenant ? Promise.resolve([] as CashSession[]) : fetchCash(),
         fetchTransactions(),
         isCleaningTenant ? Promise.resolve([] as Commission[]) : fetchCommissions(),
       ])
-        .then(([txData, commData]) => {
+        .then(([apptsData, cashData, txData, commData]) => {
           if (requestId !== fetchRequestRef.current) return;
+          setAppointments(joinAppointments(apptsData, clientsData, professionalsData, servicesData));
+          setCashSessions(cashData);
+          setCurrentCashSession(cashData.find(s => s.status === 'open') ?? null);
           setTransactions(txData);
           setCommissions(joinCommissions(commData, professionalsData));
         })

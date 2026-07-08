@@ -1,4 +1,4 @@
-import { useState, useEffect } from 'react';
+import { useState, useEffect, useMemo, useCallback } from 'react';
 import { motion } from 'framer-motion';
 import {
   ChevronLeft,
@@ -43,6 +43,7 @@ import { useData, Appointment } from '@/context/DataContext';
 import { useStock } from '@/context/StockContext';
 import { useAuth } from '@/contexts/AuthContext';
 import { useTenantSettings } from '@/contexts/TenantSettingsContext';
+import { supabase } from '@/integrations/supabase/client';
 import { cn } from '@/lib/utils';
 import { BillItemsEditor, BillItem } from './BillItemsEditor';
 import { useNavigate } from 'react-router-dom';
@@ -96,6 +97,21 @@ const isSameCalendarDay = (first: Date, second: Date) => {
     && first.getDate() === second.getDate();
 };
 
+const startOfWeekMonday = (date: Date) => {
+  const result = new Date(date);
+  const day = result.getDay();
+  const diff = day === 0 ? -6 : 1 - day;
+  result.setDate(result.getDate() + diff);
+  result.setHours(0, 0, 0, 0);
+  return result;
+};
+
+const endOfWeekExclusive = (date: Date) => {
+  const result = startOfWeekMonday(date);
+  result.setDate(result.getDate() + 7);
+  return result;
+};
+
 const normalizeText = (value?: string | null) => {
   return (value || '')
     .normalize('NFD')
@@ -104,7 +120,7 @@ const normalizeText = (value?: string | null) => {
 };
 
 export function Schedule() {
-  const { clients, professionals, services, products, appointments, loading, addClient, addService, addAppointment, updateAppointment, deleteAppointment, refundAppointment, currentCashSession, completeAppointment } = useData();
+  const { clients, professionals, services, products, loading, addClient, addService, addAppointment, updateAppointment, deleteAppointment, refundAppointment, currentCashSession, completeAppointment } = useData();
   const { settings: tenantSettings } = useTenantSettings();
   const navigate = useNavigate();
 
@@ -117,7 +133,7 @@ export function Schedule() {
     timeSlots.push(`${String(hour).padStart(2, '0')}:30`);
   }
   const { registerSale, registerServiceConsumption } = useStock();
-  const { userRole, currentProfessional, loading: authLoading, hasPermission, currentTenant } = useAuth();
+  const { userRole, currentProfessional, loading: authLoading, hasPermission, currentTenant, tenantId } = useAuth();
   const { toast } = useToast();
   const isCleaningTenant = isCleaningControlTenant(currentTenant);
   const isAdmin = userRole === 'admin';
@@ -139,6 +155,8 @@ export function Schedule() {
   const [isAddingService, setIsAddingService] = useState(false);
   const [selectedPaymentMethod, setSelectedPaymentMethod] = useState<string>('');
   const [billItems, setBillItems] = useState<BillItem[]>([]);
+  const [scheduleLoading, setScheduleLoading] = useState(false);
+  const [scheduleAppointmentsRaw, setScheduleAppointmentsRaw] = useState<Appointment[]>([]);
 
   const [formClient, setFormClient] = useState('');
   const [formService, setFormService] = useState('');
@@ -152,6 +170,28 @@ export function Schedule() {
   const [newServiceCategory, setNewServiceCategory] = useState('Outros');
   const [editValue, setEditValue] = useState('');
   const [editDuration, setEditDuration] = useState('');
+
+  const clientsById = useMemo(() => new Map(clients.map((client) => [client.id, client])), [clients]);
+  const professionalsById = useMemo(() => new Map(professionals.map((professional) => [professional.id, professional])), [professionals]);
+  const servicesById = useMemo(() => new Map(services.map((service) => [service.id, service])), [services]);
+  const clientOptions = useMemo(
+    () => clients.map((client) => ({ value: client.id, label: client.name, sublabel: client.phone || undefined })),
+    [clients],
+  );
+  const serviceOptions = useMemo(
+    () => services.map((service) => ({ value: service.id, label: service.name, sublabel: `R$ ${service.default_price.toFixed(2)}` })),
+    [services],
+  );
+
+  const scheduleAppointments = useMemo(
+    () => scheduleAppointmentsRaw.map((appointment) => ({
+      ...appointment,
+      client: appointment.client_id ? clientsById.get(appointment.client_id) : undefined,
+      professional: appointment.professional_id ? professionalsById.get(appointment.professional_id) : undefined,
+      service: appointment.service_id ? servicesById.get(appointment.service_id) : undefined,
+    })),
+    [scheduleAppointmentsRaw, clientsById, professionalsById, servicesById],
+  );
 
   const baseVisibleProfessionals = isAdmin
     ? scheduleProfessionals
@@ -180,11 +220,51 @@ export function Schedule() {
     }
   }, [selectedAppointment]);
 
+  const fetchScheduleAppointments = useCallback(async (referenceDate = currentDate) => {
+    if (!tenantId || isCleaningTenant) {
+      setScheduleAppointmentsRaw([]);
+      return;
+    }
+
+    setScheduleLoading(true);
+    try {
+      const weekStart = startOfWeekMonday(referenceDate);
+      const weekEnd = endOfWeekExclusive(referenceDate);
+
+      const { data, error } = await supabase
+        .from('appointments')
+        .select('*')
+        .eq('tenant_id', tenantId)
+        .is('deleted_at', null)
+        .gte('start_time', weekStart.toISOString())
+        .lt('start_time', weekEnd.toISOString())
+        .order('start_time', { ascending: true });
+
+      if (error) throw error;
+      setScheduleAppointmentsRaw((data as Appointment[]) ?? []);
+    } catch (error) {
+      console.error('Erro ao carregar agenda semanal:', error);
+      toast({
+        variant: 'destructive',
+        title: 'Erro ao carregar agenda',
+        description: 'Nao foi possivel carregar os agendamentos da semana.',
+      });
+    } finally {
+      setScheduleLoading(false);
+    }
+  }, [currentDate, isCleaningTenant, tenantId, toast]);
+
   useEffect(() => {
     if (!authLoading && isCleaningTenant) {
       navigate('/app/cleaning', { replace: true });
     }
   }, [authLoading, isCleaningTenant, navigate]);
+
+  useEffect(() => {
+    if (!authLoading && !isCleaningTenant && tenantId) {
+      fetchScheduleAppointments(currentDate);
+    }
+  }, [authLoading, isCleaningTenant, tenantId, currentDate, fetchScheduleAppointments]);
 
   const navigateDate = (direction: 'prev' | 'next') => {
     const newDate = new Date(currentDate);
@@ -214,13 +294,14 @@ export function Schedule() {
     });
   };
 
-  const appointmentMatchesSearch = (appointment: Appointment) => {
+  const appointmentMatchesSearch = useCallback((appointment: Appointment) => {
     if (!normalizedScheduleSearch) return true;
 
-    const clientName = appointment.client?.name || clients.find(client => client.id === appointment.client_id)?.name;
-    const serviceName = appointment.service?.name || services.find(service => service.id === appointment.service_id)?.name;
-    const professionalName = professionals.find(professional => professional.id === appointment.professional_id)?.name;
-    const professionalNickname = professionals.find(professional => professional.id === appointment.professional_id)?.nickname;
+    const clientName = appointment.client?.name || (appointment.client_id ? clientsById.get(appointment.client_id)?.name : undefined);
+    const serviceName = appointment.service?.name || (appointment.service_id ? servicesById.get(appointment.service_id)?.name : undefined);
+    const professional = appointment.professional_id ? professionalsById.get(appointment.professional_id) : undefined;
+    const professionalName = professional?.name;
+    const professionalNickname = professional?.nickname;
 
     return [
       clientName,
@@ -230,43 +311,71 @@ export function Schedule() {
       appointment.notes,
       appointmentStatusLabels[appointment.status],
     ].some(value => normalizeText(value).includes(normalizedScheduleSearch));
-  };
+  }, [clientsById, normalizedScheduleSearch, professionalsById, servicesById]);
+
+  const dayAppointments = useMemo(
+    () => scheduleAppointments.filter((appointment) => isSameCalendarDay(new Date(appointment.start_time), currentDate)),
+    [currentDate, scheduleAppointments],
+  );
+
+  const appointmentsForSlot = useMemo(() => {
+    const map = new Map<string, Appointment[]>();
+
+    dayAppointments.forEach((appointment) => {
+      if (!appointment.professional_id) return;
+
+      const startDate = new Date(appointment.start_time);
+      const endDate = new Date(appointment.end_time);
+      const startMinutes = startDate.getHours() * 60 + startDate.getMinutes();
+      const endMinutes = endDate.getHours() * 60 + endDate.getMinutes();
+
+      for (let slotMinutes = startMinutes; slotMinutes < endMinutes; slotMinutes += 30) {
+        const hour = Math.floor(slotMinutes / 60);
+        const minute = slotMinutes % 60;
+        const time = `${String(hour).padStart(2, '0')}:${String(minute).padStart(2, '0')}`;
+        const key = `${appointment.professional_id}:${time}`;
+        const current = map.get(key);
+        if (current) {
+          current.push(appointment);
+        } else {
+          map.set(key, [appointment]);
+        }
+      }
+    });
+
+    return map;
+  }, [dayAppointments]);
+
+  const appointmentsStartingBySlot = useMemo(() => {
+    const map = new Map<string, Appointment[]>();
+
+    dayAppointments.forEach((appointment) => {
+      if (!appointment.professional_id || !appointmentMatchesSearch(appointment)) return;
+
+      const key = `${appointment.professional_id}:${getTimeFromISO(appointment.start_time)}`;
+      const current = map.get(key);
+      if (current) {
+        current.push(appointment);
+      } else {
+        map.set(key, [appointment]);
+      }
+    });
+
+    return map;
+  }, [appointmentMatchesSearch, dayAppointments]);
 
   const getAppointmentForSlot = (time: string, professionalId: string): Appointment | undefined => {
-    return appointments.find(apt => {
-      const aptDate = new Date(apt.start_time);
-      const isSameDay = aptDate.toDateString() === currentDate.toDateString();
-      const aptTime = getTimeFromISO(apt.start_time);
-      return isSameDay && aptTime === time && apt.professional_id === professionalId;
-    });
+    return appointmentsStartingBySlot.get(`${professionalId}:${time}`)?.[0];
   };
 
   // Get ALL appointments that occupy a specific time slot (for overlapping display)
   const getAppointmentsForSlot = (time: string, professionalId: string): Appointment[] => {
-    const [slotHour, slotMinute] = time.split(':').map(Number);
-    const slotMinutes = slotHour * 60 + slotMinute;
-
-    return appointments.filter(apt => {
-      const aptDate = new Date(apt.start_time);
-      const isSameDay = aptDate.toDateString() === currentDate.toDateString();
-      if (!isSameDay || apt.professional_id !== professionalId) return false;
-
-      const startMinutes = aptDate.getHours() * 60 + aptDate.getMinutes();
-      const endDate = new Date(apt.end_time);
-      const endMinutes = endDate.getHours() * 60 + endDate.getMinutes();
-
-      return slotMinutes >= startMinutes && slotMinutes < endMinutes;
-    });
+    return appointmentsForSlot.get(`${professionalId}:${time}`) ?? [];
   };
 
   // Get appointments that START at a specific time (for rendering the card)
   const getAppointmentsStartingAt = (time: string, professionalId: string): Appointment[] => {
-    return appointments.filter(apt => {
-      const aptDate = new Date(apt.start_time);
-      const isSameDay = aptDate.toDateString() === currentDate.toDateString();
-      const aptTime = getTimeFromISO(apt.start_time);
-      return isSameDay && aptTime === time && apt.professional_id === professionalId && appointmentMatchesSearch(apt);
-    });
+    return appointmentsStartingBySlot.get(`${professionalId}:${time}`) ?? [];
   };
 
   const isSlotOccupied = (time: string, professionalId: string): Appointment | undefined => {
@@ -331,12 +440,12 @@ export function Schedule() {
     if (!canEditSchedule) return;
     if (!selectedSlot || !formClient || !formTime) return;
 
-    const client = clients.find(c => c.id === formClient);
-    let service = services.find(s => s.id === formService);
+    const client = clientsById.get(formClient);
+    let service = servicesById.get(formService);
     if (!service && canUseQuickService) {
       service = await createQuickService();
     }
-    const professional = professionals.find(p => p.id === selectedSlot.professionalId);
+    const professional = professionalsById.get(selectedSlot.professionalId);
 
     if (!client || !service || !professional) return;
 
@@ -358,6 +467,8 @@ export function Schedule() {
       total_value: service.default_price,
     });
 
+    await fetchScheduleAppointments(currentDate);
+
     toast({ title: "Agendamento criado", description: `${client.name} às ${formTime}` });
     setIsNewAppointmentOpen(false);
   };
@@ -366,6 +477,7 @@ export function Schedule() {
     if (!canEditSchedule) return;
     if (!selectedAppointment) return;
     await updateAppointment(selectedAppointment.id, { status: newStatus, total_value: parseFloat(editValue) || selectedAppointment.total_value });
+    await fetchScheduleAppointments(currentDate);
     setSelectedAppointment({ ...selectedAppointment, status: newStatus });
   };
 
@@ -443,6 +555,7 @@ export function Schedule() {
       total_value: totalValue,
       notes,
     });
+    await fetchScheduleAppointments(currentDate);
 
     // ETAPA 3: Baixa automática de estoque para produtos vendidos
     const productItems = billItems.filter(item => item.type === 'product' && item.productId);
@@ -488,7 +601,7 @@ export function Schedule() {
   };
 
   // Show loading state while data is being fetched
-  if (loading || authLoading) {
+  if (loading || authLoading || scheduleLoading) {
     return (
       <div className="p-6 lg:p-8">
         <h1 className="text-3xl font-display font-bold text-foreground mb-4">Agenda</h1>
@@ -848,7 +961,7 @@ export function Schedule() {
         <DialogContent className="sm:max-w-md">
           <DialogHeader>
             <DialogTitle>Novo Agendamento</DialogTitle>
-            <DialogDescription>{professionals.find(p => p.id === selectedSlot?.professionalId)?.nickname}</DialogDescription>
+            <DialogDescription>{selectedSlot?.professionalId ? professionalsById.get(selectedSlot.professionalId)?.nickname : ''}</DialogDescription>
           </DialogHeader>
           <div className="space-y-4 py-4">
             <div className="space-y-2">
@@ -887,12 +1000,13 @@ export function Schedule() {
                 </div>
               ) : (
                 <Combobox
-                  options={clients.map(c => ({ value: c.id, label: c.name, sublabel: c.phone || undefined }))}
+                  options={clientOptions}
                   value={formClient}
                   onValueChange={setFormClient}
                   placeholder="Selecione"
                   searchPlaceholder="Buscar cliente..."
                   emptyMessage="Nenhum cliente encontrado."
+                  maxVisibleOptions={80}
                 />
               )}
             </div>
@@ -924,12 +1038,13 @@ export function Schedule() {
                 </div>
               ) : (
                 <Combobox
-                  options={services.map(s => ({ value: s.id, label: s.name, sublabel: `R$ ${s.default_price}` }))}
+                  options={serviceOptions}
                   value={formService}
                   onValueChange={setFormService}
                   placeholder="Selecione"
                   searchPlaceholder="Buscar serviço..."
                   emptyMessage="Nenhum serviço encontrado."
+                  maxVisibleOptions={80}
                 />
               )}
             </div>
@@ -950,7 +1065,7 @@ export function Schedule() {
         open={isAppointmentDetailOpen}
         onOpenChange={setIsAppointmentDetailOpen}
         appointment={selectedAppointment}
-        appointments={appointments}
+        appointments={scheduleAppointments}
         professionals={scheduleProfessionals}
         services={services}
         isAdmin={isAdmin}
@@ -968,6 +1083,7 @@ export function Schedule() {
             end_time: data.end_time,
             notes: data.notes,
           });
+          await fetchScheduleAppointments(currentDate);
           toast({ title: "Agendamento atualizado" });
           setIsAppointmentDetailOpen(false);
         }}
@@ -975,12 +1091,14 @@ export function Schedule() {
         onRefund={async () => {
           if (!selectedAppointment) return;
           await refundAppointment(selectedAppointment.id);
+          await fetchScheduleAppointments(currentDate);
           toast({ title: "Estorno realizado", description: "Pagamento estornado e comissão removida" });
           setIsAppointmentDetailOpen(false);
         }}
         onDelete={async () => {
           if (!selectedAppointment) return;
           await deleteAppointment(selectedAppointment.id);
+          await fetchScheduleAppointments(currentDate);
           toast({ title: "Agendamento excluído", description: "O agendamento foi removido" });
           setIsAppointmentDetailOpen(false);
         }}
