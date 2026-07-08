@@ -1,4 +1,4 @@
-import React, { useState, useEffect } from 'react';
+import React, { useState, useEffect, useCallback } from 'react';
 import { useNavigate } from 'react-router-dom';
 import { useAuth } from '@/contexts/AuthContext';
 import { supabase } from '@/integrations/supabase/client';
@@ -37,6 +37,33 @@ const PERMISSIONS = [
   { id: 'manage_cash_flow', label: 'Gerenciar Caixa' },
 ];
 
+const ACCESS_PROFILES = [
+  {
+    id: 'reception',
+    label: 'Recepção',
+    description: 'Agenda e clientes, sem acesso a comissões e caixa.',
+    permissions: ['view_schedule', 'edit_schedule', 'view_clients'],
+  },
+  {
+    id: 'professional',
+    label: 'Profissional',
+    description: 'Agenda própria e visualização das próprias comissões.',
+    permissions: ['view_schedule', 'view_commissions'],
+  },
+  {
+    id: 'financial',
+    label: 'Financeiro',
+    description: 'Fluxo de caixa e consulta de clientes.',
+    permissions: ['view_clients', 'manage_cash_flow'],
+  },
+  {
+    id: 'custom',
+    label: 'Personalizado',
+    description: 'Defina manualmente as permissões abaixo.',
+    permissions: [],
+  },
+];
+
 const Admin: React.FC = () => {
   const navigate = useNavigate();
   const { userRole, tenantId, loading: authLoading } = useAuth();
@@ -53,6 +80,7 @@ const Admin: React.FC = () => {
     professionalId: '',
     email: '',
     password: '',
+    profilePreset: 'professional',
     permissions: [] as string[],
   });
 
@@ -67,13 +95,7 @@ const Admin: React.FC = () => {
     }
   }, [userRole, authLoading, navigate, toast]);
 
-  useEffect(() => {
-    if (userRole === 'admin' && tenantId) {
-      fetchProfessionals();
-    }
-  }, [userRole, tenantId]);
-
-  const fetchProfessionals = async () => {
+  const fetchProfessionals = useCallback(async () => {
     if (!tenantId) {
       setProfessionals([]);
       setLoading(false);
@@ -164,7 +186,13 @@ const Admin: React.FC = () => {
     } finally {
       setLoading(false);
     }
-  };
+  }, [tenantId, toast]);
+
+  useEffect(() => {
+    if (userRole === 'admin' && tenantId) {
+      fetchProfessionals();
+    }
+  }, [userRole, tenantId, fetchProfessionals]);
 
   const handleAddProfessional = async () => {
     if (!tenantId) {
@@ -255,6 +283,7 @@ const Admin: React.FC = () => {
         professionalId: '',
         email: '',
         password: '',
+        profilePreset: 'professional',
         permissions: [],
       });
       setIsAddDialogOpen(false);
@@ -329,33 +358,23 @@ const Admin: React.FC = () => {
     }
 
     try {
-      const { error: permissionsError } = await supabase
-        .from('user_permissions')
-        .delete()
-        .eq('user_id', professional.user_id)
-        .eq('tenant_id', tenantId);
+      const { data, error } = await supabase.functions.invoke('remove-professional-access', {
+        body: {
+          tenantId,
+          professionalId: professional.id,
+          userId: professional.user_id,
+        },
+      });
 
-      if (permissionsError) throw permissionsError;
-
-      const { error: roleError } = await supabase
-        .from('user_roles')
-        .delete()
-        .eq('user_id', professional.user_id)
-        .eq('tenant_id', tenantId);
-
-      if (roleError) throw roleError;
-
-      const { error: unlinkError } = await supabase
-        .from('professionals')
-        .update({ user_id: null })
-        .eq('id', professional.id)
-        .eq('tenant_id', tenantId);
-
-      if (unlinkError) throw unlinkError;
+      if (error || data?.error) {
+        throw new Error(await getSupabaseErrorMessage(error, data, "Não foi possível remover o acesso"));
+      }
 
       toast({
         title: "Acesso removido",
-        description: "O profissional permanece cadastrado, mas não acessa mais o sistema",
+        description: data?.accountDeleted
+          ? "O acesso foi removido e a conta de login foi encerrada."
+          : "O acesso foi removido. A conta foi preservada porque existe outro vínculo ativo.",
       });
 
       fetchProfessionals();
@@ -415,7 +434,7 @@ const Admin: React.FC = () => {
                 Administração
               </h1>
               <p className="text-muted-foreground">
-                Gerencie acessos e permissões dos profissionais cadastrados
+                Gerencie logins internos, como recepção, profissionais e financeiro.
               </p>
             </div>
           </div>
@@ -431,7 +450,7 @@ const Admin: React.FC = () => {
               <DialogHeader>
                 <DialogTitle>Criar Acesso de Profissional</DialogTitle>
                 <DialogDescription>
-                  Selecione um profissional já cadastrado e defina suas permissões.
+                  Selecione um profissional já cadastrado, informe o login e escolha o perfil de acesso.
                 </DialogDescription>
               </DialogHeader>
               
@@ -488,6 +507,27 @@ const Admin: React.FC = () => {
                 </div>
 
                 <div className="space-y-3">
+                  <Label>Perfil de acesso</Label>
+                  <div className="grid gap-2">
+                    {ACCESS_PROFILES.map((profile) => (
+                      <button
+                        key={profile.id}
+                        type="button"
+                        className={`rounded-lg border p-3 text-left transition-colors ${
+                          newProfessional.profilePreset === profile.id
+                            ? 'border-primary bg-primary/5'
+                            : 'border-border hover:bg-muted/40'
+                        }`}
+                        onClick={() => applyPreset(profile.id, 'new')}
+                      >
+                        <div className="text-sm font-medium text-foreground">{profile.label}</div>
+                        <div className="text-xs text-muted-foreground">{profile.description}</div>
+                      </button>
+                    ))}
+                  </div>
+                </div>
+
+                <div className="space-y-3">
                   <Label>Permissões</Label>
                   {PERMISSIONS.map(permission => (
                     <div key={permission.id} className="flex items-center space-x-2">
@@ -530,7 +570,7 @@ const Admin: React.FC = () => {
               Acessos de Profissionais
             </CardTitle>
             <CardDescription>
-              Esta tela usa os mesmos profissionais do cadastro principal e mostra quem possui acesso ao sistema.
+              Use esta tela para criar logins internos. Exemplo: recepção pode ter agenda e clientes, sem visualizar comissões ou caixa.
             </CardDescription>
           </CardHeader>
           <CardContent>
@@ -625,7 +665,8 @@ const Admin: React.FC = () => {
                                   professionalId: professional.id,
                                   email: professional.email || '',
                                   password: '',
-                                  permissions: ['view_schedule', 'view_commissions'],
+                                  profilePreset: 'reception',
+                                  permissions: ['view_schedule', 'edit_schedule', 'view_clients'],
                                 });
                                 setIsAddDialogOpen(true);
                               }}
@@ -658,6 +699,23 @@ const Admin: React.FC = () => {
             </DialogHeader>
             
             <div className="space-y-4 py-4">
+              <div className="space-y-3">
+                <Label>Perfis rápidos</Label>
+                <div className="grid gap-2">
+                  {ACCESS_PROFILES.map((profile) => (
+                    <button
+                      key={profile.id}
+                      type="button"
+                      className="rounded-lg border border-border p-3 text-left transition-colors hover:bg-muted/40"
+                      onClick={() => applyPreset(profile.id, 'edit')}
+                    >
+                      <div className="text-sm font-medium text-foreground">{profile.label}</div>
+                      <div className="text-xs text-muted-foreground">{profile.description}</div>
+                    </button>
+                  ))}
+                </div>
+              </div>
+
               <div className="space-y-3">
                 <Label>Permissões</Label>
                 {PERMISSIONS.map(permission => (
@@ -697,3 +755,21 @@ const Admin: React.FC = () => {
 };
 
 export default Admin;
+  const applyPreset = (presetId: string, mode: 'new' | 'edit') => {
+    const preset = ACCESS_PROFILES.find((item) => item.id === presetId);
+    if (!preset) return;
+
+    if (mode === 'new') {
+      setNewProfessional((prev) => ({
+        ...prev,
+        profilePreset: presetId,
+        permissions: [...preset.permissions],
+      }));
+      return;
+    }
+
+    setSelectedProfessional((prev) => prev ? ({
+      ...prev,
+      permissions: [...preset.permissions],
+    }) : null);
+  };

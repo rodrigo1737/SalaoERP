@@ -795,7 +795,7 @@ export function ProfessionalsList() {
                 {createAccess && (
                   <div className="space-y-3 pt-2">
                     <p className="text-xs text-muted-foreground">
-                      O profissional terá acesso para ver sua agenda e comissões
+                      Isso cria um acesso inicial. Perfis como recepção, financeiro e permissões detalhadas são gerenciados depois em Administração.
                     </p>
                     <div className="space-y-2">
                       <Label htmlFor="email">Email de acesso *</Label>
