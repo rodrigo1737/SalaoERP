@@ -408,6 +408,25 @@ const Admin: React.FC = () => {
     }) : null);
   };
 
+  const applyPreset = (presetId: string, mode: 'new' | 'edit') => {
+    const preset = ACCESS_PROFILES.find((item) => item.id === presetId);
+    if (!preset) return;
+
+    if (mode === 'new') {
+      setNewProfessional((prev) => ({
+        ...prev,
+        profilePreset: presetId,
+        permissions: [...preset.permissions],
+      }));
+      return;
+    }
+
+    setSelectedProfessional((prev) => prev ? ({
+      ...prev,
+      permissions: [...preset.permissions],
+    }) : null);
+  };
+
   if (authLoading || loading) {
     return (
       <div className="min-h-screen flex items-center justify-center bg-background">
@@ -446,15 +465,15 @@ const Admin: React.FC = () => {
                 Criar Acesso
               </Button>
             </DialogTrigger>
-            <DialogContent className="max-w-md">
-              <DialogHeader>
+            <DialogContent className="max-w-md max-h-[90vh] overflow-hidden p-0 gap-0 flex flex-col">
+              <DialogHeader className="px-6 pt-6 pb-4 border-b">
                 <DialogTitle>Criar Acesso de Profissional</DialogTitle>
                 <DialogDescription>
                   Selecione um profissional já cadastrado, informe o login e escolha o perfil de acesso.
                 </DialogDescription>
               </DialogHeader>
               
-              <div className="space-y-4 py-4">
+              <div className="flex-1 overflow-y-auto px-6 py-4 space-y-4">
                 <div className="space-y-2">
                   <Label>Profissional</Label>
                   <Select
@@ -545,7 +564,7 @@ const Admin: React.FC = () => {
 
                 <Button 
                   onClick={handleAddProfessional} 
-                  className="w-full" 
+                  className="w-full sticky bottom-0" 
                   disabled={isSubmitting}
                 >
                   {isSubmitting ? (
@@ -690,15 +709,15 @@ const Admin: React.FC = () => {
 
         {/* Edit Permissions Dialog */}
         <Dialog open={isEditDialogOpen} onOpenChange={setIsEditDialogOpen}>
-          <DialogContent className="max-w-md">
-            <DialogHeader>
+          <DialogContent className="max-w-md max-h-[90vh] overflow-hidden p-0 gap-0 flex flex-col">
+            <DialogHeader className="px-6 pt-6 pb-4 border-b">
               <DialogTitle>Editar Permissões</DialogTitle>
               <DialogDescription>
                 {selectedProfessional?.full_name || selectedProfessional?.email}
               </DialogDescription>
             </DialogHeader>
             
-            <div className="space-y-4 py-4">
+            <div className="flex-1 overflow-y-auto px-6 py-4 space-y-4">
               <div className="space-y-3">
                 <Label>Perfis rápidos</Label>
                 <div className="grid gap-2">
@@ -706,7 +725,11 @@ const Admin: React.FC = () => {
                     <button
                       key={profile.id}
                       type="button"
-                      className="rounded-lg border border-border p-3 text-left transition-colors hover:bg-muted/40"
+                      className={`rounded-lg border p-3 text-left transition-colors ${
+                        selectedProfessional?.permissions.join('|') === profile.permissions.join('|')
+                          ? 'border-primary bg-primary/5'
+                          : 'border-border hover:bg-muted/40'
+                      }`}
                       onClick={() => applyPreset(profile.id, 'edit')}
                     >
                       <div className="text-sm font-medium text-foreground">{profile.label}</div>
@@ -734,7 +757,7 @@ const Admin: React.FC = () => {
 
               <Button 
                 onClick={handleUpdatePermissions} 
-                className="w-full" 
+                className="w-full sticky bottom-0" 
                 disabled={isSubmitting}
               >
                 {isSubmitting ? (
@@ -755,21 +778,3 @@ const Admin: React.FC = () => {
 };
 
 export default Admin;
-  const applyPreset = (presetId: string, mode: 'new' | 'edit') => {
-    const preset = ACCESS_PROFILES.find((item) => item.id === presetId);
-    if (!preset) return;
-
-    if (mode === 'new') {
-      setNewProfessional((prev) => ({
-        ...prev,
-        profilePreset: presetId,
-        permissions: [...preset.permissions],
-      }));
-      return;
-    }
-
-    setSelectedProfessional((prev) => prev ? ({
-      ...prev,
-      permissions: [...preset.permissions],
-    }) : null);
-  };
