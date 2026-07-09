@@ -100,13 +100,14 @@ export const AuthProvider: React.FC<{ children: React.ReactNode }> = ({ children
     const permissions = accessContext?.permissions ?? [];
     const packageType = (accessContext?.package_type as TenantPackageType | null) ?? 'salon';
     const effectiveStatus = resolveTenantStatus(accessContext?.tenant_status ?? null, accessContext?.subscription_due_date ?? null);
+    const ownerAccount = Boolean(accessContext?.is_owner);
 
     setTenantId(nextTenantId);
-    setIsOwner(Boolean(accessContext?.is_owner));
+    setIsOwner(ownerAccount);
     setIsSuperAdmin(Boolean(accessContext?.is_super_admin));
     setUserPermissions(permissions);
 
-    if (roles.includes('admin')) {
+    if (ownerAccount || roles.includes('admin')) {
       setUserRole('admin');
     } else if (roles.includes('professional')) {
       setUserRole('professional');
@@ -279,8 +280,8 @@ export const AuthProvider: React.FC<{ children: React.ReactNode }> = ({ children
   };
 
   const hasPermission = (permission: string): boolean => {
-    // Super admin and admin have all permissions
-    if (isSuperAdmin || userRole === 'admin') return true;
+    // Super admin, owner and tenant admin have all permissions
+    if (isSuperAdmin || isOwner || userRole === 'admin') return true;
     return userPermissions.includes(permission);
   };
 
