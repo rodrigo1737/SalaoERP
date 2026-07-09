@@ -539,14 +539,28 @@ export const DataProvider: React.FC<{ children: ReactNode }> = ({ children }) =>
 
   useEffect(() => {
     fetchData();
-  }, [user, tenantId, isCleaningTenant]);
+  }, [
+    user,
+    tenantId,
+    isCleaningTenant,
+    canViewScheduleData,
+    canViewCashData,
+    canViewCommissionsData,
+  ]);
 
   useEffect(() => {
     if (user && tenantId) setupRealtime();
     return () => {
       if (realtimeChannelRef.current) supabase.removeChannel(realtimeChannelRef.current);
     };
-  }, [user, tenantId, isCleaningTenant]);
+  }, [
+    user,
+    tenantId,
+    isCleaningTenant,
+    canViewScheduleData,
+    canViewCashData,
+    canViewCommissionsData,
+  ]);
 
   // ── guard helper ──
   const guardModify = (label = 'realizar esta operação') => {
