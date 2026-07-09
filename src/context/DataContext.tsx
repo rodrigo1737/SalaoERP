@@ -757,18 +757,65 @@ export const DataProvider: React.FC<{ children: ReactNode }> = ({ children }) =>
     const appointment = appointments.find(a => a.id === id);
     if (!appointment) return;
 
-    // Marca comissões relacionadas como canceladas (status inexistente, então apenas remove o vínculo)
-    await supabase.from('commissions')
-      .update({ status: 'pending', paid_at: null })
-      .eq('appointment_id', id)
+    if (!currentCashSession) {
+      toast.error('Abra o caixa antes de estornar e reabrir uma comanda.');
+      return;
+    }
+
+    const { data: refundRows, error: reopenError } = await supabase
+      .from('appointments')
+      .update({ status: 'in_progress' })
+      .eq('id', id)
       .eq('tenant_id', tenantId)
-      .eq('status', 'paid');
+      .eq('status', 'completed')
+      .select('id');
 
-    // Soft-delete das comissões do agendamento
-    await supabase.from('commissions').delete().eq('appointment_id', id).eq('tenant_id', tenantId);
+    if (reopenError) {
+      toast.error('Erro ao reabrir a comanda.');
+      return;
+    }
 
-    // Cria transação de estorno em vez de deletar a original
-    if (currentCashSession && appointment.total_value) {
+    const wasReopenedNow = (refundRows?.length ?? 0) > 0;
+
+    if (!wasReopenedNow) {
+      const { data: persistedAppointment } = await supabase
+        .from('appointments')
+        .select('status')
+        .eq('id', id)
+        .eq('tenant_id', tenantId)
+        .maybeSingle();
+
+      if (persistedAppointment?.status !== 'completed') {
+        toast.warning('A comanda já está aberta ou não pode ser estornada neste status.');
+        return;
+      }
+    }
+
+    await supabase.from('commissions')
+      .delete()
+      .eq('appointment_id', id)
+      .eq('tenant_id', tenantId);
+
+    const { data: activePaymentTx } = await supabase
+      .from('transactions')
+      .select('id')
+      .eq('tenant_id', tenantId)
+      .eq('reference_id', id)
+      .eq('reference_type', 'appointment')
+      .eq('type', 'income')
+      .order('created_at', { ascending: false })
+      .limit(1)
+      .maybeSingle();
+
+    if (activePaymentTx?.id) {
+      await supabase
+        .from('transactions')
+        .update({ reference_type: 'appointment_refunded' })
+        .eq('tenant_id', tenantId)
+        .eq('id', activePaymentTx.id);
+    }
+
+    if (wasReopenedNow && appointment.total_value) {
       await supabase.from('transactions').insert({
         cash_session_id: currentCashSession.id,
         type: 'expense',
@@ -783,10 +830,9 @@ export const DataProvider: React.FC<{ children: ReactNode }> = ({ children }) =>
       });
     }
 
-    await supabase.from('appointments').update({ status: 'cancelled' }).eq('id', id).eq('tenant_id', tenantId);
-    setAppointments(prev => prev.map(a => a.id === id ? { ...a, status: 'cancelled' } : a));
+    setAppointments(prev => prev.map(a => a.id === id ? { ...a, status: 'in_progress' } : a));
     await refreshData(['transactions', 'commissions']);
-    toast.success('Atendimento estornado com sucesso.');
+    toast.success('Pagamento estornado e comanda reaberta com sucesso.');
   };
 
   // ITEM 3: completeAppointment com tratamento de erros e rollback parcial
@@ -796,24 +842,62 @@ export const DataProvider: React.FC<{ children: ReactNode }> = ({ children }) =>
     if (!existingAppointment) return null;
     const appointment = { ...existingAppointment, ...overrides };
 
-    // 1. Atualizar status
+    const { data: existingPaymentTx } = await supabase
+      .from('transactions')
+      .select('id')
+      .eq('tenant_id', tenantId)
+      .eq('reference_id', id)
+      .eq('reference_type', 'appointment')
+      .eq('type', 'income')
+      .order('created_at', { ascending: false })
+      .limit(1)
+      .maybeSingle();
+
+    const { data: existingCommission } = await supabase
+      .from('commissions')
+      .select('id')
+      .eq('tenant_id', tenantId)
+      .eq('appointment_id', id)
+      .eq('type', 'service')
+      .order('created_at', { ascending: false })
+      .limit(1)
+      .maybeSingle();
+
     const appointmentUpdate: Record<string, unknown> = { status: 'completed' };
     if (overrides?.total_value !== undefined) appointmentUpdate.total_value = overrides.total_value;
     if (overrides?.notes !== undefined) appointmentUpdate.notes = overrides.notes;
 
-    const { error: apptError } = await supabase
+    const { data: completedRows, error: apptError } = await supabase
       .from('appointments')
       .update(appointmentUpdate)
       .eq('id', id)
-      .eq('tenant_id', tenantId);
+      .eq('tenant_id', tenantId)
+      .neq('status', 'completed')
+      .select('id');
     if (apptError) { toast.error('Erro ao finalizar atendimento.'); return null; }
+
+    const wasCompletedNow = (completedRows?.length ?? 0) > 0;
 
     setAppointments(prev => prev.map(a => a.id === id ? { ...a, ...overrides, status: 'completed' } : a));
 
-    let transactionId: string | undefined;
+    let transactionId: string | undefined = existingPaymentTx?.id;
 
-    // 2. Registrar transação financeira (só se caixa estiver aberto)
-    if (currentCashSession) {
+    if (!wasCompletedNow && !transactionId) {
+      const { data: persistedPaymentTx } = await supabase
+        .from('transactions')
+        .select('id')
+        .eq('tenant_id', tenantId)
+        .eq('reference_id', id)
+        .eq('reference_type', 'appointment')
+        .eq('type', 'income')
+        .order('created_at', { ascending: false })
+        .limit(1)
+        .maybeSingle();
+
+      transactionId = persistedPaymentTx?.id;
+    }
+
+    if (currentCashSession && !transactionId) {
       const { data: txData, error: txError } = await supabase
         .from('transactions')
         .insert({
@@ -838,8 +922,7 @@ export const DataProvider: React.FC<{ children: ReactNode }> = ({ children }) =>
       }
     }
 
-    // 3. Calcular e registrar comissão
-    if (appointment.professional_id && appointment.total_value && appointment.service_id) {
+    if (appointment.professional_id && appointment.total_value && appointment.service_id && !existingCommission?.id) {
       const { data: spData } = await supabase
         .from('service_professionals')
         .select('commission_rate')
@@ -874,7 +957,9 @@ export const DataProvider: React.FC<{ children: ReactNode }> = ({ children }) =>
     }
 
     await refreshData(['transactions', 'commissions']);
-    toast.success('Atendimento finalizado!');
+    if (wasCompletedNow) {
+      toast.success('Atendimento finalizado!');
+    }
     return transactionId ?? null;
   };
 

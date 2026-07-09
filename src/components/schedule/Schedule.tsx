@@ -141,6 +141,7 @@ export function Schedule() {
   const canViewSchedule = isAdmin || hasPermission('view_schedule') || hasPermission('edit_schedule');
   const canEditSchedule = isAdmin || hasPermission('edit_schedule');
   const canCloseBill = isAdmin || hasPermission('close_bill') || hasPermission('manage_cash_flow');
+  const canRefundBill = isAdmin || hasPermission('refund_bill');
 
   const scheduleProfessionals = professionals.filter(p => p.is_active && p.has_schedule);
 
@@ -153,6 +154,7 @@ export function Schedule() {
   const [isNewAppointmentOpen, setIsNewAppointmentOpen] = useState(false);
   const [isAppointmentDetailOpen, setIsAppointmentDetailOpen] = useState(false);
   const [isClosingBill, setIsClosingBill] = useState(false);
+  const [isSubmittingBill, setIsSubmittingBill] = useState(false);
   const [isAddingClient, setIsAddingClient] = useState(false);
   const [isAddingService, setIsAddingService] = useState(false);
   const [selectedPaymentMethod, setSelectedPaymentMethod] = useState<string>('');
@@ -605,9 +607,8 @@ export function Schedule() {
   };
 
   const handleCloseBill = async () => {
-    if (!selectedAppointment || !selectedPaymentMethod) return;
+    if (!selectedAppointment || !selectedPaymentMethod || isSubmittingBill) return;
 
-    // Double check cash session
     if (!currentCashSession) {
       toast({
         variant: "destructive",
@@ -617,74 +618,108 @@ export function Schedule() {
       return;
     }
 
-    const baseValue = parseFloat(editValue) || selectedAppointment.total_value || 0;
-    const additionalTotal = billItems.reduce((sum, item) => sum + item.total, 0);
-    const totalValue = baseValue + additionalTotal;
+    setIsSubmittingBill(true);
 
-    // Build notes with additional items
-    let notes = selectedAppointment.notes || '';
-    if (billItems.length > 0) {
-      const itemsDesc = billItems.map(item =>
-        `${item.name} (${item.quantity}x R$${item.unitPrice.toFixed(2)})`
-      ).join(', ');
-      notes = `${notes} [Adicionais: ${itemsDesc}]`.trim();
-    }
-    if (selectedPaymentMethod === 'pending') {
-      notes = `${notes} [PENDENTE: R$${totalValue.toFixed(2)}]`.trim();
-    }
+    try {
+      const baseValue = parseFloat(editValue) || selectedAppointment.total_value || 0;
+      const additionalTotal = billItems.reduce((sum, item) => sum + item.total, 0);
+      const totalValue = baseValue + additionalTotal;
 
-    // Update total_value before completing
-    await updateAppointment(selectedAppointment.id, {
-      total_value: totalValue,
-      notes: notes
-    });
-
-    // Map payment methods to database format
-    const paymentMethodMap: Record<string, string> = {
-      pix: 'pix',
-      credit: 'credit_card',
-      debit: 'debit_card',
-      cash: 'cash',
-      pending: 'other'
-    };
-
-    // Complete appointment with proper payment method
-    const transactionId = await completeAppointment(selectedAppointment.id, paymentMethodMap[selectedPaymentMethod], {
-      total_value: totalValue,
-      notes,
-    });
-    await fetchScheduleAppointments(currentDate);
-
-    // ETAPA 3: Baixa automática de estoque para produtos vendidos
-    const productItems = billItems.filter(item => item.type === 'product' && item.productId);
-    for (const item of productItems) {
-      if (item.productId) {
-        await registerSale(item.productId, item.quantity, item.unitPrice, transactionId || undefined);
+      let notes = selectedAppointment.notes || '';
+      if (billItems.length > 0) {
+        const itemsDesc = billItems.map(item =>
+          `${item.name} (${item.quantity}x R$${item.unitPrice.toFixed(2)})`
+        ).join(', ');
+        notes = `${notes} [Adicionais: ${itemsDesc}]`.trim();
       }
+      if (selectedPaymentMethod === 'pending') {
+        notes = `${notes} [PENDENTE: R$${totalValue.toFixed(2)}]`.trim();
+      }
+
+      await updateAppointment(selectedAppointment.id, {
+        total_value: totalValue,
+        notes,
+      });
+
+      const paymentMethodMap: Record<string, string> = {
+        pix: 'pix',
+        credit: 'credit_card',
+        debit: 'debit_card',
+        cash: 'cash',
+        pending: 'other'
+      };
+
+      const transactionId = await completeAppointment(selectedAppointment.id, paymentMethodMap[selectedPaymentMethod], {
+        total_value: totalValue,
+        notes,
+      });
+
+      if (!transactionId && selectedAppointment.status !== 'completed') {
+        toast({
+          variant: "destructive",
+          title: "Falha ao fechar comanda",
+          description: "Não foi possível confirmar o pagamento desta comanda."
+        });
+        return;
+      }
+
+      await fetchScheduleAppointments(currentDate);
+
+      const productItems = billItems.filter(item => item.type === 'product' && item.productId);
+      for (const item of productItems) {
+        if (!item.productId) continue;
+        try {
+          await registerSale(item.productId, item.quantity, item.unitPrice, transactionId || undefined);
+        } catch (error) {
+          console.error('Error registering sale item:', error);
+          toast({
+            variant: "destructive",
+            title: "Comanda fechada com alerta",
+            description: `O pagamento foi confirmado, mas houve falha na baixa do produto ${item.name}.`
+          });
+        }
+      }
+
+      if (selectedAppointment.service_id) {
+        try {
+          await registerServiceConsumption(selectedAppointment.service_id, selectedAppointment.id);
+        } catch (error) {
+          console.error('Error registering service consumption:', error);
+          toast({
+            variant: "destructive",
+            title: "Comanda fechada com alerta",
+            description: "O pagamento foi confirmado, mas houve falha na baixa automática de insumos."
+          });
+        }
+      }
+
+      const paymentLabels: Record<string, string> = {
+        pix: 'PIX',
+        credit: 'Cartão de Crédito',
+        debit: 'Cartão de Débito',
+        cash: 'Dinheiro',
+        pending: 'Pendente'
+      };
+
+      toast({
+        title: "Comanda fechada",
+        description: `R$ ${totalValue.toFixed(2)} - ${paymentLabels[selectedPaymentMethod]}${billItems.length > 0 ? ` (+${billItems.length} item(s))` : ''}`
+      });
+
+      setIsClosingBill(false);
+      setIsAppointmentDetailOpen(false);
+      setSelectedAppointment(null);
+      setBillItems([]);
+    } catch (error) {
+      console.error('Error closing bill:', error);
+      toast({
+        variant: "destructive",
+        title: "Erro ao fechar comanda",
+        description: "Não foi possível concluir o fechamento. Verifique se o pagamento já foi registrado antes de tentar novamente."
+      });
+    } finally {
+      setIsSubmittingBill(false);
     }
-
-    // ETAPA 4: Baixa automática de insumos vinculados ao serviço
-    if (selectedAppointment.service_id) {
-      await registerServiceConsumption(selectedAppointment.service_id, selectedAppointment.id);
-    }
-
-    const paymentLabels: Record<string, string> = {
-      pix: 'PIX',
-      credit: 'Cartão de Crédito',
-      debit: 'Cartão de Débito',
-      cash: 'Dinheiro',
-      pending: 'Pendente'
-    };
-
-    toast({
-      title: "Comanda fechada",
-      description: `R$ ${totalValue.toFixed(2)} - ${paymentLabels[selectedPaymentMethod]}${billItems.length > 0 ? ` (+${billItems.length} item(s))` : ''}`
-    });
-
-    setIsClosingBill(false);
-    setIsAppointmentDetailOpen(false);
-    setSelectedAppointment(null);
-    setBillItems([]);
   };
 
   const getSlotHeight = (appointment: Appointment) => {
@@ -1169,6 +1204,7 @@ export function Schedule() {
         serviceProfessionalLinks={serviceProfessionalLinks}
         isAdmin={isAdmin}
         canCloseBill={canCloseBill}
+        canRefundBill={canRefundBill}
         canOpenBill={!isCleaningTenant}
         canEditAppointment={canEditSchedule}
         onUpdateStatus={handleUpdateStatus}
@@ -1192,7 +1228,6 @@ export function Schedule() {
           if (!selectedAppointment) return;
           await refundAppointment(selectedAppointment.id);
           await fetchScheduleAppointments(currentDate);
-          toast({ title: "Estorno realizado", description: "Pagamento estornado e comissão removida" });
           setIsAppointmentDetailOpen(false);
         }}
         onDelete={async () => {
@@ -1240,6 +1275,7 @@ export function Schedule() {
                   type="button"
                   variant={selectedPaymentMethod === 'cash' ? 'default' : 'outline'}
                   className="h-16 flex-col gap-1"
+                  disabled={isSubmittingBill}
                   onClick={() => setSelectedPaymentMethod('cash')}
                 >
                   <Banknote className="w-5 h-5" />
@@ -1249,6 +1285,7 @@ export function Schedule() {
                   type="button"
                   variant={selectedPaymentMethod === 'pix' ? 'default' : 'outline'}
                   className="h-16 flex-col gap-1"
+                  disabled={isSubmittingBill}
                   onClick={() => setSelectedPaymentMethod('pix')}
                 >
                   <QrCode className="w-5 h-5" />
@@ -1258,6 +1295,7 @@ export function Schedule() {
                   type="button"
                   variant={selectedPaymentMethod === 'credit' ? 'default' : 'outline'}
                   className="h-16 flex-col gap-1"
+                  disabled={isSubmittingBill}
                   onClick={() => setSelectedPaymentMethod('credit')}
                 >
                   <CreditCard className="w-5 h-5" />
@@ -1267,6 +1305,7 @@ export function Schedule() {
                   type="button"
                   variant={selectedPaymentMethod === 'debit' ? 'default' : 'outline'}
                   className="h-16 flex-col gap-1"
+                  disabled={isSubmittingBill}
                   onClick={() => setSelectedPaymentMethod('debit')}
                 >
                   <Wallet className="w-5 h-5" />
@@ -1276,6 +1315,7 @@ export function Schedule() {
                   type="button"
                   variant={selectedPaymentMethod === 'pending' ? 'destructive' : 'outline'}
                   className="h-16 flex-col gap-1 col-span-2"
+                  disabled={isSubmittingBill}
                   onClick={() => setSelectedPaymentMethod('pending')}
                 >
                   <AlertCircle className="w-5 h-5" />
@@ -1290,9 +1330,9 @@ export function Schedule() {
             </div>
 
             <div className="flex justify-end gap-2 pt-2">
-              <Button variant="outline" onClick={() => setIsClosingBill(false)}>Cancelar</Button>
-              <Button onClick={handleCloseBill} disabled={!selectedPaymentMethod}>
-                Confirmar Pagamento
+              <Button variant="outline" onClick={() => setIsClosingBill(false)} disabled={isSubmittingBill}>Cancelar</Button>
+              <Button onClick={handleCloseBill} disabled={!selectedPaymentMethod || isSubmittingBill}>
+                {isSubmittingBill ? 'Confirmando...' : 'Confirmar Pagamento'}
               </Button>
             </div>
           </div>

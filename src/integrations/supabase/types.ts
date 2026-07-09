@@ -1225,6 +1225,7 @@ export type Database = {
         | "edit_schedule"
         | "view_clients"
         | "close_bill"
+        | "refund_bill"
         | "view_commissions"
         | "manage_cash_flow"
       service_price_type: "fixed" | "variable" | "starting_at"
@@ -1363,6 +1364,7 @@ export const Constants = {
         "edit_schedule",
         "view_clients",
         "close_bill",
+        "refund_bill",
         "view_commissions",
         "manage_cash_flow",
       ],

@@ -18,7 +18,7 @@ import { CleaningStaffPermissions } from '@/components/cleaning/CleaningStaffPer
 
 type AccessRole = 'none' | 'owner' | 'admin' | 'professional' | 'staff';
 type AccessPresetId = 'reception' | 'professional' | 'financial' | 'custom';
-type PermissionId = 'view_schedule' | 'edit_schedule' | 'view_clients' | 'close_bill' | 'view_commissions' | 'manage_cash_flow';
+type PermissionId = 'view_schedule' | 'edit_schedule' | 'view_clients' | 'close_bill' | 'refund_bill' | 'view_commissions' | 'manage_cash_flow';
 type NewAccessType = 'professional' | 'staff';
 
 interface InternalAccessRow {
@@ -43,6 +43,7 @@ const PERMISSIONS: { id: PermissionId; label: string }[] = [
   { id: 'edit_schedule', label: 'Alterar Agendamentos' },
   { id: 'view_clients', label: 'Visualizar Clientes' },
   { id: 'close_bill', label: 'Receber e Encerrar Comanda' },
+  { id: 'refund_bill', label: 'Estornar Pagamento e Reabrir Comanda' },
   { id: 'view_commissions', label: 'Visualizar Comissões' },
   { id: 'manage_cash_flow', label: 'Gerenciar Caixa' },
 ];
@@ -63,8 +64,8 @@ const ACCESS_PROFILES: { id: AccessPresetId; label: string; description: string;
   {
     id: 'financial',
     label: 'Financeiro',
-    description: 'Fluxo de caixa e consulta de clientes.',
-    permissions: ['view_clients', 'manage_cash_flow'],
+    description: 'Fluxo de caixa, estornos de comanda e consulta de clientes.',
+    permissions: ['view_clients', 'refund_bill', 'manage_cash_flow'],
   },
   {
     id: 'custom',

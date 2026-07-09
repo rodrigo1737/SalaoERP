@@ -84,6 +84,7 @@ interface AppointmentDetailDialogProps {
   serviceProfessionalLinks: ServiceProfessional[];
   isAdmin: boolean;
   canCloseBill?: boolean;
+  canRefundBill?: boolean;
   canOpenBill?: boolean;
   canEditAppointment: boolean;
   onUpdateStatus: (status: Appointment['status']) => void;
@@ -159,6 +160,7 @@ export function AppointmentDetailDialog({
   serviceProfessionalLinks,
   isAdmin,
   canCloseBill = false,
+  canRefundBill = false,
   canOpenBill = true,
   canEditAppointment,
   onUpdateStatus,
@@ -697,7 +699,7 @@ export function AppointmentDetailDialog({
               <div className="pt-3 border-t border-border space-y-2">
                 <p className="text-xs text-muted-foreground">Ações de Administrador:</p>
                 <div className="flex gap-2">
-                  {appointment.status === 'completed' && (
+                  {appointment.status === 'completed' && canRefundBill && (
                     <Button 
                       size="sm" 
                       variant="outline" 
@@ -705,7 +707,7 @@ export function AppointmentDetailDialog({
                       onClick={onRefund}
                     >
                       <RotateCcw className="w-4 h-4 mr-1" />
-                      Estornar
+                      Estornar e Reabrir
                     </Button>
                   )}
                   <Button 

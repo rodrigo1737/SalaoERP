@@ -7,6 +7,7 @@ const allowedPermissions = new Set([
   "edit_schedule",
   "view_clients",
   "close_bill",
+  "refund_bill",
   "view_commissions",
   "manage_cash_flow",
 ]);
