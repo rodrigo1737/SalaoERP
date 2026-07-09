@@ -67,7 +67,7 @@ const salonMenuItems: MenuItem[] = [
       { id: 'stock-movements', label: 'Movimentações', icon: ArrowRightLeft, adminOnly: true },
     ]
   },
-  { id: 'cashier', label: 'Caixa', icon: DollarSign, adminOnly: true, permission: 'manage_cash_flow' },
+  { id: 'cashier', label: 'Caixa', icon: DollarSign, adminOnly: true, permission: 'view_financial_history' },
   { id: 'reports', label: 'Relatórios', icon: BarChart3, adminOnly: true },
   { id: 'commissions', label: 'Comissões', icon: DollarSign, adminOnly: false, permission: 'view_commissions' },
 ];
@@ -124,6 +124,11 @@ export function Sidebar({ currentPage, onNavigate }: SidebarProps) {
       if (item.id === 'settings') return true;
       if (item.adminOnly && !item.permission) return false;
       if (item.permission) {
+        if (item.id === 'cashier') {
+          return hasPermission('manage_cash_flow')
+            || hasPermission('view_financial_history')
+            || hasPermission('reverse_financial_entries');
+        }
         return hasPermission(item.permission) || (item.permission === 'view_schedule' && hasPermission('edit_schedule'));
       }
       return !item.adminOnly;

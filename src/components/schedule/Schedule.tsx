@@ -141,7 +141,7 @@ export function Schedule() {
   const canViewSchedule = isAdmin || hasPermission('view_schedule') || hasPermission('edit_schedule');
   const canEditSchedule = isAdmin || hasPermission('edit_schedule');
   const canCloseBill = isAdmin || hasPermission('close_bill') || hasPermission('manage_cash_flow');
-  const canRefundBill = isAdmin || hasPermission('refund_bill');
+  const canRefundBill = isAdmin || hasPermission('refund_bill') || hasPermission('reverse_financial_entries');
 
   const scheduleProfessionals = professionals.filter(p => p.is_active && p.has_schedule);
 

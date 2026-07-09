@@ -18,7 +18,16 @@ import { CleaningStaffPermissions } from '@/components/cleaning/CleaningStaffPer
 
 type AccessRole = 'none' | 'owner' | 'admin' | 'professional' | 'staff';
 type AccessPresetId = 'reception' | 'professional' | 'financial' | 'custom';
-type PermissionId = 'view_schedule' | 'edit_schedule' | 'view_clients' | 'close_bill' | 'refund_bill' | 'view_commissions' | 'manage_cash_flow';
+type PermissionId =
+  | 'view_schedule'
+  | 'edit_schedule'
+  | 'view_clients'
+  | 'close_bill'
+  | 'refund_bill'
+  | 'view_commissions'
+  | 'manage_cash_flow'
+  | 'view_financial_history'
+  | 'reverse_financial_entries';
 type NewAccessType = 'professional' | 'staff';
 
 interface InternalAccessRow {
@@ -46,14 +55,16 @@ const PERMISSIONS: { id: PermissionId; label: string }[] = [
   { id: 'refund_bill', label: 'Estornar Pagamento e Reabrir Comanda' },
   { id: 'view_commissions', label: 'Visualizar Comissões' },
   { id: 'manage_cash_flow', label: 'Gerenciar Caixa' },
+  { id: 'view_financial_history', label: 'Visualizar Histórico Financeiro' },
+  { id: 'reverse_financial_entries', label: 'Estornar Movimentos Financeiros' },
 ];
 
 const ACCESS_PROFILES: { id: AccessPresetId; label: string; description: string; permissions: PermissionId[] }[] = [
   {
     id: 'reception',
     label: 'Recepção',
-    description: 'Agenda, clientes, recebimento de comandas e operação de caixa.',
-    permissions: ['view_schedule', 'edit_schedule', 'view_clients', 'close_bill', 'manage_cash_flow'],
+    description: 'Agenda, clientes, comandas, caixa e consulta do histórico financeiro.',
+    permissions: ['view_schedule', 'edit_schedule', 'view_clients', 'close_bill', 'manage_cash_flow', 'view_financial_history'],
   },
   {
     id: 'professional',
@@ -64,8 +75,8 @@ const ACCESS_PROFILES: { id: AccessPresetId; label: string; description: string;
   {
     id: 'financial',
     label: 'Financeiro',
-    description: 'Fluxo de caixa, estornos de comanda e consulta de clientes.',
-    permissions: ['view_clients', 'refund_bill', 'manage_cash_flow'],
+    description: 'Fluxo de caixa, histórico, comissões, vales e estornos financeiros.',
+    permissions: ['view_clients', 'refund_bill', 'view_commissions', 'manage_cash_flow', 'view_financial_history', 'reverse_financial_entries'],
   },
   {
     id: 'custom',

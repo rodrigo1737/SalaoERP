@@ -57,7 +57,11 @@ const Index = () => {
     if (targetPage === 'agenda') return hasPermission('view_schedule') || hasPermission('edit_schedule');
     if (targetPage === 'clients') return hasPermission('view_clients');
     if (targetPage === 'commissions') return hasPermission('view_commissions');
-    if (targetPage === 'cashier') return hasPermission('manage_cash_flow');
+    if (targetPage === 'cashier') {
+      return hasPermission('manage_cash_flow')
+        || hasPermission('view_financial_history')
+        || hasPermission('reverse_financial_entries');
+    }
     if (targetPage === 'settings') return true;
     return PROFESSIONAL_PAGES.includes(targetPage);
   }, [hasPermission, isAdmin, isCleaningTenant, isSuperAdmin, currentTenant]);

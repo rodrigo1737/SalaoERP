@@ -1,55 +1,71 @@
-import { useEffect, useState } from 'react';
+import { useMemo, useState } from 'react';
 import { motion } from 'framer-motion';
-import { 
+import {
+  AlertCircle,
+  ArrowLeft,
   Calendar,
   Clock,
   DollarSign,
-  CheckCircle2,
-  AlertCircle,
-  TrendingUp,
+  Receipt,
+  RotateCcw,
+  Search,
+  ShieldCheck,
+  Ticket,
   TrendingDown,
-  ChevronDown,
-  ChevronUp,
-  FileText,
-  ArrowLeft
+  TrendingUp,
+  Wallet,
 } from 'lucide-react';
 import { Card } from '@/components/ui/card';
 import { Button } from '@/components/ui/button';
 import { Badge } from '@/components/ui/badge';
-import {
-  Collapsible,
-  CollapsibleContent,
-  CollapsibleTrigger,
-} from '@/components/ui/collapsible';
-import { CashSession, Transaction } from '@/context/DataContext';
+import { Tabs, TabsContent, TabsList, TabsTrigger } from '@/components/ui/tabs';
+import { Input } from '@/components/ui/input';
+import { useData, CashSession, Transaction } from '@/context/DataContext';
 import { useAuth } from '@/contexts/AuthContext';
-import { supabase } from '@/integrations/supabase/client';
+import { cn } from '@/lib/utils';
 
 interface CashHistoryProps {
   onBack: () => void;
 }
 
-const formatCurrency = (value: number) => {
-  return new Intl.NumberFormat('pt-BR', { 
-    style: 'currency', 
-    currency: 'BRL' 
-  }).format(value);
-};
+const formatCurrency = (value: number) => (
+  new Intl.NumberFormat('pt-BR', {
+    style: 'currency',
+    currency: 'BRL',
+  }).format(value)
+);
 
-const formatDate = (dateString: string) => {
+const formatDate = (dateString?: string | null) => {
+  if (!dateString) return '--';
   return new Date(dateString).toLocaleDateString('pt-BR', {
-    weekday: 'long',
     day: '2-digit',
     month: '2-digit',
-    year: 'numeric'
+    year: 'numeric',
   });
 };
 
-const formatTime = (dateString: string) => {
-  return new Date(dateString).toLocaleTimeString('pt-BR', {
+const formatDateTime = (dateString?: string | null) => {
+  if (!dateString) return '--';
+  return new Date(dateString).toLocaleString('pt-BR', {
+    day: '2-digit',
+    month: '2-digit',
+    year: 'numeric',
     hour: '2-digit',
-    minute: '2-digit'
+    minute: '2-digit',
   });
+};
+
+const referenceTypeLabels: Record<string, string> = {
+  appointment: 'Comanda',
+  appointment_refunded: 'Comanda estornada',
+  refund: 'Estorno de comanda',
+  commission: 'Pagamento de comissão',
+  commission_batch: 'Pagamento em lote',
+  commission_reversal: 'Estorno de comissão',
+  commission_batch_reversal: 'Estorno em lote',
+  voucher: 'Vale',
+  voucher_reversal: 'Estorno de vale',
+  transaction_reversal: 'Estorno financeiro',
 };
 
 const paymentMethodLabels: Record<string, string> = {
@@ -60,274 +76,578 @@ const paymentMethodLabels: Record<string, string> = {
   other: 'Outro',
 };
 
+const normalizeDateInput = (value: string, endOfDay = false) => {
+  if (!value) return null;
+  return new Date(`${value}T${endOfDay ? '23:59:59' : '00:00:00'}`);
+};
+
+const isDateBetween = (dateString: string, dateFrom: string, dateTo: string) => {
+  const date = new Date(dateString);
+  const from = normalizeDateInput(dateFrom, false);
+  const to = normalizeDateInput(dateTo, true);
+
+  if (from && date < from) return false;
+  if (to && date > to) return false;
+  return true;
+};
+
+const getMovementTone = (transaction: Transaction) => {
+  if (transaction.reversed_at) return 'muted';
+  return transaction.type === 'income' ? 'success' : 'danger';
+};
+
 export function CashHistory({ onBack }: CashHistoryProps) {
-  const { tenantId } = useAuth();
-  const [expandedSession, setExpandedSession] = useState<string | null>(null);
-  const [closedSessions, setClosedSessions] = useState<CashSession[]>([]);
-  const [sessionTransactions, setSessionTransactions] = useState<Record<string, Transaction[]>>({});
-  const [loading, setLoading] = useState(false);
+  const {
+    cashSessions,
+    transactions,
+    commissions,
+    currentCashSession,
+    reverseTransaction,
+    loading,
+  } = useData();
+  const { userRole, hasPermission } = useAuth();
 
-  useEffect(() => {
-    const fetchSessions = async () => {
-      if (!tenantId) {
-        setClosedSessions([]);
-        return;
-      }
+  const canViewFinancialHistory = userRole === 'admin'
+    || hasPermission('view_financial_history')
+    || hasPermission('manage_cash_flow')
+    || hasPermission('reverse_financial_entries');
+  const canReverseFinancialEntries = userRole === 'admin'
+    || hasPermission('refund_bill')
+    || hasPermission('reverse_financial_entries');
 
-      setLoading(true);
-      try {
-        const { data, error } = await supabase
-          .from('cash_sessions')
-          .select('*')
-          .eq('tenant_id', tenantId)
-          .eq('status', 'closed')
-          .order('closed_at', { ascending: false });
+  const [tab, setTab] = useState('sessions');
+  const [dateFrom, setDateFrom] = useState('');
+  const [dateTo, setDateTo] = useState('');
+  const [search, setSearch] = useState('');
 
-        if (error) throw error;
-        setClosedSessions((data as CashSession[]) ?? []);
-      } catch (error) {
-        console.error('Erro ao carregar historico de caixa:', error);
-      } finally {
-        setLoading(false);
-      }
+  const normalizedSearch = search.trim().toLowerCase();
+  const transactionsBySessionId = useMemo(() => {
+    const grouped = new Map<string, Transaction[]>();
+    transactions.forEach((transaction) => {
+      const sessionId = transaction.cash_session_id ?? 'sem-caixa';
+      const current = grouped.get(sessionId) ?? [];
+      current.push(transaction);
+      grouped.set(sessionId, current);
+    });
+    return grouped;
+  }, [transactions]);
+
+  const transactionById = useMemo(
+    () => new Map(transactions.map((transaction) => [transaction.id, transaction])),
+    [transactions],
+  );
+
+  const filteredTransactions = useMemo(() => (
+    transactions.filter((transaction) => {
+      if (!isDateBetween(transaction.created_at, dateFrom, dateTo)) return false;
+      if (!normalizedSearch) return true;
+
+      const haystack = [
+        transaction.category,
+        transaction.description,
+        transaction.reference_type,
+        paymentMethodLabels[transaction.payment_method ?? ''] ?? transaction.payment_method,
+      ].join(' ').toLowerCase();
+
+      return haystack.includes(normalizedSearch);
+    })
+  ), [dateFrom, dateTo, normalizedSearch, transactions]);
+
+  const filteredSessions = useMemo(() => (
+    cashSessions.filter((session) => {
+      if (!isDateBetween(session.opened_at, dateFrom, dateTo)) return false;
+      if (!normalizedSearch) return true;
+      const haystack = [
+        session.status,
+        session.notes,
+        formatDate(session.opened_at),
+      ].join(' ').toLowerCase();
+      return haystack.includes(normalizedSearch);
+    })
+  ), [cashSessions, dateFrom, dateTo, normalizedSearch]);
+
+  const filteredCommissions = useMemo(() => (
+    commissions.filter((commission) => {
+      const baseDate = commission.paid_at ?? commission.created_at;
+      if (!isDateBetween(baseDate, dateFrom, dateTo)) return false;
+      if (!normalizedSearch) return true;
+
+      const professionalName = commission.professional?.nickname ?? commission.professional?.name ?? '';
+      const typeLabel = commission.type === 'voucher' ? 'vale' : 'comissão';
+      return [professionalName, typeLabel, commission.status].join(' ').toLowerCase().includes(normalizedSearch);
+    })
+  ), [commissions, dateFrom, dateTo, normalizedSearch]);
+
+  const summary = useMemo(() => {
+    const grossIncome = filteredTransactions
+      .filter((transaction) => transaction.type === 'income')
+      .reduce((sum, transaction) => sum + Number(transaction.amount), 0);
+
+    const grossExpense = filteredTransactions
+      .filter((transaction) => transaction.type === 'expense')
+      .reduce((sum, transaction) => sum + Number(transaction.amount), 0);
+
+    const reversedCount = filteredTransactions.filter((transaction) => transaction.reversed_at).length;
+
+    return {
+      grossIncome,
+      grossExpense,
+      net: grossIncome - grossExpense,
+      reversedCount,
+      openSessions: filteredSessions.filter((session) => session.status === 'open').length,
+      closedSessions: filteredSessions.filter((session) => session.status === 'closed').length,
     };
+  }, [filteredSessions, filteredTransactions]);
 
-    fetchSessions();
-  }, [tenantId]);
+  const getSessionStats = (session: CashSession) => {
+    const sessionTransactions = (transactionsBySessionId.get(session.id) ?? []).filter((transaction) =>
+      isDateBetween(transaction.created_at, dateFrom, dateTo),
+    );
 
-  useEffect(() => {
-    const fetchSessionTransactions = async () => {
-      if (!tenantId || !expandedSession || sessionTransactions[expandedSession]) return;
+    const totalIncome = sessionTransactions
+      .filter((transaction) => transaction.type === 'income')
+      .reduce((sum, transaction) => sum + Number(transaction.amount), 0);
 
-      try {
-        const { data, error } = await supabase
-          .from('transactions')
-          .select('*')
-          .eq('tenant_id', tenantId)
-          .eq('cash_session_id', expandedSession)
-          .order('created_at', { ascending: true });
+    const totalExpense = sessionTransactions
+      .filter((transaction) => transaction.type === 'expense')
+      .reduce((sum, transaction) => sum + Number(transaction.amount), 0);
 
-        if (error) throw error;
-        setSessionTransactions((prev) => ({ ...prev, [expandedSession]: (data as Transaction[]) ?? [] }));
-      } catch (error) {
-        console.error('Erro ao carregar movimentacoes do caixa:', error);
-      }
+    return {
+      totalIncome,
+      totalExpense,
+      transactions: sessionTransactions.sort((a, b) => (
+        new Date(a.created_at).getTime() - new Date(b.created_at).getTime()
+      )),
     };
-
-    fetchSessionTransactions();
-  }, [expandedSession, sessionTransactions, tenantId]);
-
-  const getSessionTransactions = (sessionId: string) => sessionTransactions[sessionId] ?? [];
-
-  const calculateSessionStats = (session: CashSession) => {
-    const sessionTrans = getSessionTransactions(session.id);
-    
-    const totalIncome = sessionTrans
-      .filter(t => t.type === 'income')
-      .reduce((sum, t) => sum + Number(t.amount), 0);
-    
-    const totalExpense = sessionTrans
-      .filter(t => t.type === 'expense')
-      .reduce((sum, t) => sum + Number(t.amount), 0);
-    
-    const byPaymentMethod = sessionTrans.reduce((acc, t) => {
-      const method = t.payment_method || 'other';
-      if (!acc[method]) {
-        acc[method] = { income: 0, expense: 0 };
-      }
-      if (t.type === 'income') {
-        acc[method].income += Number(t.amount);
-      } else {
-        acc[method].expense += Number(t.amount);
-      }
-      return acc;
-    }, {} as Record<string, { income: number; expense: number }>);
-    
-    return { totalIncome, totalExpense, byPaymentMethod, transactionCount: sessionTrans.length };
   };
+
+  const getReferenceLabel = (transaction: Transaction) => (
+    referenceTypeLabels[transaction.reference_type ?? ''] ?? transaction.reference_type ?? 'Movimento manual'
+  );
+
+  const handleReverse = async (transaction: Transaction) => {
+    await reverseTransaction(transaction.id);
+  };
+
+  const canReverseTransaction = (transaction: Transaction) => (
+    canReverseFinancialEntries
+    && !transaction.reversed_at
+    && transaction.reference_type !== 'transaction_reversal'
+    && transaction.reference_type !== 'refund'
+  );
+
+  if (!canViewFinancialHistory) {
+    return (
+      <div className="p-6 lg:p-8 space-y-6">
+        <div className="flex items-center gap-4">
+          <Button variant="ghost" size="icon" onClick={onBack}>
+            <ArrowLeft className="w-5 h-5" />
+          </Button>
+          <div>
+            <h1 className="text-3xl lg:text-4xl font-display font-bold text-foreground">
+              Gestão Financeira
+            </h1>
+            <p className="text-muted-foreground mt-1">
+              Este usuário não possui acesso ao histórico financeiro.
+            </p>
+          </div>
+        </div>
+
+        <Card className="p-8 border-0 shadow-lg">
+          <div className="flex items-start gap-4">
+            <ShieldCheck className="w-10 h-10 text-primary shrink-0" />
+            <div className="space-y-2">
+              <h2 className="text-xl font-semibold text-foreground">Acesso controlado por permissão</h2>
+              <p className="text-muted-foreground">
+                Libere <strong>Visualizar Histórico Financeiro</strong> ou <strong>Gerenciar Caixa</strong> na tela de
+                administração para este usuário.
+              </p>
+            </div>
+          </div>
+        </Card>
+      </div>
+    );
+  }
 
   return (
     <div className="p-6 lg:p-8 space-y-6">
-      {/* Header */}
       <div className="flex items-center gap-4">
         <Button variant="ghost" size="icon" onClick={onBack}>
           <ArrowLeft className="w-5 h-5" />
         </Button>
-        <div>
+        <div className="flex-1">
           <h1 className="text-3xl lg:text-4xl font-display font-bold text-foreground">
-            Histórico de Caixa
+            Gestão Financeira
           </h1>
           <p className="text-muted-foreground mt-1">
-            {closedSessions.length} fechamentos registrados
+            Histórico de caixas, entradas, saídas, comissões, vales e estornos.
           </p>
         </div>
+        {currentCashSession ? (
+          <Badge variant="success" className="gap-1">
+            <Wallet className="w-3.5 h-3.5" />
+            Caixa atual aberto
+          </Badge>
+        ) : (
+          <Badge variant="secondary">Sem caixa aberto no momento</Badge>
+        )}
       </div>
 
-      {/* Sessions List */}
-      {loading ? (
-        <Card className="p-12 border-0 shadow-lg text-center">
-          <p className="text-muted-foreground">Carregando histórico...</p>
+      <div className="grid gap-4 md:grid-cols-2 xl:grid-cols-5">
+        <Card className="p-4 border-0 shadow-md">
+          <div className="flex items-center justify-between mb-2">
+            <span className="text-sm text-muted-foreground">Entradas</span>
+            <TrendingUp className="w-4 h-4 text-success" />
+          </div>
+          <p className="text-2xl font-bold text-foreground">{formatCurrency(summary.grossIncome)}</p>
         </Card>
-      ) : closedSessions.length === 0 ? (
-        <Card className="p-12 border-0 shadow-lg text-center">
-          <FileText className="w-16 h-16 mx-auto mb-4 text-muted-foreground opacity-50" />
-          <h2 className="text-xl font-display font-semibold text-foreground mb-2">
-            Nenhum fechamento
-          </h2>
-          <p className="text-muted-foreground">
-            O histórico aparecerá aqui após o primeiro fechamento de caixa
-          </p>
+        <Card className="p-4 border-0 shadow-md">
+          <div className="flex items-center justify-between mb-2">
+            <span className="text-sm text-muted-foreground">Saídas</span>
+            <TrendingDown className="w-4 h-4 text-destructive" />
+          </div>
+          <p className="text-2xl font-bold text-foreground">{formatCurrency(summary.grossExpense)}</p>
         </Card>
-      ) : (
-        <div className="space-y-4">
-          {closedSessions.map((session, index) => {
-            const stats = calculateSessionStats(session);
-            const isExpanded = expandedSession === session.id;
-            const sessionTransactions = getSessionTransactions(session.id);
-            
-            return (
-              <motion.div
-                key={session.id}
-                initial={{ opacity: 0, y: 20 }}
-                animate={{ opacity: 1, y: 0 }}
-                transition={{ delay: index * 0.05 }}
-              >
-                <Collapsible open={isExpanded} onOpenChange={() => setExpandedSession(isExpanded ? null : session.id)}>
-                  <Card className="border-0 shadow-md overflow-hidden">
-                    <CollapsibleTrigger asChild>
-                      <div className="p-5 cursor-pointer hover:bg-secondary/30 transition-colors">
-                        <div className="flex flex-col lg:flex-row lg:items-center justify-between gap-4">
-                          <div className="flex items-center gap-4">
-                            <div className="w-12 h-12 rounded-xl bg-primary-soft flex items-center justify-center">
-                              <Calendar className="w-6 h-6 text-primary" />
-                            </div>
-                            <div>
-                              <p className="font-semibold text-foreground capitalize">
-                                {formatDate(session.opened_at)}
-                              </p>
-                              <p className="text-sm text-muted-foreground">
-                                <Clock className="w-3 h-3 inline mr-1" />
-                                {formatTime(session.opened_at)} - {session.closed_at ? formatTime(session.closed_at) : '--:--'}
-                              </p>
-                            </div>
-                          </div>
-                          
-                          <div className="flex items-center gap-6">
-                            <div className="text-right">
-                              <p className="text-sm text-muted-foreground">Entradas</p>
-                              <p className="font-bold text-success">{formatCurrency(stats.totalIncome)}</p>
-                            </div>
-                            <div className="text-right">
-                              <p className="text-sm text-muted-foreground">Saídas</p>
-                              <p className="font-bold text-destructive">{formatCurrency(stats.totalExpense)}</p>
-                            </div>
-                            <div className="text-right">
-                              <p className="text-sm text-muted-foreground">Saldo Final</p>
-                              <p className="font-bold text-primary">{formatCurrency(session.closing_balance || 0)}</p>
-                            </div>
-                            
-                            {session.difference !== null && session.difference !== 0 ? (
-                              <Badge variant="warning" className="flex items-center gap-1">
-                                <AlertCircle className="w-3 h-3" />
-                                Dif: {formatCurrency(session.difference)}
-                              </Badge>
-                            ) : (
-                              <Badge variant="success" className="flex items-center gap-1">
-                                <CheckCircle2 className="w-3 h-3" />
-                                Bateu
-                              </Badge>
-                            )}
-                            
-                            {isExpanded ? <ChevronUp className="w-5 h-5" /> : <ChevronDown className="w-5 h-5" />}
-                          </div>
+        <Card className="p-4 border-0 shadow-md">
+          <div className="flex items-center justify-between mb-2">
+            <span className="text-sm text-muted-foreground">Saldo líquido</span>
+            <DollarSign className="w-4 h-4 text-primary" />
+          </div>
+          <p className="text-2xl font-bold text-foreground">{formatCurrency(summary.net)}</p>
+        </Card>
+        <Card className="p-4 border-0 shadow-md">
+          <div className="flex items-center justify-between mb-2">
+            <span className="text-sm text-muted-foreground">Caixas</span>
+            <Calendar className="w-4 h-4 text-primary" />
+          </div>
+          <p className="text-2xl font-bold text-foreground">{summary.openSessions} abertos / {summary.closedSessions} fechados</p>
+        </Card>
+        <Card className="p-4 border-0 shadow-md">
+          <div className="flex items-center justify-between mb-2">
+            <span className="text-sm text-muted-foreground">Movimentos estornados</span>
+            <RotateCcw className="w-4 h-4 text-amber-500" />
+          </div>
+          <p className="text-2xl font-bold text-foreground">{summary.reversedCount}</p>
+        </Card>
+      </div>
+
+      <Card className="p-4 border-0 shadow-md">
+        <div className="grid gap-3 lg:grid-cols-[1fr_180px_180px]">
+          <div className="relative">
+            <Search className="w-4 h-4 text-muted-foreground absolute left-3 top-1/2 -translate-y-1/2" />
+            <Input
+              value={search}
+              onChange={(event) => setSearch(event.target.value)}
+              placeholder="Buscar por categoria, descrição, tipo, profissional..."
+              className="pl-9"
+            />
+          </div>
+          <Input type="date" value={dateFrom} onChange={(event) => setDateFrom(event.target.value)} />
+          <Input type="date" value={dateTo} onChange={(event) => setDateTo(event.target.value)} />
+        </div>
+      </Card>
+
+      <Tabs value={tab} onValueChange={setTab} className="space-y-4">
+        <TabsList className="grid w-full grid-cols-3">
+          <TabsTrigger value="sessions">Histórico de Caixas</TabsTrigger>
+          <TabsTrigger value="transactions">Entradas e Saídas</TabsTrigger>
+          <TabsTrigger value="commissions">Comissões e Vales</TabsTrigger>
+        </TabsList>
+
+        <TabsContent value="sessions" className="space-y-4">
+          {loading ? (
+            <Card className="p-8 border-0 shadow-md text-center text-muted-foreground">
+              Carregando histórico financeiro...
+            </Card>
+          ) : filteredSessions.length === 0 ? (
+            <Card className="p-8 border-0 shadow-md text-center text-muted-foreground">
+              Nenhum caixa encontrado para o filtro atual.
+            </Card>
+          ) : (
+            filteredSessions.map((session, index) => {
+              const stats = getSessionStats(session);
+              return (
+                <motion.div
+                  key={session.id}
+                  initial={{ opacity: 0, y: 16 }}
+                  animate={{ opacity: 1, y: 0 }}
+                  transition={{ delay: index * 0.03 }}
+                >
+                  <Card className="p-5 border-0 shadow-md space-y-4">
+                    <div className="flex flex-col gap-4 lg:flex-row lg:items-start lg:justify-between">
+                      <div className="space-y-2">
+                        <div className="flex items-center gap-2">
+                          <h2 className="text-xl font-semibold text-foreground">
+                            Caixa de {formatDate(session.opened_at)}
+                          </h2>
+                          <Badge variant={session.status === 'open' ? 'success' : 'secondary'}>
+                            {session.status === 'open' ? 'Aberto' : 'Fechado'}
+                          </Badge>
+                        </div>
+                        <div className="flex flex-wrap gap-4 text-sm text-muted-foreground">
+                          <span className="inline-flex items-center gap-1">
+                            <Clock className="w-3.5 h-3.5" />
+                            Abertura: {formatDateTime(session.opened_at)}
+                          </span>
+                          <span className="inline-flex items-center gap-1">
+                            <Clock className="w-3.5 h-3.5" />
+                            Fechamento: {formatDateTime(session.closed_at)}
+                          </span>
                         </div>
                       </div>
-                    </CollapsibleTrigger>
-                    
-                    <CollapsibleContent>
-                      <div className="px-5 pb-5 border-t border-border pt-4">
-                        {/* Summary by Payment Method */}
-                        <div className="grid grid-cols-2 md:grid-cols-4 gap-3 mb-4">
-                          {Object.entries(stats.byPaymentMethod).map(([method, values]) => (
-                            <div key={method} className="p-3 rounded-lg bg-secondary/50">
-                              <p className="text-xs text-muted-foreground">{paymentMethodLabels[method] || method}</p>
-                              <p className="font-semibold text-foreground">{formatCurrency(values.income - values.expense)}</p>
-                            </div>
-                          ))}
+
+                      <div className="grid gap-3 sm:grid-cols-3">
+                        <div className="rounded-xl bg-secondary/40 px-4 py-3">
+                          <p className="text-xs uppercase tracking-wide text-muted-foreground">Abertura</p>
+                          <p className="font-semibold text-foreground">{formatCurrency(session.opening_balance)}</p>
                         </div>
-                        
-                        {/* Opening/Closing Info */}
-                        <div className="grid grid-cols-3 gap-3 mb-4">
-                          <div className="p-3 rounded-lg bg-secondary/50">
-                            <p className="text-xs text-muted-foreground">Abertura</p>
-                            <p className="font-semibold text-foreground">{formatCurrency(session.opening_balance)}</p>
-                          </div>
-                          <div className="p-3 rounded-lg bg-secondary/50">
-                            <p className="text-xs text-muted-foreground">Esperado (Dinheiro)</p>
-                            <p className="font-semibold text-foreground">{formatCurrency(session.expected_balance || 0)}</p>
-                          </div>
-                          <div className="p-3 rounded-lg bg-secondary/50">
-                            <p className="text-xs text-muted-foreground">Contado</p>
-                            <p className="font-semibold text-foreground">{formatCurrency(session.closing_balance || 0)}</p>
-                          </div>
+                        <div className="rounded-xl bg-secondary/40 px-4 py-3">
+                          <p className="text-xs uppercase tracking-wide text-muted-foreground">Entradas / Saídas</p>
+                          <p className="font-semibold text-foreground">
+                            {formatCurrency(stats.totalIncome)} / {formatCurrency(stats.totalExpense)}
+                          </p>
                         </div>
-                        
-                        {session.notes && (
-                          <div className="p-3 rounded-lg bg-warning/10 border border-warning/30 mb-4">
-                            <p className="text-sm text-foreground">
-                              <FileText className="w-4 h-4 inline mr-2 text-warning" />
-                              {session.notes}
-                            </p>
-                          </div>
-                        )}
-                        
-                        {/* Transaction Details */}
-                        <h4 className="text-sm font-semibold text-foreground mb-3">
-                          Movimentações ({stats.transactionCount})
-                        </h4>
-                        <div className="space-y-2 max-h-64 overflow-y-auto">
-                          {sessionTransactions.map((transaction) => (
+                        <div className="rounded-xl bg-secondary/40 px-4 py-3">
+                          <p className="text-xs uppercase tracking-wide text-muted-foreground">Fechamento</p>
+                          <p className="font-semibold text-foreground">{formatCurrency(session.closing_balance ?? 0)}</p>
+                        </div>
+                      </div>
+                    </div>
+
+                    {session.notes ? (
+                      <div className="rounded-xl border border-border/60 bg-background/60 px-4 py-3 text-sm text-muted-foreground">
+                        {session.notes}
+                      </div>
+                    ) : null}
+
+                    <div className="space-y-3">
+                      <div className="flex items-center justify-between">
+                        <h3 className="font-medium text-foreground">Movimentos do caixa</h3>
+                        <span className="text-sm text-muted-foreground">{stats.transactions.length} registro(s)</span>
+                      </div>
+
+                      {stats.transactions.length === 0 ? (
+                        <div className="rounded-xl border border-dashed border-border p-4 text-sm text-muted-foreground">
+                          Nenhuma movimentação encontrada neste caixa para o filtro atual.
+                        </div>
+                      ) : (
+                        <div className="space-y-2">
+                          {stats.transactions.map((transaction) => (
                             <div
                               key={transaction.id}
-                              className="flex items-center justify-between p-3 rounded-lg bg-secondary/30"
+                              className={cn(
+                                'rounded-2xl border px-4 py-3',
+                                transaction.reversed_at ? 'border-amber-200 bg-amber-50/70' : 'border-border bg-background/70',
+                              )}
                             >
-                              <div className="flex items-center gap-3">
-                                <div className={`w-8 h-8 rounded-lg flex items-center justify-center ${
-                                  transaction.type === 'income' ? 'bg-success-soft' : 'bg-destructive-soft'
-                                }`}>
-                                  {transaction.type === 'income' ? (
-                                    <TrendingUp className="w-4 h-4 text-success" />
-                                  ) : (
-                                    <TrendingDown className="w-4 h-4 text-destructive" />
-                                  )}
-                                </div>
-                                <div>
-                                  <p className="text-sm font-medium text-foreground">
-                                    {transaction.description || transaction.category}
+                              <div className="flex flex-col gap-3 lg:flex-row lg:items-center lg:justify-between">
+                                <div className="space-y-1">
+                                  <div className="flex flex-wrap items-center gap-2">
+                                    <Badge variant={transaction.type === 'income' ? 'success' : 'destructive'}>
+                                      {transaction.type === 'income' ? 'Entrada' : 'Saída'}
+                                    </Badge>
+                                    <Badge variant="outline">{getReferenceLabel(transaction)}</Badge>
+                                    {transaction.reversed_at ? (
+                                      <Badge variant="warning">Estornado</Badge>
+                                    ) : null}
+                                  </div>
+                                  <p className="font-medium text-foreground">{transaction.category}</p>
+                                  <p className="text-sm text-muted-foreground">
+                                    {transaction.description || 'Sem descrição'} • {paymentMethodLabels[transaction.payment_method ?? ''] ?? 'Outro'}
                                   </p>
                                   <p className="text-xs text-muted-foreground">
-                                    {formatTime(transaction.created_at)} • {paymentMethodLabels[transaction.payment_method || 'other']}
+                                    {formatDateTime(transaction.created_at)}
+                                    {transaction.reversed_at ? ` • Estornado em ${formatDateTime(transaction.reversed_at)}` : ''}
                                   </p>
                                 </div>
+
+                                <div className="flex items-center gap-3 lg:flex-col lg:items-end">
+                                  <p className={cn(
+                                    'text-lg font-semibold',
+                                    getMovementTone(transaction) === 'success' && 'text-success',
+                                    getMovementTone(transaction) === 'danger' && 'text-destructive',
+                                    getMovementTone(transaction) === 'muted' && 'text-muted-foreground',
+                                  )}>
+                                    {transaction.type === 'income' ? '+' : '-'}
+                                    {formatCurrency(Number(transaction.amount))}
+                                  </p>
+                                  {canReverseTransaction(transaction) ? (
+                                    <Button
+                                      variant="outline"
+                                      size="sm"
+                                      onClick={() => handleReverse(transaction)}
+                                    >
+                                      <RotateCcw className="w-4 h-4 mr-2" />
+                                      Estornar
+                                    </Button>
+                                  ) : null}
+                                </div>
                               </div>
-                              <p className={`font-bold ${
-                                transaction.type === 'income' ? 'text-success' : 'text-destructive'
-                              }`}>
-                                {transaction.type === 'income' ? '+' : '-'}
-                                {formatCurrency(Number(transaction.amount))}
-                              </p>
                             </div>
                           ))}
                         </div>
-                      </div>
-                    </CollapsibleContent>
+                      )}
+                    </div>
                   </Card>
-                </Collapsible>
+                </motion.div>
+              );
+            })
+          )}
+        </TabsContent>
+
+        <TabsContent value="transactions" className="space-y-4">
+          {filteredTransactions.length === 0 ? (
+            <Card className="p-8 border-0 shadow-md text-center text-muted-foreground">
+              Nenhuma movimentação encontrada.
+            </Card>
+          ) : (
+            filteredTransactions.map((transaction, index) => (
+              <motion.div
+                key={transaction.id}
+                initial={{ opacity: 0, y: 14 }}
+                animate={{ opacity: 1, y: 0 }}
+                transition={{ delay: index * 0.02 }}
+              >
+                <Card className="p-4 border-0 shadow-sm">
+                  <div className="flex flex-col gap-3 lg:flex-row lg:items-center lg:justify-between">
+                    <div className="space-y-1">
+                      <div className="flex flex-wrap items-center gap-2">
+                        <Badge variant={transaction.type === 'income' ? 'success' : 'destructive'}>
+                          {transaction.type === 'income' ? 'Entrada' : 'Saída'}
+                        </Badge>
+                        <Badge variant="outline">{getReferenceLabel(transaction)}</Badge>
+                        {transaction.reversed_at ? <Badge variant="warning">Estornado</Badge> : null}
+                      </div>
+                      <p className="font-medium text-foreground">{transaction.category}</p>
+                      <p className="text-sm text-muted-foreground">
+                        {transaction.description || 'Sem descrição'}
+                      </p>
+                      <div className="flex flex-wrap gap-3 text-xs text-muted-foreground">
+                        <span>{formatDateTime(transaction.created_at)}</span>
+                        <span>{paymentMethodLabels[transaction.payment_method ?? ''] ?? 'Outro'}</span>
+                        <span>
+                          {transaction.cash_session_id
+                            ? `Caixa ${formatDate(
+                                cashSessions.find((session) => session.id === transaction.cash_session_id)?.opened_at,
+                              )}`
+                            : 'Sem caixa vinculado'}
+                        </span>
+                      </div>
+                    </div>
+
+                    <div className="flex items-center gap-3 lg:flex-col lg:items-end">
+                      <p className={cn(
+                        'text-lg font-semibold',
+                        transaction.reversed_at
+                          ? 'text-muted-foreground'
+                          : transaction.type === 'income'
+                            ? 'text-success'
+                            : 'text-destructive',
+                      )}>
+                        {transaction.type === 'income' ? '+' : '-'}
+                        {formatCurrency(Number(transaction.amount))}
+                      </p>
+                      {canReverseTransaction(transaction) ? (
+                        <Button variant="outline" size="sm" onClick={() => handleReverse(transaction)}>
+                          <RotateCcw className="w-4 h-4 mr-2" />
+                          Estornar
+                        </Button>
+                      ) : null}
+                    </div>
+                  </div>
+                </Card>
               </motion.div>
-            );
-          })}
+            ))
+          )}
+        </TabsContent>
+
+        <TabsContent value="commissions" className="space-y-4">
+          {filteredCommissions.length === 0 ? (
+            <Card className="p-8 border-0 shadow-md text-center text-muted-foreground">
+              Nenhuma comissão ou vale encontrada.
+            </Card>
+          ) : (
+            filteredCommissions.map((commission, index) => {
+              const relatedTransaction = commission.transaction_id
+                ? transactionById.get(commission.transaction_id)
+                : undefined;
+
+              return (
+                <motion.div
+                  key={commission.id}
+                  initial={{ opacity: 0, y: 14 }}
+                  animate={{ opacity: 1, y: 0 }}
+                  transition={{ delay: index * 0.02 }}
+                >
+                  <Card className="p-4 border-0 shadow-sm">
+                    <div className="flex flex-col gap-3 lg:flex-row lg:items-center lg:justify-between">
+                      <div className="space-y-1">
+                        <div className="flex flex-wrap items-center gap-2">
+                          <Badge variant={commission.type === 'voucher' ? 'warning' : 'outline'}>
+                            {commission.type === 'voucher' ? (
+                              <>
+                                <Ticket className="w-3.5 h-3.5 mr-1" />
+                                Vale
+                              </>
+                            ) : (
+                              <>
+                                <Receipt className="w-3.5 h-3.5 mr-1" />
+                                Comissão
+                              </>
+                            )}
+                          </Badge>
+                          <Badge variant={commission.status === 'paid' ? 'success' : 'secondary'}>
+                            {commission.status === 'paid' ? 'Pago' : 'Pendente'}
+                          </Badge>
+                          {relatedTransaction?.reversed_at ? <Badge variant="warning">Movimento estornado</Badge> : null}
+                        </div>
+                        <p className="font-medium text-foreground">
+                          {commission.professional?.nickname ?? commission.professional?.name ?? 'Profissional'}
+                        </p>
+                        <div className="flex flex-wrap gap-3 text-sm text-muted-foreground">
+                          <span>Base: {formatCurrency(Number(commission.base_value))}</span>
+                          <span>Valor: {formatCurrency(Number(commission.commission_value))}</span>
+                          <span>Percentual: {Number(commission.commission_rate)}%</span>
+                          <span>
+                            {commission.status === 'paid'
+                              ? `Pago em ${formatDateTime(commission.paid_at)}`
+                              : `Criado em ${formatDateTime(commission.created_at)}`}
+                          </span>
+                        </div>
+                      </div>
+
+                      <div className="flex items-center gap-3 lg:flex-col lg:items-end">
+                        <p className={cn(
+                          'text-lg font-semibold',
+                          commission.commission_value >= 0 ? 'text-foreground' : 'text-destructive',
+                        )}>
+                          {formatCurrency(Number(commission.commission_value))}
+                        </p>
+                        {relatedTransaction && canReverseTransaction(relatedTransaction) ? (
+                          <Button variant="outline" size="sm" onClick={() => handleReverse(relatedTransaction)}>
+                            <RotateCcw className="w-4 h-4 mr-2" />
+                            Estornar movimento
+                          </Button>
+                        ) : null}
+                      </div>
+                    </div>
+                  </Card>
+                </motion.div>
+              );
+            })
+          )}
+        </TabsContent>
+      </Tabs>
+
+      {canReverseFinancialEntries ? (
+        <div className="flex items-start gap-3 rounded-2xl border border-amber-200 bg-amber-50/80 px-4 py-3 text-sm text-amber-900">
+          <AlertCircle className="w-4 h-4 mt-0.5 shrink-0" />
+          <div>
+            Ao estornar um movimento, o sistema registra a contrapartida no caixa atual e tenta refletir isso em comissões,
+            vales e comandas vinculadas, preservando o histórico.
+          </div>
         </div>
-      )}
+      ) : null}
     </div>
   );
 }

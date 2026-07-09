@@ -129,6 +129,10 @@ export interface Transaction {
   payment_method?: 'cash' | 'credit_card' | 'debit_card' | 'pix' | 'other';
   reference_id?: string;
   reference_type?: string;
+  reversed_at?: string | null;
+  reversed_by?: string | null;
+  reversal_transaction_id?: string | null;
+  reversal_reason?: string | null;
   created_by?: string;
   created_at: string;
 }
@@ -187,6 +191,7 @@ interface DataContextType {
   openCashSession: (openingBalance: number) => Promise<CashSession | null>;
   closeCashSession: (closingBalance: number, notes?: string) => Promise<void>;
   addTransaction: (transaction: Omit<Transaction, 'id' | 'created_at'>) => Promise<Transaction | null>;
+  reverseTransaction: (transactionId: string, reason?: string) => Promise<boolean>;
   // Commissions
   payCommission: (id: string, paymentMethod: 'cash' | 'pix' | 'transfer') => Promise<void>;
   payAllCommissions: (professionalId: string, paymentMethod: 'cash' | 'pix' | 'transfer') => Promise<void>;
@@ -248,9 +253,22 @@ export const DataProvider: React.FC<{ children: ReactNode }> = ({ children }) =>
   const realtimeChannelRef = useRef<ReturnType<typeof supabase.channel> | null>(null);
   const fetchRequestRef = useRef(0);
   const isCleaningTenant = isCleaningControlTenant(currentTenant);
-  const canViewScheduleData = userRole === 'admin' || hasPermission('view_schedule') || hasPermission('edit_schedule');
-  const canViewCashData = userRole === 'admin' || hasPermission('manage_cash_flow') || hasPermission('refund_bill');
-  const canViewCommissionsData = userRole === 'admin' || hasPermission('view_commissions');
+  const isAdminUser = userRole === 'admin';
+  const canViewScheduleData = isAdminUser || hasPermission('view_schedule') || hasPermission('edit_schedule');
+  const canManageCashFlow = isAdminUser || hasPermission('manage_cash_flow');
+  const canCloseBill = isAdminUser || hasPermission('close_bill') || hasPermission('manage_cash_flow');
+  const canRefundBills = isAdminUser || hasPermission('refund_bill') || hasPermission('reverse_financial_entries');
+  const canViewFinancialHistory = isAdminUser
+    || hasPermission('view_financial_history')
+    || hasPermission('reverse_financial_entries')
+    || hasPermission('manage_cash_flow')
+    || hasPermission('refund_bill');
+  const canViewCashData = canViewFinancialHistory;
+  const canViewCommissionsData = isAdminUser
+    || hasPermission('view_commissions')
+    || hasPermission('view_financial_history')
+    || hasPermission('reverse_financial_entries')
+    || hasPermission('manage_cash_flow');
 
   const fetchAllPages = async <T,>(queryFactory: () => any): Promise<T[]> => {
     const rows: T[] = [];
@@ -534,6 +552,85 @@ export const DataProvider: React.FC<{ children: ReactNode }> = ({ children }) =>
     return true;
   };
 
+  const guardFinancialPermission = (allowed: boolean, message: string) => {
+    if (!allowed) {
+      toast.error(message);
+      return false;
+    }
+    return true;
+  };
+
+  const createReversalTransaction = async (
+    originalTransaction: Transaction,
+    options?: {
+      description?: string;
+      category?: string;
+      paymentMethod?: Transaction['payment_method'];
+      referenceId?: string | null;
+      referenceType?: string | null;
+      amount?: number;
+    },
+  ) => {
+    if (!tenantId || !user?.id || !currentCashSession) {
+      throw new Error('Abra o caixa antes de registrar o estorno.');
+    }
+
+    const reversalPayload = {
+      cash_session_id: currentCashSession.id,
+      type: originalTransaction.type === 'income' ? 'expense' : 'income',
+      category: options?.category ?? `Estorno ${originalTransaction.category}`,
+      description: options?.description
+        ?? `Estorno financeiro: ${originalTransaction.description ?? originalTransaction.category}`,
+      amount: options?.amount ?? Number(originalTransaction.amount),
+      payment_method: options?.paymentMethod ?? originalTransaction.payment_method ?? 'other',
+      reference_id: options?.referenceId ?? originalTransaction.id,
+      reference_type: options?.referenceType ?? 'transaction_reversal',
+      created_by: user.id,
+      tenant_id: tenantId,
+    };
+
+    const { data, error } = await supabase
+      .from('transactions')
+      .insert(reversalPayload)
+      .select()
+      .single();
+
+    if (error) {
+      throw error;
+    }
+
+    return data as Transaction;
+  };
+
+  const markTransactionAsReversed = async (
+    transactionId: string,
+    reversalTransactionId: string,
+    reason?: string,
+    referenceType?: string,
+  ) => {
+    const updates: Record<string, unknown> = {
+      reversed_at: new Date().toISOString(),
+      reversed_by: user?.id ?? null,
+      reversal_transaction_id: reversalTransactionId,
+      reversal_reason: reason ?? null,
+    };
+
+    if (referenceType) {
+      updates.reference_type = referenceType;
+    }
+
+    const { error } = await supabase
+      .from('transactions')
+      .update(updates)
+      .eq('id', transactionId)
+      .eq('tenant_id', tenantId)
+      .is('reversed_at', null);
+
+    if (error) {
+      throw error;
+    }
+  };
+
   // ── CLIENT ACTIONS ──────────────────────────────────────────────────────
   const addClient = async (clientData: Omit<Client, 'id' | 'created_at'>) => {
     if (!guardModify()) return null;
@@ -757,6 +854,7 @@ export const DataProvider: React.FC<{ children: ReactNode }> = ({ children }) =>
   // ITEM 2: cria transação de estorno em vez de deletar
   const refundAppointment = async (id: string) => {
     if (!guardModify()) return;
+    if (!guardFinancialPermission(canRefundBills, 'Você não tem permissão para estornar comandas.')) return;
     const appointment = appointments.find(a => a.id === id);
     if (!appointment) return;
 
@@ -806,6 +904,7 @@ export const DataProvider: React.FC<{ children: ReactNode }> = ({ children }) =>
       .eq('reference_id', id)
       .eq('reference_type', 'appointment')
       .eq('type', 'income')
+      .is('reversed_at', null)
       .order('created_at', { ascending: false })
       .limit(1)
       .maybeSingle();
@@ -841,6 +940,7 @@ export const DataProvider: React.FC<{ children: ReactNode }> = ({ children }) =>
   // ITEM 3: completeAppointment com tratamento de erros e rollback parcial
   const completeAppointment = async (id: string, paymentMethod: string, overrides?: Partial<Appointment>) => {
     if (!guardModify()) return null;
+    if (!guardFinancialPermission(canCloseBill, 'Você não tem permissão para receber e encerrar comandas.')) return null;
     const existingAppointment = appointments.find(a => a.id === id);
     if (!existingAppointment) return null;
     const appointment = { ...existingAppointment, ...overrides };
@@ -852,6 +952,7 @@ export const DataProvider: React.FC<{ children: ReactNode }> = ({ children }) =>
       .eq('reference_id', id)
       .eq('reference_type', 'appointment')
       .eq('type', 'income')
+      .is('reversed_at', null)
       .order('created_at', { ascending: false })
       .limit(1)
       .maybeSingle();
@@ -893,6 +994,7 @@ export const DataProvider: React.FC<{ children: ReactNode }> = ({ children }) =>
         .eq('reference_id', id)
         .eq('reference_type', 'appointment')
         .eq('type', 'income')
+        .is('reversed_at', null)
         .order('created_at', { ascending: false })
         .limit(1)
         .maybeSingle();
@@ -969,6 +1071,7 @@ export const DataProvider: React.FC<{ children: ReactNode }> = ({ children }) =>
   // ── CASH ACTIONS ────────────────────────────────────────────────────────
   const openCashSession = async (openingBalance: number) => {
     if (!guardModify()) return null;
+    if (!guardFinancialPermission(canManageCashFlow, 'Você não tem permissão para abrir o caixa.')) return null;
     if (currentCashSession) { toast.warning('Já existe um caixa aberto.'); return null; }
     const { data, error } = await supabase
       .from('cash_sessions')
@@ -992,6 +1095,7 @@ export const DataProvider: React.FC<{ children: ReactNode }> = ({ children }) =>
 
   const closeCashSession = async (closingBalance: number, notes?: string) => {
     if (!guardModify()) return;
+    if (!guardFinancialPermission(canManageCashFlow, 'Você não tem permissão para fechar o caixa.')) return;
     if (!currentCashSession) return;
     const sessionTxs = transactions.filter(t => t.cash_session_id === currentCashSession.id);
     const cashTxs = sessionTxs.filter(t => t.payment_method === 'cash');
@@ -1016,6 +1120,11 @@ export const DataProvider: React.FC<{ children: ReactNode }> = ({ children }) =>
 
   const addTransaction = async (transactionData: Omit<Transaction, 'id' | 'created_at'>) => {
     if (!guardModify()) return null;
+    if (!guardFinancialPermission(canManageCashFlow, 'Você não tem permissão para lançar movimentos financeiros.')) return null;
+    if (!currentCashSession) {
+      toast.error('Abra o caixa antes de lançar uma movimentação.');
+      return null;
+    }
     const { data, error } = await supabase
       .from('transactions')
       .insert({ ...transactionData, cash_session_id: currentCashSession?.id, created_by: user?.id, tenant_id: tenantId })
@@ -1028,9 +1137,164 @@ export const DataProvider: React.FC<{ children: ReactNode }> = ({ children }) =>
     return tx;
   };
 
+  const reverseTransaction = async (transactionId: string, reason?: string) => {
+    if (!guardModify()) return false;
+    if (!guardFinancialPermission(canRefundBills, 'Você não tem permissão para estornar movimentos financeiros.')) return false;
+    if (!currentCashSession) {
+      toast.error('Abra o caixa antes de registrar um estorno.');
+      return false;
+    }
+
+    const originalTransaction = transactions.find((transaction) => transaction.id === transactionId);
+    if (!originalTransaction) {
+      toast.error('Movimentação não encontrada.');
+      return false;
+    }
+
+    if (originalTransaction.reversed_at || originalTransaction.reversal_transaction_id) {
+      toast.warning('Esta movimentação já foi estornada anteriormente.');
+      return false;
+    }
+
+    if (originalTransaction.reference_type === 'transaction_reversal' || originalTransaction.reference_type === 'refund') {
+      toast.warning('O sistema não permite estornar um estorno novamente.');
+      return false;
+    }
+
+    try {
+      let reversalTransaction: Transaction;
+
+      if (originalTransaction.reference_type === 'appointment') {
+        const appointmentId = originalTransaction.reference_id;
+        if (!appointmentId) {
+          toast.error('A comanda vinculada não foi encontrada.');
+          return false;
+        }
+
+        const relatedCommissions = commissions.filter((commission) => commission.appointment_id === appointmentId);
+        const paidCommissions = relatedCommissions.filter((commission) => commission.status === 'paid');
+        if (paidCommissions.length > 0) {
+          toast.error('Estorne primeiro os pagamentos de comissão vinculados a esta comanda.');
+          return false;
+        }
+
+        const { error: appointmentError } = await supabase
+          .from('appointments')
+          .update({ status: 'in_progress' })
+          .eq('id', appointmentId)
+          .eq('tenant_id', tenantId);
+
+        if (appointmentError) throw appointmentError;
+
+        if (relatedCommissions.length > 0) {
+          const { error: deleteCommissionError } = await supabase
+            .from('commissions')
+            .delete()
+            .eq('tenant_id', tenantId)
+            .eq('appointment_id', appointmentId)
+            .eq('status', 'pending');
+
+          if (deleteCommissionError) throw deleteCommissionError;
+        }
+
+        reversalTransaction = await createReversalTransaction(originalTransaction, {
+          category: 'Estorno de Comanda',
+          description: `Estorno de comanda: ${originalTransaction.description ?? 'Pagamento do atendimento'}`,
+          paymentMethod: originalTransaction.payment_method,
+          referenceId: appointmentId,
+          referenceType: 'refund',
+        });
+
+        await markTransactionAsReversed(originalTransaction.id, reversalTransaction.id, reason, 'appointment_refunded');
+      } else if (originalTransaction.reference_type === 'commission') {
+        const commissionId = originalTransaction.reference_id;
+        if (!commissionId) {
+          toast.error('Comissão vinculada não encontrada.');
+          return false;
+        }
+
+        const { error: commissionError } = await supabase
+          .from('commissions')
+          .update({ status: 'pending', paid_at: null, transaction_id: null })
+          .eq('id', commissionId)
+          .eq('tenant_id', tenantId);
+
+        if (commissionError) throw commissionError;
+
+        reversalTransaction = await createReversalTransaction(originalTransaction, {
+          category: 'Estorno de Comissão',
+          description: `Estorno de pagamento de comissão: ${originalTransaction.description ?? 'Comissão'}`,
+          paymentMethod: originalTransaction.payment_method,
+          referenceId: commissionId,
+          referenceType: 'commission_reversal',
+        });
+
+        await markTransactionAsReversed(originalTransaction.id, reversalTransaction.id, reason);
+      } else if (originalTransaction.reference_type === 'commission_batch') {
+        const { error: commissionBatchError } = await supabase
+          .from('commissions')
+          .update({ status: 'pending', paid_at: null, transaction_id: null })
+          .eq('tenant_id', tenantId)
+          .eq('transaction_id', originalTransaction.id);
+
+        if (commissionBatchError) throw commissionBatchError;
+
+        reversalTransaction = await createReversalTransaction(originalTransaction, {
+          category: 'Estorno de Comissões',
+          description: `Estorno de pagamento em lote: ${originalTransaction.description ?? 'Comissões'}`,
+          paymentMethod: originalTransaction.payment_method,
+          referenceId: originalTransaction.reference_id,
+          referenceType: 'commission_batch_reversal',
+        });
+
+        await markTransactionAsReversed(originalTransaction.id, reversalTransaction.id, reason);
+      } else if (originalTransaction.reference_type === 'voucher') {
+        const { error: voucherDeleteError } = await supabase
+          .from('commissions')
+          .delete()
+          .eq('tenant_id', tenantId)
+          .eq('transaction_id', originalTransaction.id)
+          .eq('type', 'voucher');
+
+        if (voucherDeleteError) throw voucherDeleteError;
+
+        reversalTransaction = await createReversalTransaction(originalTransaction, {
+          category: 'Estorno de Vale',
+          description: `Estorno de vale: ${originalTransaction.description ?? 'Vale do profissional'}`,
+          paymentMethod: originalTransaction.payment_method,
+          referenceId: originalTransaction.reference_id,
+          referenceType: 'voucher_reversal',
+        });
+
+        await markTransactionAsReversed(originalTransaction.id, reversalTransaction.id, reason);
+      } else {
+        reversalTransaction = await createReversalTransaction(originalTransaction, {
+          category: `Estorno ${originalTransaction.category}`,
+          description: `Estorno financeiro: ${originalTransaction.description ?? originalTransaction.category}`,
+          paymentMethod: originalTransaction.payment_method,
+        });
+
+        await markTransactionAsReversed(originalTransaction.id, reversalTransaction.id, reason);
+      }
+
+      await refreshData(['appointments', 'cash', 'transactions', 'commissions']);
+      toast.success('Movimentação estornada com sucesso.');
+      return true;
+    } catch (error) {
+      console.error('Error reversing transaction:', error);
+      toast.error('Não foi possível estornar a movimentação.');
+      return false;
+    }
+  };
+
   // ── COMMISSION ACTIONS ──────────────────────────────────────────────────
   const payCommission = async (id: string, paymentMethod: 'cash' | 'pix' | 'transfer') => {
     if (!guardModify()) return;
+    if (!guardFinancialPermission(canManageCashFlow, 'Você não tem permissão para pagar comissões.')) return;
+    if (!currentCashSession) {
+      toast.error('Abra o caixa antes de pagar comissões.');
+      return;
+    }
     const commission = commissions.find(c => c.id === id);
     if (!commission) { toast.error('Comissão não encontrada.'); return; }
     const professional = professionals.find(p => p.id === commission.professional_id);
@@ -1067,6 +1331,11 @@ export const DataProvider: React.FC<{ children: ReactNode }> = ({ children }) =>
   // ITEM 1: corrigido — inclui .neq('type', 'voucher') no UPDATE do banco
   const payAllCommissions = async (professionalId: string, paymentMethod: 'cash' | 'pix' | 'transfer') => {
     if (!guardModify()) return;
+    if (!guardFinancialPermission(canManageCashFlow, 'Você não tem permissão para pagar comissões.')) return;
+    if (!currentCashSession) {
+      toast.error('Abra o caixa antes de pagar comissões.');
+      return;
+    }
     const pendingCommissions = commissions.filter(
       c => c.professional_id === professionalId && c.status === 'pending' && c.type !== 'voucher'
     );
@@ -1110,6 +1379,11 @@ export const DataProvider: React.FC<{ children: ReactNode }> = ({ children }) =>
 
   const addVoucher = async (professionalId: string, amount: number, description?: string) => {
     if (!guardModify()) return;
+    if (!guardFinancialPermission(canManageCashFlow, 'Você não tem permissão para registrar vales.')) return;
+    if (!currentCashSession) {
+      toast.error('Abra o caixa antes de registrar vales.');
+      return;
+    }
     const professional = professionals.find(p => p.id === professionalId);
     const voucherDescription = description ?? `Vale para ${professional?.nickname ?? 'Profissional'}`;
     const { data: txData, error: txError } = await supabase
@@ -1155,7 +1429,7 @@ export const DataProvider: React.FC<{ children: ReactNode }> = ({ children }) =>
       addService, updateService, deleteService,
       addProduct, updateProduct, deleteProduct, updateProductStock,
       addAppointment, updateAppointment, deleteAppointment, refundAppointment, completeAppointment,
-      openCashSession, closeCashSession, addTransaction,
+      openCashSession, closeCashSession, addTransaction, reverseTransaction,
       payCommission, payAllCommissions, addVoucher,
     }}>
       {children}

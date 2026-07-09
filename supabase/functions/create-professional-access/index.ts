@@ -10,6 +10,8 @@ const allowedPermissions = new Set([
   "refund_bill",
   "view_commissions",
   "manage_cash_flow",
+  "view_financial_history",
+  "reverse_financial_entries",
 ]);
 
 const allowedRoles = new Set(["professional", "staff"]);

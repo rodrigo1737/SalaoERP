@@ -38,6 +38,7 @@ import {
 import { useToast } from '@/hooks/use-toast';
 import { useData, Transaction } from '@/context/DataContext';
 import { CashHistory } from './CashHistory';
+import { useAuth } from '@/contexts/AuthContext';
 
 const paymentMethods = [
   { value: 'cash', label: 'Dinheiro', icon: Banknote },
@@ -71,7 +72,9 @@ export function Cashier() {
     addTransaction,
     addVoucher
   } = useData();
+  const { userRole, hasPermission } = useAuth();
   const { toast } = useToast();
+  const canManageCashFlow = userRole === 'admin' || hasPermission('manage_cash_flow');
   
   const [isOpenDialogOpen, setIsOpenDialogOpen] = useState(false);
   const [isCloseDialogOpen, setIsCloseDialogOpen] = useState(false);
@@ -231,7 +234,7 @@ export function Cashier() {
   };
 
   // Show history view
-  if (showHistory) {
+  if (showHistory || !canManageCashFlow) {
     return <CashHistory onBack={() => setShowHistory(false)} />;
   }
 
@@ -260,7 +263,7 @@ export function Cashier() {
         <div className="flex gap-2">
           <Button variant="outline" onClick={() => setShowHistory(true)}>
             <History className="w-4 h-4 mr-2" />
-            Histórico
+            Gestão Financeira
           </Button>
           {!currentCashSession ? (
             <Button onClick={() => setIsOpenDialogOpen(true)}>
