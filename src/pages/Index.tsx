@@ -13,6 +13,7 @@ import { AestheticsModule } from '@/components/aesthetics/AestheticsModule';
 import { CleaningModule } from '@/components/cleaning/CleaningModule';
 import { Commissions } from '@/components/commissions/Commissions';
 import { Cashier } from '@/components/cashier/Cashier';
+import { CashHistory } from '@/components/cashier/CashHistory';
 import { Reports } from '@/components/reports/Reports';
 import { TenantsList } from '@/components/tenants/TenantsList';
 import { Settings } from '@/components/settings/Settings';
@@ -30,10 +31,10 @@ import { Loader2 } from 'lucide-react';
 
 // Páginas válidas por perfil
 const ADMIN_PAGES = ['dashboard', 'agenda', 'clients', 'professionals', 'services', 'products', 'aesthetics',
-  'cleaning', 'suppliers', 'purchase', 'stock-movements', 'commissions', 'reports', 'cashier', 'settings'];
+  'cleaning', 'suppliers', 'purchase', 'stock-movements', 'commissions', 'reports', 'cashier', 'financial-management', 'settings'];
 const PROFESSIONAL_PAGES = ['agenda', 'cleaning', 'commissions', 'settings'];
 const SUPER_ADMIN_PAGES = ['super-dashboard', 'tenants'];
-const CLEANING_BLOCKED_PAGES = ['agenda', 'services', 'products', 'suppliers', 'purchase', 'stock-movements', 'commissions', 'cashier'];
+const CLEANING_BLOCKED_PAGES = ['agenda', 'services', 'products', 'suppliers', 'purchase', 'stock-movements', 'commissions', 'cashier', 'financial-management'];
 
 const Index = () => {
   const { page } = useParams<{ page?: string }>();
@@ -58,6 +59,9 @@ const Index = () => {
     if (targetPage === 'clients') return hasPermission('view_clients');
     if (targetPage === 'commissions') return hasPermission('view_commissions');
     if (targetPage === 'cashier') {
+      return hasPermission('manage_cash_flow');
+    }
+    if (targetPage === 'financial-management') {
       return hasPermission('manage_cash_flow')
         || hasPermission('view_financial_history')
         || hasPermission('reverse_financial_entries');
@@ -134,6 +138,7 @@ const Index = () => {
       case 'commissions':      return <Commissions />;
       case 'reports':          return <Reports />;
       case 'cashier':          return <Cashier />;
+      case 'financial-management': return <CashHistory />;
       case 'settings':         return <Settings />;
       default:
         return (

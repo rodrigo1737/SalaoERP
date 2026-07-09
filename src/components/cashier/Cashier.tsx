@@ -11,7 +11,6 @@ import {
   X,
   CheckCircle2,
   AlertCircle,
-  History,
   Ticket,
   User
 } from 'lucide-react';
@@ -37,7 +36,6 @@ import {
 } from '@/components/ui/select';
 import { useToast } from '@/hooks/use-toast';
 import { useData, Transaction } from '@/context/DataContext';
-import { CashHistory } from './CashHistory';
 import { useAuth } from '@/contexts/AuthContext';
 
 const paymentMethods = [
@@ -82,7 +80,6 @@ export function Cashier() {
   const [isVoucherDialogOpen, setIsVoucherDialogOpen] = useState(false);
   const [transactionType, setTransactionType] = useState<'income' | 'expense'>('income');
   const [isSubmitting, setIsSubmitting] = useState(false);
-  const [showHistory, setShowHistory] = useState(false);
 
   // Voucher form
   const [voucherProfessionalId, setVoucherProfessionalId] = useState('');
@@ -233,9 +230,28 @@ export function Cashier() {
     });
   };
 
-  // Show history view
-  if (showHistory || !canManageCashFlow) {
-    return <CashHistory onBack={() => setShowHistory(false)} />;
+  if (!canManageCashFlow) {
+    return (
+      <div className="p-6 lg:p-8 space-y-6">
+        <div>
+          <h1 className="text-3xl lg:text-4xl font-display font-bold text-foreground">
+            Caixa
+          </h1>
+          <p className="text-muted-foreground mt-1">
+            Este usuário não possui permissão para operar o caixa.
+          </p>
+        </div>
+
+        <Card className="p-8 border-0 shadow-lg">
+          <div className="space-y-2">
+            <p className="text-lg font-semibold text-foreground">Acesso restrito</p>
+            <p className="text-muted-foreground">
+              Libere a permissão <strong>Gerenciar Caixa</strong> na administração para abrir, lançar ou fechar caixa.
+            </p>
+          </div>
+        </Card>
+      </div>
+    );
   }
 
   return (
@@ -261,10 +277,6 @@ export function Cashier() {
           </p>
         </div>
         <div className="flex gap-2">
-          <Button variant="outline" onClick={() => setShowHistory(true)}>
-            <History className="w-4 h-4 mr-2" />
-            Gestão Financeira
-          </Button>
           {!currentCashSession ? (
             <Button onClick={() => setIsOpenDialogOpen(true)}>
               <DollarSign className="w-4 h-4 mr-2" />

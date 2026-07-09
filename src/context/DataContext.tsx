@@ -142,6 +142,7 @@ export interface Commission {
   professional_id: string;
   appointment_id?: string;
   transaction_id?: string;
+  payment_method?: 'cash' | 'pix' | 'transfer' | null;
   type: 'service' | 'product' | 'voucher';
   base_value: number;
   commission_rate: number;
@@ -234,6 +235,12 @@ function joinCommissions(comms: Commission[], professionals: Professional[]): Co
     ...c,
     professional: professionalsById.get(c.professional_id),
   }));
+}
+
+function getLatestOpenCashSession(cashSessions: CashSession[]): CashSession | null {
+  return cashSessions
+    .filter((session) => session.status === 'open')
+    .sort((a, b) => new Date(b.opened_at).getTime() - new Date(a.opened_at).getTime())[0] ?? null;
 }
 
 // ─── Provider ───────────────────────────────────────────────────────────────
@@ -439,7 +446,7 @@ export const DataProvider: React.FC<{ children: ReactNode }> = ({ children }) =>
           if (requestId !== fetchRequestRef.current) return;
           setAppointments(joinAppointments(apptsData, clientsData, professionalsData, servicesData));
           setCashSessions(cashData);
-          setCurrentCashSession(cashData.find(s => s.status === 'open') ?? null);
+          setCurrentCashSession(getLatestOpenCashSession(cashData));
           setTransactions(txData);
           setCommissions(joinCommissions(commData, professionalsData));
         })
@@ -487,7 +494,7 @@ export const DataProvider: React.FC<{ children: ReactNode }> = ({ children }) =>
       if (!isCleaningTenant && canViewCashData && (all || entities!.includes('cash'))) {
         const cashData = await fetchCash();
         setCashSessions(cashData);
-        setCurrentCashSession(cashData.find(s => s.status === 'open') ?? null);
+        setCurrentCashSession(getLatestOpenCashSession(cashData));
       }
       if (canViewCashData && (all || entities!.includes('transactions'))) {
         const txData = await fetchTransactions();
@@ -512,6 +519,8 @@ export const DataProvider: React.FC<{ children: ReactNode }> = ({ children }) =>
       .channel(channelName)
       .on('postgres_changes', { event: '*', schema: 'public', table: 'clients', filter: `tenant_id=eq.${tenantId}` },
         () => refreshData(['clients']))
+      .on('postgres_changes', { event: '*', schema: 'public', table: 'cash_sessions', filter: `tenant_id=eq.${tenantId}` },
+        () => refreshData(['cash']))
       .on('postgres_changes', { event: '*', schema: 'public', table: 'transactions', filter: `tenant_id=eq.${tenantId}` },
         () => refreshData(isCleaningTenant ? ['transactions'] : ['transactions', 'cash']));
 
@@ -1215,7 +1224,7 @@ export const DataProvider: React.FC<{ children: ReactNode }> = ({ children }) =>
 
         const { error: commissionError } = await supabase
           .from('commissions')
-          .update({ status: 'pending', paid_at: null, transaction_id: null })
+          .update({ status: 'pending', paid_at: null, transaction_id: null, payment_method: null })
           .eq('id', commissionId)
           .eq('tenant_id', tenantId);
 
@@ -1233,7 +1242,7 @@ export const DataProvider: React.FC<{ children: ReactNode }> = ({ children }) =>
       } else if (originalTransaction.reference_type === 'commission_batch') {
         const { error: commissionBatchError } = await supabase
           .from('commissions')
-          .update({ status: 'pending', paid_at: null, transaction_id: null })
+          .update({ status: 'pending', paid_at: null, transaction_id: null, payment_method: null })
           .eq('tenant_id', tenantId)
           .eq('transaction_id', originalTransaction.id);
 
@@ -1320,10 +1329,17 @@ export const DataProvider: React.FC<{ children: ReactNode }> = ({ children }) =>
       status: 'paid',
       paid_at: new Date().toISOString(),
       transaction_id: txData?.id,
+      payment_method: paymentMethod,
     })
       .eq('id', id)
       .eq('tenant_id', tenantId);
-    setCommissions(prev => prev.map(c => c.id === id ? { ...c, status: 'paid', paid_at: new Date().toISOString() } : c));
+    setCommissions(prev => prev.map(c => c.id === id ? {
+      ...c,
+      status: 'paid',
+      paid_at: new Date().toISOString(),
+      transaction_id: txData?.id,
+      payment_method: paymentMethod,
+    } : c));
     setTransactions(prev => [txData as Transaction, ...prev]);
     toast.success('Comissão paga!');
   };
@@ -1363,14 +1379,25 @@ export const DataProvider: React.FC<{ children: ReactNode }> = ({ children }) =>
     // ITEM 1: filtro .neq('type', 'voucher') adicionado para evitar pagar vouchers
     await supabase
       .from('commissions')
-      .update({ status: 'paid', paid_at: new Date().toISOString(), transaction_id: txData?.id })
+      .update({
+        status: 'paid',
+        paid_at: new Date().toISOString(),
+        transaction_id: txData?.id,
+        payment_method: paymentMethod,
+      })
       .eq('professional_id', professionalId)
       .eq('tenant_id', tenantId)
       .eq('status', 'pending')
       .neq('type', 'voucher');
     setCommissions(prev => prev.map(c =>
       c.professional_id === professionalId && c.status === 'pending' && c.type !== 'voucher'
-        ? { ...c, status: 'paid', paid_at: new Date().toISOString() }
+        ? {
+            ...c,
+            status: 'paid',
+            paid_at: new Date().toISOString(),
+            transaction_id: txData?.id,
+            payment_method: paymentMethod,
+          }
         : c
     ));
     setTransactions(prev => [txData as Transaction, ...prev]);

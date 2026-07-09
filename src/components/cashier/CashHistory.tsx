@@ -25,7 +25,7 @@ import { useAuth } from '@/contexts/AuthContext';
 import { cn } from '@/lib/utils';
 
 interface CashHistoryProps {
-  onBack: () => void;
+  onBack?: () => void;
 }
 
 const formatCurrency = (value: number) => (
@@ -240,9 +240,11 @@ export function CashHistory({ onBack }: CashHistoryProps) {
     return (
       <div className="p-6 lg:p-8 space-y-6">
         <div className="flex items-center gap-4">
-          <Button variant="ghost" size="icon" onClick={onBack}>
-            <ArrowLeft className="w-5 h-5" />
-          </Button>
+          {onBack ? (
+            <Button variant="ghost" size="icon" onClick={onBack}>
+              <ArrowLeft className="w-5 h-5" />
+            </Button>
+          ) : null}
           <div>
             <h1 className="text-3xl lg:text-4xl font-display font-bold text-foreground">
               Gestão Financeira
@@ -272,9 +274,11 @@ export function CashHistory({ onBack }: CashHistoryProps) {
   return (
     <div className="p-6 lg:p-8 space-y-6">
       <div className="flex items-center gap-4">
-        <Button variant="ghost" size="icon" onClick={onBack}>
-          <ArrowLeft className="w-5 h-5" />
-        </Button>
+        {onBack ? (
+          <Button variant="ghost" size="icon" onClick={onBack}>
+            <ArrowLeft className="w-5 h-5" />
+          </Button>
+        ) : null}
         <div className="flex-1">
           <h1 className="text-3xl lg:text-4xl font-display font-bold text-foreground">
             Gestão Financeira

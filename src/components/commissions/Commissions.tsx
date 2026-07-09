@@ -58,6 +58,20 @@ interface PaymentDialogState {
   count?: number;
 }
 
+const paymentMethodLabels = {
+  cash: 'Dinheiro',
+  pix: 'PIX',
+  transfer: 'Transferência',
+} as const;
+
+function getCommissionPaymentMethod(method?: string | null) {
+  if (method === 'cash' || method === 'pix' || method === 'transfer') {
+    return method;
+  }
+
+  return null;
+}
+
 export function Commissions() {
   const { professionals, commissions, payCommission, payAllCommissions, refreshData } = useData();
   const { userRole, currentProfessional, hasPermission } = useAuth();
@@ -99,7 +113,8 @@ export function Commissions() {
   }, [refreshData]);
 
   const isAdmin = userRole === 'admin';
-  const canViewAllCommissions = isAdmin || (userRole === 'staff' && hasPermission('view_commissions'));
+  const isProfessionalScopedUser = userRole === 'staff' && !!currentProfessional;
+  const canViewAllCommissions = isAdmin || (userRole === 'staff' && !isProfessionalScopedUser && hasPermission('view_commissions'));
 
   // Filter commissions - professionals only see their own
   const visibleCommissions = useMemo(() => (
@@ -483,6 +498,25 @@ export function Commissions() {
                           </>
                         )}
                       </div>
+                      {commission.type !== 'voucher' && commission.status === 'paid' && (
+                        <div className="mt-1 flex flex-wrap items-center gap-2 text-xs text-muted-foreground">
+                          {commission.paid_at && <span>Pago em {formatDate(commission.paid_at)}</span>}
+                          {getCommissionPaymentMethod(commission.payment_method) && (
+                            <>
+                              <span>•</span>
+                              <span>{paymentMethodLabels[getCommissionPaymentMethod(commission.payment_method)!]}</span>
+                            </>
+                          )}
+                          {commission.transaction_id && (
+                            <>
+                              <span>•</span>
+                              <span>Mov. {commission.transaction_id.slice(0, 8).toUpperCase()}</span>
+                              <span>•</span>
+                              <span>Lançado no financeiro</span>
+                            </>
+                          )}
+                        </div>
+                      )}
                     </div>
                   </div>
                   

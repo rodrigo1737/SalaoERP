@@ -67,7 +67,8 @@ const salonMenuItems: MenuItem[] = [
       { id: 'stock-movements', label: 'Movimentações', icon: ArrowRightLeft, adminOnly: true },
     ]
   },
-  { id: 'cashier', label: 'Caixa', icon: DollarSign, adminOnly: true, permission: 'view_financial_history' },
+  { id: 'cashier', label: 'Caixa', icon: DollarSign, adminOnly: true, permission: 'manage_cash_flow' },
+  { id: 'financial-management', label: 'Gestão Financeira', icon: BarChart3, adminOnly: true, permission: 'view_financial_history' },
   { id: 'reports', label: 'Relatórios', icon: BarChart3, adminOnly: true },
   { id: 'commissions', label: 'Comissões', icon: DollarSign, adminOnly: false, permission: 'view_commissions' },
 ];
@@ -86,7 +87,7 @@ export function Sidebar({ currentPage, onNavigate }: SidebarProps) {
   const { user, userRole, isOwner, isSuperAdmin, currentTenant, signOut, hasPermission } = useAuth();
   const { settings: tenantSettings } = useTenantSettings();
   const isCleaningTenant = isCleaningControlTenant(currentTenant);
-  const cleaningHiddenItems = ['agenda', 'services', 'products', 'stock', 'cashier', 'commissions'];
+  const cleaningHiddenItems = ['agenda', 'services', 'products', 'stock', 'cashier', 'financial-management', 'commissions'];
 
   const handleLogout = async () => {
     await signOut();
@@ -125,6 +126,9 @@ export function Sidebar({ currentPage, onNavigate }: SidebarProps) {
       if (item.adminOnly && !item.permission) return false;
       if (item.permission) {
         if (item.id === 'cashier') {
+          return hasPermission('manage_cash_flow');
+        }
+        if (item.id === 'financial-management') {
           return hasPermission('manage_cash_flow')
             || hasPermission('view_financial_history')
             || hasPermission('reverse_financial_entries');

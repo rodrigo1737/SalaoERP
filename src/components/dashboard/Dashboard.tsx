@@ -85,9 +85,14 @@ const endOfDay = (date: Date) => {
 };
 
 export function Dashboard({ onNavigate }: DashboardProps) {
-  const { professionals } = useData();
-  const { user, currentTenant, tenantId } = useAuth();
+  const { professionals, currentCashSession, transactions } = useData();
+  const { user, currentTenant, tenantId, userRole, hasPermission } = useAuth();
   const isCleaningSegment = isCleaningControlTenant(currentTenant);
+  const canManageCashFlow = userRole === 'admin' || hasPermission('manage_cash_flow');
+  const canViewFinancialArea = canManageCashFlow
+    || hasPermission('view_financial_history')
+    || hasPermission('reverse_financial_entries')
+    || hasPermission('refund_bill');
   const [dashboardLoading, setDashboardLoading] = useState(false);
   const [dashboardStats, setDashboardStats] = useState<DashboardStats>({
     todayRevenue: 0,
@@ -101,12 +106,33 @@ export function Dashboard({ onNavigate }: DashboardProps) {
     cashSessionExpense: 0,
     cashSessionBalance: 0,
   });
-  const [currentCashSession, setCurrentCashSession] = useState<{
-    id: string;
-    opened_at: string;
-    opening_balance: number;
-  } | null>(null);
   const [upcomingAppointments, setUpcomingAppointments] = useState<DashboardAppointment[]>([]);
+  const cashSessionSummary = useMemo(() => {
+    if (!currentCashSession) {
+      return {
+        income: 0,
+        expense: 0,
+        balance: 0,
+      };
+    }
+
+    const sessionTransactions = transactions.filter(
+      (transaction) => transaction.cash_session_id === currentCashSession.id && !transaction.reversed_at,
+    );
+
+    const income = sessionTransactions
+      .filter((transaction) => transaction.type === 'income')
+      .reduce((sum, transaction) => sum + Number(transaction.amount), 0);
+    const expense = sessionTransactions
+      .filter((transaction) => transaction.type === 'expense')
+      .reduce((sum, transaction) => sum + Number(transaction.amount), 0);
+
+    return {
+      income,
+      expense,
+      balance: Number(currentCashSession.opening_balance || 0) + income - expense,
+    };
+  }, [currentCashSession, transactions]);
 
   // Para tenants de limpeza, os agendamentos vêm de `cleaning_appointments`.
   // Para os demais, mantém a fonte do DataContext (`appointments`).
@@ -114,7 +140,6 @@ export function Dashboard({ onNavigate }: DashboardProps) {
     let cancelled = false;
     if (!tenantId) {
       setUpcomingAppointments([]);
-      setCurrentCashSession(null);
       return;
     }
 
@@ -218,7 +243,6 @@ export function Dashboard({ onNavigate }: DashboardProps) {
             cashSessionExpense: todayExpense,
             cashSessionBalance: todayRevenue - todayExpense,
           });
-          setCurrentCashSession(null);
           setUpcomingAppointments(((upcomingResponse.data || []).map((row) => ({
             id: row.id,
             start_time: row.start_time,
@@ -237,7 +261,6 @@ export function Dashboard({ onNavigate }: DashboardProps) {
             upcomingResponse,
             activeClientsResponse,
             clientsCountResponse,
-            currentCashSessionResponse,
           ] = await Promise.all([
             supabase
               .from('appointments')
@@ -294,14 +317,6 @@ export function Dashboard({ onNavigate }: DashboardProps) {
               .select('id', { count: 'exact', head: true })
               .eq('tenant_id', tenantId)
               .is('deleted_at', null),
-            supabase
-              .from('cash_sessions')
-              .select('id, opened_at, opening_balance')
-              .eq('tenant_id', tenantId)
-              .eq('status', 'open')
-              .order('opened_at', { ascending: false })
-              .limit(1)
-              .maybeSingle(),
           ]);
 
           if (cancelled) return;
@@ -309,26 +324,6 @@ export function Dashboard({ onNavigate }: DashboardProps) {
           const todayRevenue = (todayRevenueResponse.data || []).reduce((sum, item) => sum + Number(item.total_value || 0), 0);
           const monthRevenue = (monthRevenueResponse.data || []).reduce((sum, item) => sum + Number(item.total_value || 0), 0);
           const activeClients = new Set((activeClientsResponse.data || []).map((item) => item.client_id).filter(Boolean)).size;
-
-          let cashSessionIncome = 0;
-          let cashSessionExpense = 0;
-          let cashSessionBalance = 0;
-
-          if (currentCashSessionResponse.data?.id) {
-            const { data: sessionTransactions } = await supabase
-              .from('transactions')
-              .select('amount, type')
-              .eq('tenant_id', tenantId)
-              .eq('cash_session_id', currentCashSessionResponse.data.id);
-
-            cashSessionIncome = (sessionTransactions || [])
-              .filter((entry) => entry.type === 'income')
-              .reduce((sum, entry) => sum + Number(entry.amount || 0), 0);
-            cashSessionExpense = (sessionTransactions || [])
-              .filter((entry) => entry.type === 'expense')
-              .reduce((sum, entry) => sum + Number(entry.amount || 0), 0);
-            cashSessionBalance = Number(currentCashSessionResponse.data.opening_balance || 0) + cashSessionIncome - cashSessionExpense;
-          }
 
           setDashboardStats({
             todayRevenue,
@@ -338,11 +333,10 @@ export function Dashboard({ onNavigate }: DashboardProps) {
             monthRevenue,
             todayExpense: 0,
             todayNetBalance: todayRevenue,
-            cashSessionIncome,
-            cashSessionExpense,
-            cashSessionBalance,
+            cashSessionIncome: 0,
+            cashSessionExpense: 0,
+            cashSessionBalance: 0,
           });
-          setCurrentCashSession(currentCashSessionResponse.data || null);
           setUpcomingAppointments((upcomingResponse.data as DashboardAppointment[]) || []);
         }
       } catch (error) {
@@ -360,7 +354,6 @@ export function Dashboard({ onNavigate }: DashboardProps) {
           cashSessionExpense: 0,
           cashSessionBalance: 0,
         });
-        setCurrentCashSession(null);
         setUpcomingAppointments([]);
       } finally {
         if (!cancelled) setDashboardLoading(false);
@@ -373,6 +366,15 @@ export function Dashboard({ onNavigate }: DashboardProps) {
     };
   }, [isCleaningSegment, tenantId]);
 
+  const displayStats = isCleaningSegment
+    ? dashboardStats
+    : {
+        ...dashboardStats,
+        cashSessionIncome: cashSessionSummary.income,
+        cashSessionExpense: cashSessionSummary.expense,
+        cashSessionBalance: cashSessionSummary.balance,
+      };
+
   const activeProfessionals = useMemo(() => {
     return professionals.filter(p => p.is_active).slice(0, 4);
   }, [professionals]);
@@ -380,34 +382,34 @@ export function Dashboard({ onNavigate }: DashboardProps) {
   const statCards = [
     {
       title: 'Faturamento Hoje',
-      value: formatCurrency(dashboardStats.todayRevenue),
+      value: formatCurrency(displayStats.todayRevenue),
       icon: DollarSign,
-      trend: dashboardStats.todayRevenue > 0 ? '+' + formatCurrency(dashboardStats.todayRevenue) : 'R$ 0',
-      trendUp: dashboardStats.todayRevenue > 0,
+      trend: displayStats.todayRevenue > 0 ? '+' + formatCurrency(displayStats.todayRevenue) : 'R$ 0',
+      trendUp: displayStats.todayRevenue > 0,
       color: 'primary',
     },
     {
       title: 'Agendamentos Hoje',
-      value: dashboardStats.todayAppointments.toString(),
+      value: displayStats.todayAppointments.toString(),
       icon: Calendar,
-      trend: dashboardStats.todayAppointments > 0 ? `${dashboardStats.todayAppointments} hoje` : 'Nenhum',
-      trendUp: dashboardStats.todayAppointments > 0,
+      trend: displayStats.todayAppointments > 0 ? `${displayStats.todayAppointments} hoje` : 'Nenhum',
+      trendUp: displayStats.todayAppointments > 0,
       color: 'success',
     },
     {
       title: 'Clientes Cadastrados',
-      value: dashboardStats.clientsCount.toString(),
+      value: displayStats.clientsCount.toString(),
       icon: Users,
-      trend: dashboardStats.activeClients > 0 ? `${dashboardStats.activeClients} ativos` : 'Nenhum',
-      trendUp: dashboardStats.activeClients > 0,
+      trend: displayStats.activeClients > 0 ? `${displayStats.activeClients} ativos` : 'Nenhum',
+      trendUp: displayStats.activeClients > 0,
       color: 'info',
     },
     {
       title: 'Faturamento Mensal',
-      value: formatCurrency(dashboardStats.monthRevenue),
+      value: formatCurrency(displayStats.monthRevenue),
       icon: TrendingUp,
-      trend: dashboardStats.monthRevenue > 0 ? 'Do dia 1 até hoje' : 'Sem movimentos',
-      trendUp: dashboardStats.monthRevenue > 0,
+      trend: displayStats.monthRevenue > 0 ? 'Do dia 1 até hoje' : 'Sem movimentos',
+      trendUp: displayStats.monthRevenue > 0,
       color: 'accent',
     },
   ];
@@ -419,6 +421,10 @@ export function Dashboard({ onNavigate }: DashboardProps) {
   const primarySchedulePage = isCleaningSegment ? 'cleaning' : 'agenda';
   const primaryScheduleLabel = isCleaningSegment ? 'Ver Agenda Limpeza' : 'Ver Agenda';
   const newAppointmentLabel = isCleaningSegment ? 'Nova Limpeza' : 'Novo Agendamento';
+  const financialPage = canManageCashFlow ? 'cashier' : 'financial-management';
+  const financialActionLabel = canManageCashFlow
+    ? (currentCashSession ? 'Ver Caixa' : 'Abrir Caixa')
+    : 'Gestão Financeira';
 
   if (dashboardLoading) {
     return (
@@ -469,15 +475,15 @@ export function Dashboard({ onNavigate }: DashboardProps) {
               <div className="flex-1 flex flex-wrap gap-4 sm:justify-end">
                 <div className="text-center sm:text-right">
                   <p className="text-xs text-muted-foreground">Entradas hoje</p>
-                  <p className="font-bold text-success">{formatCurrency(dashboardStats.todayRevenue)}</p>
+                  <p className="font-bold text-success">{formatCurrency(displayStats.todayRevenue)}</p>
                 </div>
                 <div className="text-center sm:text-right">
                   <p className="text-xs text-muted-foreground">Saídas hoje</p>
-                  <p className="font-bold text-destructive">{formatCurrency(dashboardStats.todayExpense)}</p>
+                  <p className="font-bold text-destructive">{formatCurrency(displayStats.todayExpense)}</p>
                 </div>
                 <div className="text-center sm:text-right">
                   <p className="text-xs text-muted-foreground">Saldo do dia</p>
-                  <p className="font-bold text-primary">{formatCurrency(dashboardStats.todayNetBalance)}</p>
+                  <p className="font-bold text-primary">{formatCurrency(displayStats.todayNetBalance)}</p>
                 </div>
                 <Button variant="outline" size="sm" onClick={() => onNavigate('cleaning')}>
                   Ver Fluxo
@@ -486,7 +492,7 @@ export function Dashboard({ onNavigate }: DashboardProps) {
             </div>
           </Card>
         </motion.div>
-      ) : !currentCashSession ? (
+      ) : canViewFinancialArea && !currentCashSession ? (
         <motion.div
           initial={{ opacity: 0, y: -10 }}
           animate={{ opacity: 1, y: 0 }}
@@ -495,18 +501,22 @@ export function Dashboard({ onNavigate }: DashboardProps) {
             <div className="flex items-center gap-3">
               <AlertCircle className="w-5 h-5 text-warning" />
               <div className="flex-1">
-                <p className="font-medium text-foreground">Caixa fechado</p>
+                <p className="font-medium text-foreground">
+                  {canManageCashFlow ? 'Caixa fechado' : 'Sem caixa aberto no momento'}
+                </p>
                 <p className="text-sm text-muted-foreground">
-                  Abra o caixa para registrar movimentos financeiros e fechar comandas
+                  {canManageCashFlow
+                    ? 'Abra o caixa para registrar movimentos financeiros e fechar comandas'
+                    : 'Consulte a gestão financeira para acompanhar os movimentos e o status do caixa.'}
                 </p>
               </div>
-              <Button variant="outline" size="sm" onClick={() => onNavigate('cashier')}>
-                Abrir Caixa
+              <Button variant="outline" size="sm" onClick={() => onNavigate(financialPage)}>
+                {financialActionLabel}
               </Button>
             </div>
           </Card>
         </motion.div>
-      ) : (
+      ) : canViewFinancialArea && currentCashSession ? (
         <motion.div
           initial={{ opacity: 0, y: -10 }}
           animate={{ opacity: 1, y: 0 }}
@@ -526,24 +536,24 @@ export function Dashboard({ onNavigate }: DashboardProps) {
               <div className="flex-1 flex flex-wrap gap-4 sm:justify-end">
                 <div className="text-center sm:text-right">
                   <p className="text-xs text-muted-foreground">Entradas</p>
-                  <p className="font-bold text-success">{formatCurrency(dashboardStats.cashSessionIncome)}</p>
+                  <p className="font-bold text-success">{formatCurrency(displayStats.cashSessionIncome)}</p>
                 </div>
                 <div className="text-center sm:text-right">
                   <p className="text-xs text-muted-foreground">Saídas</p>
-                  <p className="font-bold text-destructive">{formatCurrency(dashboardStats.cashSessionExpense)}</p>
+                  <p className="font-bold text-destructive">{formatCurrency(displayStats.cashSessionExpense)}</p>
                 </div>
                 <div className="text-center sm:text-right">
                   <p className="text-xs text-muted-foreground">Saldo</p>
-                  <p className="font-bold text-primary">{formatCurrency(dashboardStats.cashSessionBalance)}</p>
+                  <p className="font-bold text-primary">{formatCurrency(displayStats.cashSessionBalance)}</p>
                 </div>
-                <Button variant="outline" size="sm" onClick={() => onNavigate('cashier')}>
-                  Ver Caixa
+                <Button variant="outline" size="sm" onClick={() => onNavigate(financialPage)}>
+                  {canManageCashFlow ? 'Ver Caixa' : 'Gestão Financeira'}
                 </Button>
               </div>
             </div>
           </Card>
         </motion.div>
-      )}
+      ) : null}
 
       {/* Stats Grid */}
       <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-4 gap-4 lg:gap-6">
@@ -727,12 +737,12 @@ export function Dashboard({ onNavigate }: DashboardProps) {
                 <DollarSign className="w-4 h-4 mr-2" />
                 Conta Corrente
               </Button>
-            ) : (
-              <Button variant="secondary" onClick={() => onNavigate('cashier')}>
+            ) : canViewFinancialArea ? (
+              <Button variant="secondary" onClick={() => onNavigate(financialPage)}>
                 <DollarSign className="w-4 h-4 mr-2" />
-                {currentCashSession ? 'Ver Caixa' : 'Abrir Caixa'}
+                {financialActionLabel}
               </Button>
-            )}
+            ) : null}
             <Button variant="secondary" onClick={() => onNavigate('commissions')}>
               <TrendingUp className="w-4 h-4 mr-2" />
               Comissões
