@@ -234,7 +234,7 @@ function joinCommissions(comms: Commission[], professionals: Professional[]): Co
 // ─── Provider ───────────────────────────────────────────────────────────────
 
 export const DataProvider: React.FC<{ children: ReactNode }> = ({ children }) => {
-  const { user, tenantId, isSuperAdmin, canModify, currentTenant } = useAuth();
+  const { user, tenantId, isSuperAdmin, canModify, currentTenant, hasPermission, userRole } = useAuth();
   const [loading, setLoading] = useState(true);
   const [clients, setClients] = useState<Client[]>([]);
   const [professionals, setProfessionals] = useState<Professional[]>([]);
@@ -248,6 +248,9 @@ export const DataProvider: React.FC<{ children: ReactNode }> = ({ children }) =>
   const realtimeChannelRef = useRef<ReturnType<typeof supabase.channel> | null>(null);
   const fetchRequestRef = useRef(0);
   const isCleaningTenant = isCleaningControlTenant(currentTenant);
+  const canViewScheduleData = userRole === 'admin' || hasPermission('view_schedule') || hasPermission('edit_schedule');
+  const canViewCashData = userRole === 'admin' || hasPermission('manage_cash_flow') || hasPermission('refund_bill');
+  const canViewCommissionsData = userRole === 'admin' || hasPermission('view_commissions');
 
   const fetchAllPages = async <T,>(queryFactory: () => any): Promise<T[]> => {
     const rows: T[] = [];
@@ -409,10 +412,10 @@ export const DataProvider: React.FC<{ children: ReactNode }> = ({ children }) =>
       setLoading(false);
 
       Promise.all([
-        isCleaningTenant ? Promise.resolve([] as Appointment[]) : fetchAppointments(),
-        isCleaningTenant ? Promise.resolve([] as CashSession[]) : fetchCash(),
-        fetchTransactions(),
-        isCleaningTenant ? Promise.resolve([] as Commission[]) : fetchCommissions(),
+        !isCleaningTenant && canViewScheduleData ? fetchAppointments() : Promise.resolve([] as Appointment[]),
+        !isCleaningTenant && canViewCashData ? fetchCash() : Promise.resolve([] as CashSession[]),
+        canViewCashData ? fetchTransactions() : Promise.resolve([] as Transaction[]),
+        !isCleaningTenant && canViewCommissionsData ? fetchCommissions() : Promise.resolve([] as Commission[]),
       ])
         .then(([apptsData, cashData, txData, commData]) => {
           if (requestId !== fetchRequestRef.current) return;
@@ -459,20 +462,20 @@ export const DataProvider: React.FC<{ children: ReactNode }> = ({ children }) =>
         newProducts = await fetchProducts();
         setProducts(newProducts);
       }
-      if (!isCleaningTenant && (all || entities!.includes('appointments'))) {
+      if (!isCleaningTenant && canViewScheduleData && (all || entities!.includes('appointments'))) {
         const raw = await fetchAppointments();
         setAppointments(joinAppointments(raw, newClients, newProfs, newServices));
       }
-      if (!isCleaningTenant && (all || entities!.includes('cash'))) {
+      if (!isCleaningTenant && canViewCashData && (all || entities!.includes('cash'))) {
         const cashData = await fetchCash();
         setCashSessions(cashData);
         setCurrentCashSession(cashData.find(s => s.status === 'open') ?? null);
       }
-      if (all || entities!.includes('transactions')) {
+      if (canViewCashData && (all || entities!.includes('transactions'))) {
         const txData = await fetchTransactions();
         setTransactions(txData);
       }
-      if (!isCleaningTenant && (all || entities!.includes('commissions'))) {
+      if (!isCleaningTenant && canViewCommissionsData && (all || entities!.includes('commissions'))) {
         const commData = await fetchCommissions();
         setCommissions(joinCommissions(commData, newProfs));
       }

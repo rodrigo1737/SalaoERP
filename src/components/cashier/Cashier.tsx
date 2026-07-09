@@ -130,7 +130,10 @@ export function Cashier() {
 
     setIsSubmitting(true);
     try {
-      await openCashSession(parseFloat(openingBalance));
+      const session = await openCashSession(parseFloat(openingBalance));
+      if (!session) {
+        return;
+      }
       toast({ title: "Caixa aberto", description: "Bom trabalho hoje!" });
       setIsOpenDialogOpen(false);
       setOpeningBalance('');
