@@ -972,7 +972,14 @@ export const DataProvider: React.FC<{ children: ReactNode }> = ({ children }) =>
       .insert({ opening_balance: openingBalance, status: 'open', created_by: user?.id, tenant_id: tenantId })
       .select()
       .single();
-    if (error) { toast.error('Erro ao abrir caixa.'); return null; }
+    if (error) {
+      if (error.code === '23505') {
+        toast.warning('Já existe um caixa aberto para este cliente.');
+      } else {
+        toast.error('Erro ao abrir caixa.');
+      }
+      return null;
+    }
     const session = data as CashSession;
     setCashSessions(prev => [session, ...prev]);
     setCurrentCashSession(session);

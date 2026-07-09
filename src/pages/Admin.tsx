@@ -453,26 +453,36 @@ const Admin: React.FC = () => {
 
     setIsSubmitting(true);
     try {
-      const { error: deleteError } = await supabase
-        .from('user_permissions')
-        .delete()
-        .eq('tenant_id', tenantId)
-        .eq('user_id', selectedAccess.userId);
+      const nextPermissions = [...new Set(selectedAccess.permissions)];
 
-      if (deleteError) throw deleteError;
-
-      if (selectedAccess.permissions.length > 0) {
-        const { error: insertError } = await supabase
+      if (nextPermissions.length > 0) {
+        const { error: upsertError } = await supabase
           .from('user_permissions')
-          .insert(
-            selectedAccess.permissions.map((permission) => ({
+          .upsert(
+            nextPermissions.map((permission) => ({
               user_id: selectedAccess.userId!,
               tenant_id: tenantId,
               permission,
             })),
+            { onConflict: 'user_id,tenant_id,permission' },
           );
 
-        if (insertError) throw insertError;
+        if (upsertError) throw upsertError;
+      }
+
+      const permissionsToRemove = PERMISSIONS
+        .map(({ id }) => id)
+        .filter((permission) => !nextPermissions.includes(permission));
+
+      if (permissionsToRemove.length > 0) {
+        const { error: deleteError } = await supabase
+          .from('user_permissions')
+          .delete()
+          .eq('tenant_id', tenantId)
+          .eq('user_id', selectedAccess.userId)
+          .in('permission', permissionsToRemove);
+
+        if (deleteError) throw deleteError;
       }
 
       toast({

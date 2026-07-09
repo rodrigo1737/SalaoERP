@@ -19,6 +19,24 @@ interface Tenant {
   package_type: TenantPackageType;
 }
 
+interface AccessContextRow {
+  tenant_id: string | null;
+  is_owner: boolean | null;
+  is_super_admin: boolean | null;
+  profile_email: string | null;
+  full_name: string | null;
+  tenant_name: string | null;
+  tenant_status: string | null;
+  subscription_due_date: string | null;
+  package_type: string | null;
+  roles: string[] | null;
+  permissions: string[] | null;
+  professional_id: string | null;
+  professional_name: string | null;
+  professional_nickname: string | null;
+  professional_has_schedule: boolean | null;
+}
+
 interface AuthContextType {
   user: User | null;
   session: Session | null;
@@ -59,136 +77,101 @@ export const AuthProvider: React.FC<{ children: React.ReactNode }> = ({ children
   const [tenantId, setTenantId] = useState<string | null>(null);
   const [loading, setLoading] = useState(true);
 
-  const fetchUserData = async (userId: string, userEmail: string) => {
+  const resolveTenantStatus = useCallback((tenantStatus: string | null, subscriptionDueDate: string | null) => {
+    let effectiveStatus = (tenantStatus as 'active' | 'readonly' | 'blocked' | null) ?? null;
+
+    if (effectiveStatus === 'active' && subscriptionDueDate) {
+      const today = new Date();
+      today.setHours(0, 0, 0, 0);
+      const dueDate = new Date(subscriptionDueDate);
+      dueDate.setHours(0, 0, 0, 0);
+
+      if (dueDate < today) {
+        effectiveStatus = 'readonly';
+      }
+    }
+
+    return effectiveStatus;
+  }, []);
+
+  const applyAccessContext = useCallback((accessContext: AccessContextRow | null) => {
+    const nextTenantId = accessContext?.tenant_id ?? null;
+    const roles = accessContext?.roles ?? [];
+    const permissions = accessContext?.permissions ?? [];
+    const packageType = (accessContext?.package_type as TenantPackageType | null) ?? 'salon';
+    const effectiveStatus = resolveTenantStatus(accessContext?.tenant_status ?? null, accessContext?.subscription_due_date ?? null);
+
+    setTenantId(nextTenantId);
+    setIsOwner(Boolean(accessContext?.is_owner));
+    setIsSuperAdmin(Boolean(accessContext?.is_super_admin));
+    setUserPermissions(permissions);
+
+    if (roles.includes('admin')) {
+      setUserRole('admin');
+    } else if (roles.includes('professional')) {
+      setUserRole('professional');
+    } else if (roles.includes('staff')) {
+      setUserRole('staff');
+    } else {
+      setUserRole(null);
+    }
+
+    if (nextTenantId && accessContext?.tenant_name && effectiveStatus) {
+      setCurrentTenant({
+        id: nextTenantId,
+        name: accessContext.tenant_name,
+        status: effectiveStatus,
+        package_type: packageType,
+      });
+    } else {
+      setCurrentTenant(null);
+    }
+
+    if (accessContext?.professional_id && accessContext?.professional_name) {
+      setCurrentProfessional({
+        id: accessContext.professional_id,
+        name: accessContext.professional_name,
+        nickname: accessContext.professional_nickname || accessContext.professional_name,
+        has_schedule: Boolean(accessContext.professional_has_schedule),
+      });
+    } else {
+      setCurrentProfessional(null);
+    }
+  }, [resolveTenantStatus]);
+
+  const fetchUserData = useCallback(async (_userId: string, _userEmail: string) => {
     try {
-      // Check if user is super admin
-      const { data: superAdminData } = await supabase
-        .from('super_admins')
-        .select('id')
-        .eq('email', userEmail)
-        .maybeSingle();
+      const { data, error } = await supabase.rpc('get_my_access_context');
+      if (error) {
+        console.error('Error fetching access context:', error);
+        throw error;
+      }
 
-      const isSuper = !!superAdminData;
-      setIsSuperAdmin(isSuper);
+      const accessContext = (Array.isArray(data) ? data[0] : data) as AccessContextRow | null;
 
-      // Fetch user profile to get tenant_id
-      const { data: profileData } = await supabase
-        .from('profiles')
-        .select('tenant_id, is_owner')
-        .eq('id', userId)
-        .maybeSingle();
-
-      const profileTenantId = profileData?.tenant_id ?? null;
-      setIsOwner(Boolean(profileData?.is_owner));
-
-      if (profileTenantId) {
-        setTenantId(profileTenantId);
-        
-        // Fetch tenant info including subscription_due_date
-        const { data: tenantData } = await supabase
-          .from('tenants')
-          .select('id, name, status, subscription_due_date, package_type')
-          .eq('id', profileTenantId)
-          .maybeSingle();
-
-        if (tenantData) {
-          // Check if subscription is expired and tenant is still 'active'
-          let effectiveStatus = tenantData.status as 'active' | 'readonly' | 'blocked';
-          
-          if (tenantData.status === 'active' && tenantData.subscription_due_date) {
-            const today = new Date();
-            today.setHours(0, 0, 0, 0);
-            const dueDate = new Date(tenantData.subscription_due_date);
-            dueDate.setHours(0, 0, 0, 0);
-            
-            // If subscription expired, treat as readonly
-            if (dueDate < today) {
-              effectiveStatus = 'readonly';
-              console.log('Subscription expired, treating tenant as readonly');
-            }
-          }
-          
-          setCurrentTenant({
-            id: tenantData.id,
-            name: tenantData.name,
-            status: effectiveStatus,
-            package_type: (tenantData.package_type as TenantPackageType) || 'salon'
-          });
-        }
-      } else {
+      if (!accessContext) {
         setTenantId(null);
         setCurrentTenant(null);
-      }
-
-      // Fetch user roles and derive the effective role.
-      // Some users can legitimately have more than one row (for example, admin + professional).
-      let roleQuery = supabase
-        .from('user_roles')
-        .select('role')
-        .eq('user_id', userId);
-
-      if (profileTenantId) {
-        roleQuery = roleQuery.eq('tenant_id', profileTenantId);
-      } else if (!isSuper) {
-        roleQuery = roleQuery.is('tenant_id', null);
-      }
-
-      const { data: roleRows, error: roleError } = await roleQuery;
-      if (roleError) {
-        console.error('Error fetching user roles:', roleError);
         setUserRole(null);
-      } else {
-        const roles = (roleRows || []).map((row) => row.role as UserRole).filter(Boolean);
-        if (roles.includes('admin')) {
-          setUserRole('admin');
-        } else if (roles.includes('professional')) {
-          setUserRole('professional');
-        } else if (roles.includes('staff')) {
-          setUserRole('staff');
-        } else {
-          setUserRole(null);
-        }
-      }
-
-      // Fetch permissions
-      let permQuery = supabase
-        .from('user_permissions')
-        .select('permission')
-        .eq('user_id', userId);
-
-      if (profileTenantId) {
-        permQuery = permQuery.eq('tenant_id', profileTenantId);
-      } else if (!isSuper) {
-        permQuery = permQuery.is('tenant_id', null);
-      }
-
-      const { data: permData } = await permQuery;
-
-      if (permData) {
-        setUserPermissions(permData.map(p => p.permission));
-      }
-
-      // Fetch professional linked to this user
-      let profQuery = supabase
-        .from('professionals')
-        .select('id, name, nickname, has_schedule')
-        .eq('user_id', userId);
-
-      if (profileTenantId) {
-        profQuery = profQuery.eq('tenant_id', profileTenantId);
-      }
-
-      const { data: profData } = await profQuery.maybeSingle();
-
-      if (profData) {
-        setCurrentProfessional(profData);
-      } else {
+        setUserPermissions([]);
         setCurrentProfessional(null);
+        setIsOwner(false);
+        setIsSuperAdmin(false);
+        return;
       }
+
+      applyAccessContext(accessContext);
     } catch (error) {
       console.error('Error fetching user data:', error);
+      setTenantId(null);
+      setCurrentTenant(null);
+      setUserRole(null);
+      setUserPermissions([]);
+      setCurrentProfessional(null);
+      setIsOwner(false);
+      setIsSuperAdmin(false);
     }
-  };
+  }, [applyAccessContext]);
 
   useEffect(() => {
     let isMounted = true;
@@ -250,7 +233,7 @@ export const AuthProvider: React.FC<{ children: React.ReactNode }> = ({ children
       isMounted = false;
       subscription.unsubscribe();
     };
-  }, []);
+  }, [fetchUserData]);
 
   const signIn = async (email: string, password: string) => {
     const { error } = await supabase.auth.signInWithPassword({
@@ -311,42 +294,16 @@ export const AuthProvider: React.FC<{ children: React.ReactNode }> = ({ children
   };
 
   const refreshTenantStatus = useCallback(async () => {
-    if (!tenantId) return;
-    
     try {
-      const { data: tenantData } = await supabase
-        .from('tenants')
-        .select('id, name, status, subscription_due_date, package_type')
-        .eq('id', tenantId)
-        .maybeSingle();
+      const { data, error } = await supabase.rpc('get_my_access_context');
+      if (error) throw error;
 
-      if (tenantData) {
-        // Check if subscription is expired and tenant is still 'active'
-        let effectiveStatus = tenantData.status as 'active' | 'readonly' | 'blocked';
-        
-        if (tenantData.status === 'active' && tenantData.subscription_due_date) {
-          const today = new Date();
-          today.setHours(0, 0, 0, 0);
-          const dueDate = new Date(tenantData.subscription_due_date);
-          dueDate.setHours(0, 0, 0, 0);
-          
-          // If subscription expired, treat as readonly
-          if (dueDate < today) {
-            effectiveStatus = 'readonly';
-          }
-        }
-        
-        setCurrentTenant({
-          id: tenantData.id,
-          name: tenantData.name,
-          status: effectiveStatus,
-          package_type: (tenantData.package_type as TenantPackageType) || 'salon'
-        });
-      }
+      const accessContext = (Array.isArray(data) ? data[0] : data) as AccessContextRow | null;
+      if (accessContext) applyAccessContext(accessContext);
     } catch (error) {
       console.error('Error refreshing tenant status:', error);
     }
-  }, [tenantId]);
+  }, [applyAccessContext]);
 
   return (
     <AuthContext.Provider value={{
