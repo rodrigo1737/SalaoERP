@@ -54,17 +54,17 @@ const PERMISSIONS: { id: PermissionId; label: string }[] = [
   { id: 'close_bill', label: 'Receber e Encerrar Comanda' },
   { id: 'refund_bill', label: 'Estornar Pagamento e Reabrir Comanda' },
   { id: 'view_commissions', label: 'Visualizar Comissões' },
-  { id: 'manage_cash_flow', label: 'Gerenciar Caixa' },
-  { id: 'view_financial_history', label: 'Visualizar Histórico Financeiro' },
-  { id: 'reverse_financial_entries', label: 'Estornar Movimentos Financeiros' },
+  { id: 'manage_cash_flow', label: 'Operar Caixa do Dia' },
+  { id: 'view_financial_history', label: 'Visualizar Gestão Financeira' },
+  { id: 'reverse_financial_entries', label: 'Estornos e Ajustes Financeiros' },
 ];
 
 const ACCESS_PROFILES: { id: AccessPresetId; label: string; description: string; permissions: PermissionId[] }[] = [
   {
     id: 'reception',
     label: 'Recepção',
-    description: 'Agenda, clientes, comandas, caixa e consulta do histórico financeiro.',
-    permissions: ['view_schedule', 'edit_schedule', 'view_clients', 'close_bill', 'manage_cash_flow', 'view_financial_history'],
+    description: 'Agenda, clientes, comandas e operação diária do caixa.',
+    permissions: ['view_schedule', 'edit_schedule', 'view_clients', 'close_bill', 'manage_cash_flow'],
   },
   {
     id: 'professional',
@@ -75,7 +75,7 @@ const ACCESS_PROFILES: { id: AccessPresetId; label: string; description: string;
   {
     id: 'financial',
     label: 'Financeiro',
-    description: 'Fluxo de caixa, histórico, comissões, vales e estornos financeiros.',
+    description: 'Histórico financeiro, vales, sangrias, estornos e regularizações retroativas.',
     permissions: ['view_clients', 'refund_bill', 'view_commissions', 'manage_cash_flow', 'view_financial_history', 'reverse_financial_entries'],
   },
   {

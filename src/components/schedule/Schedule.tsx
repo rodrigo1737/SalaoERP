@@ -121,7 +121,7 @@ const normalizeText = (value?: string | null) => {
 };
 
 export function Schedule() {
-  const { clients, professionals, services, products, loading, addClient, addService, addAppointment, updateAppointment, deleteAppointment, refundAppointment, currentCashSession, completeAppointment } = useData();
+  const { clients, professionals, services, products, loading, addClient, addService, addAppointment, updateAppointment, deleteAppointment, refundAppointment, currentCashSession, pendingCashSession, completeAppointment } = useData();
   const { settings: tenantSettings } = useTenantSettings();
   const navigate = useNavigate();
 
@@ -593,6 +593,15 @@ export function Schedule() {
     }
 
     // Check if cash session is open
+    if (pendingCashSession) {
+      toast({
+        variant: "destructive",
+        title: "Caixa pendente",
+        description: "Existe um caixa pendente de data anterior. Regularize o fechamento antes de receber novas comandas."
+      });
+      return;
+    }
+
     if (!currentCashSession) {
       toast({
         variant: "destructive",
@@ -608,6 +617,15 @@ export function Schedule() {
 
   const handleCloseBill = async () => {
     if (!selectedAppointment || !selectedPaymentMethod || isSubmittingBill) return;
+
+    if (pendingCashSession) {
+      toast({
+        variant: "destructive",
+        title: "Caixa pendente",
+        description: "Existe um caixa pendente de data anterior. Regularize o fechamento antes de receber novas comandas."
+      });
+      return;
+    }
 
     if (!currentCashSession) {
       toast({

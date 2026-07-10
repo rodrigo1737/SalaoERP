@@ -97,12 +97,15 @@ export type Database = {
       cash_sessions: {
         Row: {
           closed_at: string | null
+          closed_by: string | null
           closing_balance: number | null
           created_at: string
           created_by: string | null
           difference: number | null
+          divergence_reason: string | null
           expected_balance: number | null
           id: string
+          is_late_closure: boolean
           notes: string | null
           opened_at: string
           opening_balance: number
@@ -111,12 +114,15 @@ export type Database = {
         }
         Insert: {
           closed_at?: string | null
+          closed_by?: string | null
           closing_balance?: number | null
           created_at?: string
           created_by?: string | null
           difference?: number | null
+          divergence_reason?: string | null
           expected_balance?: number | null
           id?: string
+          is_late_closure?: boolean
           notes?: string | null
           opened_at?: string
           opening_balance?: number
@@ -125,12 +131,15 @@ export type Database = {
         }
         Update: {
           closed_at?: string | null
+          closed_by?: string | null
           closing_balance?: number | null
           created_at?: string
           created_by?: string | null
           difference?: number | null
+          divergence_reason?: string | null
           expected_balance?: number | null
           id?: string
+          is_late_closure?: boolean
           notes?: string | null
           opened_at?: string
           opening_balance?: number

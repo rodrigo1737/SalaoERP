@@ -126,11 +126,10 @@ export function Sidebar({ currentPage, onNavigate }: SidebarProps) {
       if (item.adminOnly && !item.permission) return false;
       if (item.permission) {
         if (item.id === 'cashier') {
-          return hasPermission('manage_cash_flow');
+          return hasPermission('manage_cash_flow') || hasPermission('reverse_financial_entries');
         }
         if (item.id === 'financial-management') {
-          return hasPermission('manage_cash_flow')
-            || hasPermission('view_financial_history')
+          return hasPermission('view_financial_history')
             || hasPermission('reverse_financial_entries');
         }
         return hasPermission(item.permission) || (item.permission === 'view_schedule' && hasPermission('edit_schedule'));

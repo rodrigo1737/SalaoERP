@@ -59,11 +59,10 @@ const Index = () => {
     if (targetPage === 'clients') return hasPermission('view_clients');
     if (targetPage === 'commissions') return hasPermission('view_commissions');
     if (targetPage === 'cashier') {
-      return hasPermission('manage_cash_flow');
+      return hasPermission('manage_cash_flow') || hasPermission('reverse_financial_entries');
     }
     if (targetPage === 'financial-management') {
-      return hasPermission('manage_cash_flow')
-        || hasPermission('view_financial_history')
+      return hasPermission('view_financial_history')
         || hasPermission('reverse_financial_entries');
     }
     if (targetPage === 'settings') return true;

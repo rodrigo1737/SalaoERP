@@ -102,6 +102,7 @@ export function CashHistory({ onBack }: CashHistoryProps) {
     transactions,
     commissions,
     currentCashSession,
+    pendingCashSession,
     reverseTransaction,
     loading,
   } = useData();
@@ -109,7 +110,6 @@ export function CashHistory({ onBack }: CashHistoryProps) {
 
   const canViewFinancialHistory = userRole === 'admin'
     || hasPermission('view_financial_history')
-    || hasPermission('manage_cash_flow')
     || hasPermission('reverse_financial_entries');
   const canReverseFinancialEntries = userRole === 'admin'
     || hasPermission('refund_bill')
@@ -261,7 +261,7 @@ export function CashHistory({ onBack }: CashHistoryProps) {
             <div className="space-y-2">
               <h2 className="text-xl font-semibold text-foreground">Acesso controlado por permissão</h2>
               <p className="text-muted-foreground">
-                Libere <strong>Visualizar Histórico Financeiro</strong> ou <strong>Gerenciar Caixa</strong> na tela de
+                Libere <strong>Visualizar Histórico Financeiro</strong> ou <strong>Estornar Movimentos Financeiros</strong> na tela de
                 administração para este usuário.
               </p>
             </div>
@@ -287,7 +287,12 @@ export function CashHistory({ onBack }: CashHistoryProps) {
             Histórico de caixas, entradas, saídas, comissões, vales e estornos.
           </p>
         </div>
-        {currentCashSession ? (
+        {pendingCashSession ? (
+          <Badge variant="warning" className="gap-1">
+            <AlertCircle className="w-3.5 h-3.5" />
+            Caixa pendente de regularização
+          </Badge>
+        ) : currentCashSession ? (
           <Badge variant="success" className="gap-1">
             <Wallet className="w-3.5 h-3.5" />
             Caixa atual aberto
@@ -387,6 +392,9 @@ export function CashHistory({ onBack }: CashHistoryProps) {
                           <Badge variant={session.status === 'open' ? 'success' : 'secondary'}>
                             {session.status === 'open' ? 'Aberto' : 'Fechado'}
                           </Badge>
+                          {session.is_late_closure ? (
+                            <Badge variant="warning">Fechamento tardio</Badge>
+                          ) : null}
                         </div>
                         <div className="flex flex-wrap gap-4 text-sm text-muted-foreground">
                           <span className="inline-flex items-center gap-1">
@@ -421,6 +429,29 @@ export function CashHistory({ onBack }: CashHistoryProps) {
                     {session.notes ? (
                       <div className="rounded-xl border border-border/60 bg-background/60 px-4 py-3 text-sm text-muted-foreground">
                         {session.notes}
+                      </div>
+                    ) : null}
+
+                    {session.difference !== null && session.difference !== undefined ? (
+                      <div className="grid gap-3 md:grid-cols-2">
+                        <div className="rounded-xl border border-border/60 bg-background/60 px-4 py-3 text-sm">
+                          <p className="text-muted-foreground">Saldo esperado</p>
+                          <p className="font-semibold text-foreground">{formatCurrency(session.expected_balance ?? 0)}</p>
+                        </div>
+                        <div className="rounded-xl border border-border/60 bg-background/60 px-4 py-3 text-sm">
+                          <p className="text-muted-foreground">Diferença apurada</p>
+                          <p className={cn(
+                            'font-semibold',
+                            Number(session.difference ?? 0) === 0 ? 'text-success' : 'text-warning',
+                          )}>
+                            {formatCurrency(session.difference ?? 0)}
+                          </p>
+                        </div>
+                        {session.divergence_reason ? (
+                          <div className="md:col-span-2 rounded-xl border border-warning/30 bg-warning-soft/30 px-4 py-3 text-sm text-muted-foreground">
+                            <span className="font-medium text-foreground">Justificativa:</span> {session.divergence_reason}
+                          </div>
+                        ) : null}
                       </div>
                     ) : null}
 

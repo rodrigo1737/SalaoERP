@@ -85,7 +85,7 @@ const endOfDay = (date: Date) => {
 };
 
 export function Dashboard({ onNavigate }: DashboardProps) {
-  const { professionals, currentCashSession, transactions } = useData();
+  const { professionals, currentCashSession, pendingCashSession, transactions } = useData();
   const { user, currentTenant, tenantId, userRole, hasPermission } = useAuth();
   const isCleaningSegment = isCleaningControlTenant(currentTenant);
   const canManageCashFlow = userRole === 'admin' || hasPermission('manage_cash_flow');
@@ -93,6 +93,7 @@ export function Dashboard({ onNavigate }: DashboardProps) {
     || hasPermission('view_financial_history')
     || hasPermission('reverse_financial_entries')
     || hasPermission('refund_bill');
+  const activeCashSession = currentCashSession ?? pendingCashSession ?? null;
   const [dashboardLoading, setDashboardLoading] = useState(false);
   const [dashboardStats, setDashboardStats] = useState<DashboardStats>({
     todayRevenue: 0,
@@ -108,7 +109,7 @@ export function Dashboard({ onNavigate }: DashboardProps) {
   });
   const [upcomingAppointments, setUpcomingAppointments] = useState<DashboardAppointment[]>([]);
   const cashSessionSummary = useMemo(() => {
-    if (!currentCashSession) {
+    if (!activeCashSession) {
       return {
         income: 0,
         expense: 0,
@@ -117,7 +118,7 @@ export function Dashboard({ onNavigate }: DashboardProps) {
     }
 
     const sessionTransactions = transactions.filter(
-      (transaction) => transaction.cash_session_id === currentCashSession.id && !transaction.reversed_at,
+      (transaction) => transaction.cash_session_id === activeCashSession.id && !transaction.reversed_at,
     );
 
     const income = sessionTransactions
@@ -130,9 +131,9 @@ export function Dashboard({ onNavigate }: DashboardProps) {
     return {
       income,
       expense,
-      balance: Number(currentCashSession.opening_balance || 0) + income - expense,
+      balance: Number(activeCashSession.opening_balance || 0) + income - expense,
     };
-  }, [currentCashSession, transactions]);
+  }, [activeCashSession, transactions]);
 
   // Para tenants de limpeza, os agendamentos vêm de `cleaning_appointments`.
   // Para os demais, mantém a fonte do DataContext (`appointments`).
@@ -423,7 +424,7 @@ export function Dashboard({ onNavigate }: DashboardProps) {
   const newAppointmentLabel = isCleaningSegment ? 'Nova Limpeza' : 'Novo Agendamento';
   const financialPage = canManageCashFlow ? 'cashier' : 'financial-management';
   const financialActionLabel = canManageCashFlow
-    ? (currentCashSession ? 'Ver Caixa' : 'Abrir Caixa')
+    ? (activeCashSession ? 'Ver Caixa' : 'Abrir Caixa')
     : 'Gestão Financeira';
 
   if (dashboardLoading) {
@@ -492,7 +493,31 @@ export function Dashboard({ onNavigate }: DashboardProps) {
             </div>
           </Card>
         </motion.div>
-      ) : canViewFinancialArea && !currentCashSession ? (
+      ) : null}
+
+      {canViewFinancialArea && pendingCashSession ? (
+        <motion.div
+          initial={{ opacity: 0, y: -10 }}
+          animate={{ opacity: 1, y: 0 }}
+        >
+          <Card className="p-4 border-warning/50 bg-warning/10">
+            <div className="flex items-center gap-3">
+              <AlertCircle className="w-5 h-5 text-warning" />
+              <div className="flex-1">
+                <p className="font-medium text-foreground">Caixa pendente de regularização</p>
+                <p className="text-sm text-muted-foreground">
+                  Existe um caixa aberto desde {new Date(pendingCashSession.opened_at).toLocaleDateString('pt-BR')}. Regularize esse fechamento antes de iniciar um novo movimento.
+                </p>
+              </div>
+              <Button variant="outline" size="sm" onClick={() => onNavigate('cashier')}>
+                Regularizar Caixa
+              </Button>
+            </div>
+          </Card>
+        </motion.div>
+      ) : null}
+
+      {canViewFinancialArea && !currentCashSession && !pendingCashSession ? (
         <motion.div
           initial={{ opacity: 0, y: -10 }}
           animate={{ opacity: 1, y: 0 }}
@@ -516,7 +541,9 @@ export function Dashboard({ onNavigate }: DashboardProps) {
             </div>
           </Card>
         </motion.div>
-      ) : canViewFinancialArea && currentCashSession ? (
+      ) : null}
+
+      {canViewFinancialArea && currentCashSession ? (
         <motion.div
           initial={{ opacity: 0, y: -10 }}
           animate={{ opacity: 1, y: 0 }}

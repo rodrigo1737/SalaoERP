@@ -109,10 +109,13 @@ export interface CashSession {
   id: string;
   opened_at: string;
   closed_at?: string;
+  closed_by?: string;
   opening_balance: number;
   closing_balance?: number;
   expected_balance?: number;
   difference?: number;
+  divergence_reason?: string;
+  is_late_closure?: boolean;
   status: 'open' | 'closed';
   notes?: string;
   created_by?: string;
@@ -163,6 +166,7 @@ interface DataContextType {
   transactions: Transaction[];
   commissions: Commission[];
   currentCashSession: CashSession | null;
+  pendingCashSession: CashSession | null;
   loading: boolean;
   refreshData: (entities?: Array<'clients'|'professionals'|'services'|'products'|'appointments'|'cash'|'transactions'|'commissions'>) => Promise<void>;
   // Clients
@@ -190,7 +194,11 @@ interface DataContextType {
   completeAppointment: (id: string, paymentMethod: string, overrides?: Partial<Appointment>) => Promise<string | null>;
   // Cash
   openCashSession: (openingBalance: number) => Promise<CashSession | null>;
-  closeCashSession: (closingBalance: number, notes?: string) => Promise<void>;
+  closeCashSession: (
+    closingBalance: number,
+    notes?: string,
+    options?: { sessionId?: string; divergenceReason?: string },
+  ) => Promise<void>;
   addTransaction: (transaction: Omit<Transaction, 'id' | 'created_at'>) => Promise<Transaction | null>;
   reverseTransaction: (transactionId: string, reason?: string) => Promise<boolean>;
   // Commissions
@@ -243,6 +251,35 @@ function getLatestOpenCashSession(cashSessions: CashSession[]): CashSession | nu
     .sort((a, b) => new Date(b.opened_at).getTime() - new Date(a.opened_at).getTime())[0] ?? null;
 }
 
+function getBusinessDateKey(value: string | Date) {
+  return new Intl.DateTimeFormat('en-CA', {
+    timeZone: 'America/Sao_Paulo',
+    year: 'numeric',
+    month: '2-digit',
+    day: '2-digit',
+  }).format(new Date(value));
+}
+
+function isSessionFromPreviousDay(session: CashSession, reference = new Date()) {
+  return getBusinessDateKey(session.opened_at) < getBusinessDateKey(reference);
+}
+
+function resolveCashSessionState(cashSessions: CashSession[]) {
+  const openSessions = cashSessions
+    .filter((session) => session.status === 'open')
+    .sort((a, b) => new Date(b.opened_at).getTime() - new Date(a.opened_at).getTime());
+
+  const currentCashSession = openSessions.find((session) => !isSessionFromPreviousDay(session)) ?? null;
+  const pendingCashSession = openSessions
+    .filter((session) => isSessionFromPreviousDay(session))
+    .sort((a, b) => new Date(a.opened_at).getTime() - new Date(b.opened_at).getTime())[0] ?? null;
+
+  return {
+    currentCashSession,
+    pendingCashSession,
+  };
+}
+
 // ─── Provider ───────────────────────────────────────────────────────────────
 
 export const DataProvider: React.FC<{ children: ReactNode }> = ({ children }) => {
@@ -257,6 +294,7 @@ export const DataProvider: React.FC<{ children: ReactNode }> = ({ children }) =>
   const [transactions, setTransactions] = useState<Transaction[]>([]);
   const [commissions, setCommissions] = useState<Commission[]>([]);
   const [currentCashSession, setCurrentCashSession] = useState<CashSession | null>(null);
+  const [pendingCashSession, setPendingCashSession] = useState<CashSession | null>(null);
   const realtimeChannelRef = useRef<ReturnType<typeof supabase.channel> | null>(null);
   const fetchRequestRef = useRef(0);
   const isCleaningTenant = isCleaningControlTenant(currentTenant);
@@ -265,17 +303,24 @@ export const DataProvider: React.FC<{ children: ReactNode }> = ({ children }) =>
   const canManageCashFlow = isAdminUser || hasPermission('manage_cash_flow');
   const canCloseBill = isAdminUser || hasPermission('close_bill') || hasPermission('manage_cash_flow');
   const canRefundBills = isAdminUser || hasPermission('refund_bill') || hasPermission('reverse_financial_entries');
+  const canPerformAdvancedFinancialOps = isAdminUser || hasPermission('reverse_financial_entries');
+  const canOperateCashSessions = canManageCashFlow || canPerformAdvancedFinancialOps;
   const canViewFinancialHistory = isAdminUser
     || hasPermission('view_financial_history')
     || hasPermission('reverse_financial_entries')
-    || hasPermission('manage_cash_flow')
     || hasPermission('refund_bill');
-  const canViewCashData = canViewFinancialHistory;
+  const canViewCashData = canViewFinancialHistory || canManageCashFlow;
   const canViewCommissionsData = isAdminUser
     || hasPermission('view_commissions')
     || hasPermission('view_financial_history')
-    || hasPermission('reverse_financial_entries')
-    || hasPermission('manage_cash_flow');
+    || hasPermission('reverse_financial_entries');
+
+  const applyCashSessionsState = (cashData: CashSession[]) => {
+    setCashSessions(cashData);
+    const state = resolveCashSessionState(cashData);
+    setCurrentCashSession(state.currentCashSession);
+    setPendingCashSession(state.pendingCashSession);
+  };
 
   const fetchAllPages = async <T,>(queryFactory: () => any): Promise<T[]> => {
     const rows: T[] = [];
@@ -404,6 +449,7 @@ export const DataProvider: React.FC<{ children: ReactNode }> = ({ children }) =>
       setTransactions([]);
       setCommissions([]);
       setCurrentCashSession(null);
+      setPendingCashSession(null);
       setLoading(false);
       return;
     }
@@ -412,6 +458,7 @@ export const DataProvider: React.FC<{ children: ReactNode }> = ({ children }) =>
     setAppointments([]);
     setCashSessions([]);
     setCurrentCashSession(null);
+    setPendingCashSession(null);
     setTransactions([]);
     setCommissions([]);
 
@@ -436,24 +483,40 @@ export const DataProvider: React.FC<{ children: ReactNode }> = ({ children }) =>
       setProducts(productsData);
       setLoading(false);
 
-      Promise.all([
+      const backgroundResults = await Promise.allSettled([
         !isCleaningTenant && canViewScheduleData ? fetchAppointments() : Promise.resolve([] as Appointment[]),
         !isCleaningTenant && canViewCashData ? fetchCash() : Promise.resolve([] as CashSession[]),
         canViewCashData ? fetchTransactions() : Promise.resolve([] as Transaction[]),
         !isCleaningTenant && canViewCommissionsData ? fetchCommissions() : Promise.resolve([] as Commission[]),
-      ])
-        .then(([apptsData, cashData, txData, commData]) => {
-          if (requestId !== fetchRequestRef.current) return;
-          setAppointments(joinAppointments(apptsData, clientsData, professionalsData, servicesData));
-          setCashSessions(cashData);
-          setCurrentCashSession(getLatestOpenCashSession(cashData));
-          setTransactions(txData);
-          setCommissions(joinCommissions(commData, professionalsData));
-        })
-        .catch((err) => {
-          if (requestId !== fetchRequestRef.current) return;
-          console.error('Error fetching background financial data:', err);
-        });
+      ]);
+
+      if (requestId !== fetchRequestRef.current) return;
+
+      const [appointmentsResult, cashResult, transactionsResult, commissionsResult] = backgroundResults;
+
+      if (appointmentsResult.status === 'fulfilled') {
+        setAppointments(joinAppointments(appointmentsResult.value, clientsData, professionalsData, servicesData));
+      } else {
+        console.error('Error fetching appointments:', appointmentsResult.reason);
+      }
+
+      if (cashResult.status === 'fulfilled') {
+        applyCashSessionsState(cashResult.value);
+      } else {
+        console.error('Error fetching cash sessions:', cashResult.reason);
+      }
+
+      if (transactionsResult.status === 'fulfilled') {
+        setTransactions(transactionsResult.value);
+      } else {
+        console.error('Error fetching transactions:', transactionsResult.reason);
+      }
+
+      if (commissionsResult.status === 'fulfilled') {
+        setCommissions(joinCommissions(commissionsResult.value, professionalsData));
+      } else {
+        console.error('Error fetching commissions:', commissionsResult.reason);
+      }
     } catch (err) {
       console.error('Error fetching data:', err);
       setLoading(false);
@@ -493,8 +556,7 @@ export const DataProvider: React.FC<{ children: ReactNode }> = ({ children }) =>
       }
       if (!isCleaningTenant && canViewCashData && (all || entities!.includes('cash'))) {
         const cashData = await fetchCash();
-        setCashSessions(cashData);
-        setCurrentCashSession(getLatestOpenCashSession(cashData));
+        applyCashSessionsState(cashData);
       }
       if (canViewCashData && (all || entities!.includes('transactions'))) {
         const txData = await fetchTransactions();
@@ -583,6 +645,47 @@ export const DataProvider: React.FC<{ children: ReactNode }> = ({ children }) =>
     return true;
   };
 
+  const getCashOperationTargetSession = (
+    options?: {
+      allowPendingSession?: boolean;
+      sessionId?: string;
+      permissionMessage?: string;
+      requireActiveCash?: boolean;
+    },
+  ) => {
+    const explicitSession = options?.sessionId
+      ? cashSessions.find((session) => session.id === options.sessionId)
+      : null;
+
+    const candidateSession = explicitSession
+      ?? currentCashSession
+      ?? (options?.allowPendingSession ? pendingCashSession : null)
+      ?? getLatestOpenCashSession(cashSessions);
+
+    if (!candidateSession) {
+      if (options?.requireActiveCash ?? true) {
+        toast.error('Abra o caixa antes de continuar.');
+      }
+      return null;
+    }
+
+    if (isSessionFromPreviousDay(candidateSession) && !options?.allowPendingSession) {
+      toast.error('Existe um caixa pendente de data anterior. Regularize o fechamento antes de lançar novas operações.');
+      return null;
+    }
+
+    if (
+      isSessionFromPreviousDay(candidateSession)
+      && !canPerformAdvancedFinancialOps
+      && (options?.allowPendingSession || options?.sessionId)
+    ) {
+      toast.error(options?.permissionMessage ?? 'Somente usuários financeiros podem encerrar ou ajustar caixas pendentes.');
+      return null;
+    }
+
+    return candidateSession;
+  };
+
   const createReversalTransaction = async (
     originalTransaction: Transaction,
     options?: {
@@ -594,12 +697,17 @@ export const DataProvider: React.FC<{ children: ReactNode }> = ({ children }) =>
       amount?: number;
     },
   ) => {
-    if (!tenantId || !user?.id || !currentCashSession) {
+    const targetSession = getCashOperationTargetSession({
+      allowPendingSession: true,
+      permissionMessage: 'Somente usuários financeiros podem estornar movimentos em caixas pendentes.',
+    });
+
+    if (!tenantId || !user?.id || !targetSession) {
       throw new Error('Abra o caixa antes de registrar o estorno.');
     }
 
     const reversalPayload = {
-      cash_session_id: currentCashSession.id,
+      cash_session_id: targetSession.id,
       type: originalTransaction.type === 'income' ? 'expense' : 'income',
       category: options?.category ?? `Estorno ${originalTransaction.category}`,
       description: options?.description
@@ -881,7 +989,12 @@ export const DataProvider: React.FC<{ children: ReactNode }> = ({ children }) =>
     const appointment = appointments.find(a => a.id === id);
     if (!appointment) return;
 
-    if (!currentCashSession) {
+    const activeSession = getCashOperationTargetSession({
+      allowPendingSession: false,
+      permissionMessage: 'Existe um caixa pendente de data anterior. Regularize-o antes de registrar estornos.',
+    });
+
+    if (!activeSession) {
       toast.error('Abra o caixa antes de estornar e reabrir uma comanda.');
       return;
     }
@@ -942,7 +1055,7 @@ export const DataProvider: React.FC<{ children: ReactNode }> = ({ children }) =>
 
     if (wasReopenedNow && appointment.total_value) {
       await supabase.from('transactions').insert({
-        cash_session_id: currentCashSession.id,
+        cash_session_id: activeSession.id,
         type: 'expense',
         category: 'Estorno',
         description: `Estorno: ${appointment.service?.name ?? 'Serviço'} - ${appointment.client?.name ?? 'Cliente'}`,
@@ -964,6 +1077,10 @@ export const DataProvider: React.FC<{ children: ReactNode }> = ({ children }) =>
   const completeAppointment = async (id: string, paymentMethod: string, overrides?: Partial<Appointment>) => {
     if (!guardModify()) return null;
     if (!guardFinancialPermission(canCloseBill, 'Você não tem permissão para receber e encerrar comandas.')) return null;
+    if (pendingCashSession) {
+      toast.error('Existe um caixa pendente de data anterior. Regularize o fechamento antes de receber novas comandas.');
+      return null;
+    }
     const existingAppointment = appointments.find(a => a.id === id);
     if (!existingAppointment) return null;
     const appointment = { ...existingAppointment, ...overrides };
@@ -1094,8 +1211,40 @@ export const DataProvider: React.FC<{ children: ReactNode }> = ({ children }) =>
   // ── CASH ACTIONS ────────────────────────────────────────────────────────
   const openCashSession = async (openingBalance: number) => {
     if (!guardModify()) return null;
-    if (!guardFinancialPermission(canManageCashFlow, 'Você não tem permissão para abrir o caixa.')) return null;
-    if (currentCashSession) { toast.warning('Já existe um caixa aberto.'); return null; }
+    if (!guardFinancialPermission(canOperateCashSessions, 'Você não tem permissão para abrir o caixa.')) return null;
+    const { data: openSessions, error: openSessionsError } = await supabase
+      .from('cash_sessions')
+      .select('*')
+      .eq('tenant_id', tenantId)
+      .eq('status', 'open')
+      .order('opened_at', { ascending: false });
+
+    if (openSessionsError) {
+      toast.error('Não foi possível validar o estado atual do caixa.');
+      return null;
+    }
+
+    const liveCashSessions = (openSessions as CashSession[]) ?? [];
+    if (liveCashSessions.length > 0) {
+      const mergedSessions = [
+        ...liveCashSessions,
+        ...cashSessions.filter((cashSession) => cashSession.status !== 'open'),
+      ].filter((session, index, allSessions) => allSessions.findIndex((candidate) => candidate.id === session.id) === index);
+
+      applyCashSessionsState(mergedSessions);
+      const liveState = resolveCashSessionState(liveCashSessions);
+
+      if (liveState.pendingCashSession) {
+        toast.warning('Existe um caixa pendente de data anterior. Regularize o fechamento antes de abrir um novo caixa.');
+        return null;
+      }
+
+      if (liveState.currentCashSession) {
+        toast.warning('Já existe um caixa aberto para hoje.');
+        return null;
+      }
+    }
+
     const { data, error } = await supabase
       .from('cash_sessions')
       .insert({ opening_balance: openingBalance, status: 'open', created_by: user?.id, tenant_id: tenantId })
@@ -1110,31 +1259,52 @@ export const DataProvider: React.FC<{ children: ReactNode }> = ({ children }) =>
       return null;
     }
     const session = data as CashSession;
-    setCashSessions(prev => [session, ...prev]);
-    setCurrentCashSession(session);
+    applyCashSessionsState([session, ...cashSessions.filter((cashSession) => cashSession.id !== session.id)]);
     toast.success('Caixa aberto!');
     return session;
   };
 
-  const closeCashSession = async (closingBalance: number, notes?: string) => {
+  const closeCashSession = async (
+    closingBalance: number,
+    notes?: string,
+    options?: { sessionId?: string; divergenceReason?: string },
+  ) => {
     if (!guardModify()) return;
-    if (!guardFinancialPermission(canManageCashFlow, 'Você não tem permissão para fechar o caixa.')) return;
-    if (!currentCashSession) return;
-    const sessionTxs = transactions.filter(t => t.cash_session_id === currentCashSession.id);
+    if (!guardFinancialPermission(canOperateCashSessions, 'Você não tem permissão para fechar o caixa.')) return;
+    const targetSession = getCashOperationTargetSession({
+      allowPendingSession: true,
+      sessionId: options?.sessionId,
+      permissionMessage: 'Somente usuários financeiros podem encerrar caixas pendentes de datas anteriores.',
+    });
+    if (!targetSession) return;
+
+    const sessionTxs = transactions.filter(
+      (transaction) => transaction.cash_session_id === targetSession.id && !transaction.reversed_at,
+    );
     const cashTxs = sessionTxs.filter(t => t.payment_method === 'cash');
     const totalCashIn  = cashTxs.filter(t => t.type === 'income') .reduce((s, t) => s + Number(t.amount), 0);
     const totalCashOut = cashTxs.filter(t => t.type === 'expense').reduce((s, t) => s + Number(t.amount), 0);
-    const expectedBalance = currentCashSession.opening_balance + totalCashIn - totalCashOut;
+    const expectedBalance = targetSession.opening_balance + totalCashIn - totalCashOut;
     const difference = closingBalance - expectedBalance;
+    const hasDifference = Math.abs(difference) > 0.009;
+
+    if (hasDifference && !options?.divergenceReason?.trim()) {
+      toast.error('Informe uma justificativa para divergência no fechamento do caixa.');
+      return;
+    }
+
     const { error } = await supabase.from('cash_sessions').update({
       closed_at: new Date().toISOString(),
       closing_balance: closingBalance,
       expected_balance: expectedBalance,
       difference,
+      divergence_reason: hasDifference ? options?.divergenceReason?.trim() ?? null : null,
+      closed_by: user?.id ?? null,
+      is_late_closure: isSessionFromPreviousDay(targetSession),
       status: 'closed',
       notes,
     })
-      .eq('id', currentCashSession.id)
+      .eq('id', targetSession.id)
       .eq('tenant_id', tenantId);
     if (error) { toast.error('Erro ao fechar caixa.'); return; }
     await refreshData(['cash']);
@@ -1143,14 +1313,15 @@ export const DataProvider: React.FC<{ children: ReactNode }> = ({ children }) =>
 
   const addTransaction = async (transactionData: Omit<Transaction, 'id' | 'created_at'>) => {
     if (!guardModify()) return null;
-    if (!guardFinancialPermission(canManageCashFlow, 'Você não tem permissão para lançar movimentos financeiros.')) return null;
-    if (!currentCashSession) {
-      toast.error('Abra o caixa antes de lançar uma movimentação.');
-      return null;
-    }
+    if (!guardFinancialPermission(canPerformAdvancedFinancialOps, 'Somente usuários financeiros podem lançar entradas, saídas e sangrias manuais.')) return null;
+    const targetSession = getCashOperationTargetSession({
+      allowPendingSession: true,
+      permissionMessage: 'Somente usuários financeiros podem ajustar movimentos em caixas pendentes.',
+    });
+    if (!targetSession) return null;
     const { data, error } = await supabase
       .from('transactions')
-      .insert({ ...transactionData, cash_session_id: currentCashSession?.id, created_by: user?.id, tenant_id: tenantId })
+      .insert({ ...transactionData, cash_session_id: targetSession.id, created_by: user?.id, tenant_id: tenantId })
       .select()
       .single();
     if (error) { toast.error('Erro ao registrar transação.'); return null; }
@@ -1163,7 +1334,11 @@ export const DataProvider: React.FC<{ children: ReactNode }> = ({ children }) =>
   const reverseTransaction = async (transactionId: string, reason?: string) => {
     if (!guardModify()) return false;
     if (!guardFinancialPermission(canRefundBills, 'Você não tem permissão para estornar movimentos financeiros.')) return false;
-    if (!currentCashSession) {
+    const targetSession = getCashOperationTargetSession({
+      allowPendingSession: true,
+      permissionMessage: 'Somente usuários financeiros podem estornar movimentos em caixas pendentes.',
+    });
+    if (!targetSession) {
       toast.error('Abra o caixa antes de registrar um estorno.');
       return false;
     }
@@ -1313,8 +1488,12 @@ export const DataProvider: React.FC<{ children: ReactNode }> = ({ children }) =>
   // ── COMMISSION ACTIONS ──────────────────────────────────────────────────
   const payCommission = async (id: string, paymentMethod: 'cash' | 'pix' | 'transfer') => {
     if (!guardModify()) return;
-    if (!guardFinancialPermission(canManageCashFlow, 'Você não tem permissão para pagar comissões.')) return;
-    if (!currentCashSession) {
+    if (!guardFinancialPermission(canPerformAdvancedFinancialOps, 'Somente usuários financeiros podem pagar comissões.')) return;
+    const targetSession = getCashOperationTargetSession({
+      allowPendingSession: true,
+      permissionMessage: 'Somente usuários financeiros podem ajustar pagamentos em caixas pendentes.',
+    });
+    if (!targetSession) {
       toast.error('Abra o caixa antes de pagar comissões.');
       return;
     }
@@ -1325,7 +1504,7 @@ export const DataProvider: React.FC<{ children: ReactNode }> = ({ children }) =>
     const { data: txData, error: txError } = await supabase
       .from('transactions')
       .insert({
-        cash_session_id: currentCashSession?.id,
+        cash_session_id: targetSession.id,
         type: 'expense',
         category: 'Pagamento de Comissão',
         description: `Comissão - ${professional?.nickname ?? 'Profissional'} (${methodLabel})`,
@@ -1361,8 +1540,12 @@ export const DataProvider: React.FC<{ children: ReactNode }> = ({ children }) =>
   // ITEM 1: corrigido — inclui .neq('type', 'voucher') no UPDATE do banco
   const payAllCommissions = async (professionalId: string, paymentMethod: 'cash' | 'pix' | 'transfer') => {
     if (!guardModify()) return;
-    if (!guardFinancialPermission(canManageCashFlow, 'Você não tem permissão para pagar comissões.')) return;
-    if (!currentCashSession) {
+    if (!guardFinancialPermission(canPerformAdvancedFinancialOps, 'Somente usuários financeiros podem pagar comissões.')) return;
+    const targetSession = getCashOperationTargetSession({
+      allowPendingSession: true,
+      permissionMessage: 'Somente usuários financeiros podem ajustar pagamentos em caixas pendentes.',
+    });
+    if (!targetSession) {
       toast.error('Abra o caixa antes de pagar comissões.');
       return;
     }
@@ -1376,7 +1559,7 @@ export const DataProvider: React.FC<{ children: ReactNode }> = ({ children }) =>
     const { data: txData, error: txError } = await supabase
       .from('transactions')
       .insert({
-        cash_session_id: currentCashSession?.id,
+        cash_session_id: targetSession.id,
         type: 'expense',
         category: 'Pagamento de Comissão',
         description: `Comissões (${pendingCommissions.length}x) - ${professional?.nickname ?? 'Profissional'} (${methodLabel})`,
@@ -1420,8 +1603,12 @@ export const DataProvider: React.FC<{ children: ReactNode }> = ({ children }) =>
 
   const addVoucher = async (professionalId: string, amount: number, description?: string) => {
     if (!guardModify()) return;
-    if (!guardFinancialPermission(canManageCashFlow, 'Você não tem permissão para registrar vales.')) return;
-    if (!currentCashSession) {
+    if (!guardFinancialPermission(canPerformAdvancedFinancialOps, 'Somente usuários financeiros podem registrar vales e adiantamentos.')) return;
+    const targetSession = getCashOperationTargetSession({
+      allowPendingSession: true,
+      permissionMessage: 'Somente usuários financeiros podem ajustar vales em caixas pendentes.',
+    });
+    if (!targetSession) {
       toast.error('Abra o caixa antes de registrar vales.');
       return;
     }
@@ -1430,7 +1617,7 @@ export const DataProvider: React.FC<{ children: ReactNode }> = ({ children }) =>
     const { data: txData, error: txError } = await supabase
       .from('transactions')
       .insert({
-        cash_session_id: currentCashSession?.id,
+        cash_session_id: targetSession.id,
         type: 'expense',
         category: 'Vale',
         description: voucherDescription,
@@ -1463,7 +1650,7 @@ export const DataProvider: React.FC<{ children: ReactNode }> = ({ children }) =>
   return (
     <DataContext.Provider value={{
       clients, professionals, services, products, appointments,
-      cashSessions, transactions, commissions, currentCashSession, loading,
+      cashSessions, transactions, commissions, currentCashSession, pendingCashSession, loading,
       refreshData,
       addClient, updateClient, deleteClient,
       addProfessional, updateProfessional, deleteProfessional,
