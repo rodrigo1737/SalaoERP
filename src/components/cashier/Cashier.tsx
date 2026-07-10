@@ -66,6 +66,7 @@ export function Cashier() {
     transactions,
     professionals,
     cashLoading,
+    transactionsLoading,
     openCashSession,
     closeCashSession,
     addTransaction,
@@ -512,8 +513,17 @@ export function Cashier() {
 
             {sessionTransactions.length === 0 ? (
               <div className="text-center py-8 text-muted-foreground">
-                <DollarSign className="w-12 h-12 mx-auto mb-4 opacity-50" />
-                <p>Nenhuma movimentação registrada</p>
+                {transactionsLoading ? (
+                  <>
+                    <Clock className="w-12 h-12 mx-auto mb-4 opacity-50" />
+                    <p>Carregando movimentações...</p>
+                  </>
+                ) : (
+                  <>
+                    <DollarSign className="w-12 h-12 mx-auto mb-4 opacity-50" />
+                    <p>Nenhuma movimentação registrada</p>
+                  </>
+                )}
               </div>
             ) : (
               <div className="space-y-3">

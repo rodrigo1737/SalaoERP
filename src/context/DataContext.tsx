@@ -170,6 +170,7 @@ interface DataContextType {
   pendingCashSession: CashSession | null;
   loading: boolean;
   cashLoading: boolean;
+  transactionsLoading: boolean;
   ensureCashSessionState: () => Promise<{
     currentCashSession: CashSession | null;
     pendingCashSession: CashSession | null;
@@ -302,6 +303,7 @@ export const DataProvider: React.FC<{ children: ReactNode }> = ({ children }) =>
   const [currentCashSession, setCurrentCashSession] = useState<CashSession | null>(null);
   const [pendingCashSession, setPendingCashSession] = useState<CashSession | null>(null);
   const [cashLoading, setCashLoading] = useState(true);
+  const [transactionsLoading, setTransactionsLoading] = useState(true);
   const realtimeChannelRef = useRef<ReturnType<typeof supabase.channel> | null>(null);
   const fetchRequestRef = useRef(0);
   const lastLoadedTenantRef = useRef<string | null>(null);
@@ -459,6 +461,7 @@ export const DataProvider: React.FC<{ children: ReactNode }> = ({ children }) =>
       setCurrentCashSession(null);
       setPendingCashSession(null);
       setCashLoading(false);
+      setTransactionsLoading(false);
       setLoading(false);
       lastLoadedTenantRef.current = null;
       return;
@@ -466,6 +469,7 @@ export const DataProvider: React.FC<{ children: ReactNode }> = ({ children }) =>
 
     setLoading(true);
     setCashLoading(true);
+    setTransactionsLoading(true);
     // Só descarta o estado atual quando o tenant muda; em recargas do mesmo
     // tenant (ex.: permissões que terminam de carregar) os dados anteriores
     // permanecem visíveis até a nova resposta chegar.
@@ -484,9 +488,32 @@ export const DataProvider: React.FC<{ children: ReactNode }> = ({ children }) =>
       // tabela é pequena e o estado do caixa não pode esperar o download de
       // transações/agendamentos/comissões (potencialmente lento).
       const cashFetchPromise = (!isCleaningTenant && canViewCashData ? fetchCash() : Promise.resolve([] as CashSession[]))
-        .then((cashData) => {
+        .then(async (cashData) => {
           if (requestId !== fetchRequestRef.current) return;
           applyCashSessionsState(cashData);
+
+          // As movimentações da sessão aberta chegam junto com o estado do
+          // caixa (consulta pequena e indexada); o histórico completo continua
+          // baixando em background e substitui tudo quando terminar.
+          const openSessionIds = cashData
+            .filter((session) => session.status === 'open')
+            .map((session) => session.id);
+          if (openSessionIds.length === 0) return;
+
+          const { data: sessionTxData, error: sessionTxError } = await supabase
+            .from('transactions')
+            .select('*')
+            .eq('tenant_id', tenantId)
+            .in('cash_session_id', openSessionIds)
+            .order('created_at', { ascending: false });
+          if (sessionTxError) throw sessionTxError;
+          if (requestId !== fetchRequestRef.current) return;
+
+          const sessionTxs = (sessionTxData ?? []) as Transaction[];
+          setTransactions((previous) => {
+            const freshIds = new Set(sessionTxs.map((transaction) => transaction.id));
+            return [...sessionTxs, ...previous.filter((transaction) => !freshIds.has(transaction.id))];
+          });
         })
         .catch((err) => {
           console.error('Error fetching cash sessions:', err);
@@ -536,6 +563,7 @@ export const DataProvider: React.FC<{ children: ReactNode }> = ({ children }) =>
       } else {
         console.error('Error fetching transactions:', transactionsResult.reason);
       }
+      setTransactionsLoading(false);
 
       if (commissionsResult.status === 'fulfilled') {
         setCommissions(joinCommissions(commissionsResult.value, professionalsData));
@@ -548,6 +576,7 @@ export const DataProvider: React.FC<{ children: ReactNode }> = ({ children }) =>
       console.error('Error fetching data:', err);
       setLoading(false);
       setCashLoading(false);
+      setTransactionsLoading(false);
     }
   };
 
@@ -1724,7 +1753,7 @@ export const DataProvider: React.FC<{ children: ReactNode }> = ({ children }) =>
   return (
     <DataContext.Provider value={{
       clients, professionals, services, products, appointments,
-      cashSessions, transactions, commissions, currentCashSession, pendingCashSession, loading, cashLoading,
+      cashSessions, transactions, commissions, currentCashSession, pendingCashSession, loading, cashLoading, transactionsLoading,
       ensureCashSessionState,
       refreshData,
       addClient, updateClient, deleteClient,
