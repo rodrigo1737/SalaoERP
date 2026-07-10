@@ -178,7 +178,7 @@ WITH CHECK (
       AND EXISTS (
         SELECT 1
         FROM public.appointments AS appointment
-        WHERE appointment.id::text = commissions.appointment_id
+        WHERE appointment.id = commissions.appointment_id
           AND appointment.tenant_id = commissions.tenant_id
       )
     )
