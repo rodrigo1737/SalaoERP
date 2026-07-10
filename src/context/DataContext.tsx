@@ -1706,7 +1706,7 @@ export const DataProvider: React.FC<{ children: ReactNode }> = ({ children }) =>
 
   const addVoucher = async (professionalId: string, amount: number, description?: string) => {
     if (!guardModify()) return;
-    if (!guardFinancialPermission(canPerformAdvancedFinancialOps, 'Somente usuários financeiros podem registrar vales e adiantamentos.')) return;
+    if (!guardFinancialPermission(canOperateCashSessions, 'Você não tem permissão para registrar vales e adiantamentos.')) return;
     const targetSession = getCashOperationTargetSession({
       allowPendingSession: true,
       permissionMessage: 'Somente usuários financeiros podem ajustar vales em caixas pendentes.',
