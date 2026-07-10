@@ -393,11 +393,13 @@ export function Cashier() {
           ) : (
             <>
               {canPerformAdvancedFinancialOps ? (
+                <Button variant="outline" onClick={() => setIsVoucherDialogOpen(true)}>
+                  <Ticket className="w-4 h-4 mr-2" />
+                  Vale
+                </Button>
+              ) : null}
+              {canManageCashFlow || canPerformAdvancedFinancialOps ? (
                 <>
-                  <Button variant="outline" onClick={() => setIsVoucherDialogOpen(true)}>
-                    <Ticket className="w-4 h-4 mr-2" />
-                    Vale
-                  </Button>
                   <Button
                     variant="outline"
                     onClick={() => {

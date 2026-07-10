@@ -319,7 +319,7 @@ export const DataProvider: React.FC<{ children: ReactNode }> = ({ children }) =>
     || hasPermission('view_financial_history')
     || hasPermission('reverse_financial_entries')
     || hasPermission('refund_bill');
-  const canViewCashData = canViewFinancialHistory || canManageCashFlow;
+  const canViewCashData = canViewFinancialHistory || canManageCashFlow || canCloseBill;
   const canViewCommissionsData = isAdminUser
     || hasPermission('view_commissions')
     || hasPermission('view_financial_history')
@@ -1416,7 +1416,7 @@ export const DataProvider: React.FC<{ children: ReactNode }> = ({ children }) =>
 
   const addTransaction = async (transactionData: Omit<Transaction, 'id' | 'created_at'>) => {
     if (!guardModify()) return null;
-    if (!guardFinancialPermission(canPerformAdvancedFinancialOps, 'Somente usuários financeiros podem lançar entradas, saídas e sangrias manuais.')) return null;
+    if (!guardFinancialPermission(canOperateCashSessions, 'Você não tem permissão para lançar entradas e saídas no caixa.')) return null;
     const targetSession = getCashOperationTargetSession({
       allowPendingSession: true,
       permissionMessage: 'Somente usuários financeiros podem ajustar movimentos em caixas pendentes.',
