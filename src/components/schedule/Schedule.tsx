@@ -37,6 +37,7 @@ import {
   SelectValue,
 } from '@/components/ui/select';
 import { Combobox } from '@/components/ui/combobox';
+import { Checkbox } from '@/components/ui/checkbox';
 import { Textarea } from '@/components/ui/textarea';
 import { useToast } from '@/hooks/use-toast';
 import { useData, Appointment, ServiceProfessional } from '@/context/DataContext';
@@ -159,6 +160,8 @@ export function Schedule() {
   const [isAddingService, setIsAddingService] = useState(false);
   const [selectedPaymentMethod, setSelectedPaymentMethod] = useState<string>('');
   const [billItems, setBillItems] = useState<BillItem[]>([]);
+  const [extraSameDayAppointments, setExtraSameDayAppointments] = useState<Appointment[]>([]);
+  const [includedExtraIds, setIncludedExtraIds] = useState<string[]>([]);
   const [scheduleLoading, setScheduleLoading] = useState(false);
   const [scheduleAppointmentsRaw, setScheduleAppointmentsRaw] = useState<Appointment[]>([]);
   const [serviceProfessionalLinks, setServiceProfessionalLinks] = useState<ServiceProfessional[]>([]);
@@ -613,6 +616,20 @@ export function Schedule() {
       });
       return;
     }
+
+    // Comanda unificada: outros agendamentos em aberto do mesmo cliente no
+    // mesmo dia entram na mesma tela de cobrança (pré-selecionados).
+    const extras = selectedAppointment?.client_id
+      ? scheduleAppointments.filter((appointment) =>
+          appointment.id !== selectedAppointment.id
+          && appointment.client_id === selectedAppointment.client_id
+          && isSameCalendarDay(new Date(appointment.start_time), new Date(selectedAppointment.start_time))
+          && appointment.status !== 'completed'
+          && appointment.status !== 'cancelled')
+      : [];
+    setExtraSameDayAppointments(extras);
+    setIncludedExtraIds(extras.map((appointment) => appointment.id));
+
     setSelectedPaymentMethod('');
     setBillItems([]); // Reset additional items
     setIsClosingBill(true);
@@ -646,7 +663,12 @@ export function Schedule() {
     try {
       const baseValue = parseFloat(editValue) || selectedAppointment.total_value || 0;
       const additionalTotal = billItems.reduce((sum, item) => sum + item.total, 0);
-      const totalValue = baseValue + additionalTotal;
+      const mainTotal = baseValue + additionalTotal;
+      const includedExtras = extraSameDayAppointments.filter(
+        (appointment) => includedExtraIds.includes(appointment.id),
+      );
+      const extrasTotal = includedExtras.reduce((sum, appointment) => sum + (appointment.total_value || 0), 0);
+      const totalValue = mainTotal + extrasTotal;
 
       let notes = selectedAppointment.notes || '';
       if (billItems.length > 0) {
@@ -656,11 +678,11 @@ export function Schedule() {
         notes = `${notes} [Adicionais: ${itemsDesc}]`.trim();
       }
       if (selectedPaymentMethod === 'pending') {
-        notes = `${notes} [PENDENTE: R$${totalValue.toFixed(2)}]`.trim();
+        notes = `${notes} [PENDENTE: R$${mainTotal.toFixed(2)}]`.trim();
       }
 
       await updateAppointment(selectedAppointment.id, {
-        total_value: totalValue,
+        total_value: mainTotal,
         notes,
       });
 
@@ -673,7 +695,7 @@ export function Schedule() {
       };
 
       const transactionId = await completeAppointment(selectedAppointment.id, paymentMethodMap[selectedPaymentMethod], {
-        total_value: totalValue,
+        total_value: mainTotal,
         notes,
       });
 
@@ -684,6 +706,43 @@ export function Schedule() {
           description: "Não foi possível confirmar o pagamento desta comanda."
         });
         return;
+      }
+
+      // Fecha os agendamentos incluídos: cada um gera sua própria transação e
+      // comissão para o profissional correspondente.
+      for (const extra of includedExtras) {
+        try {
+          const extraOverrides = selectedPaymentMethod === 'pending'
+            ? { notes: `${extra.notes || ''} [PENDENTE: R$${(extra.total_value || 0).toFixed(2)}]`.trim() }
+            : undefined;
+          const extraTransactionId = await completeAppointment(
+            extra.id,
+            paymentMethodMap[selectedPaymentMethod],
+            extraOverrides,
+          );
+          if (!extraTransactionId && extra.status !== 'completed') {
+            toast({
+              variant: "destructive",
+              title: "Comanda fechada com alerta",
+              description: `Não foi possível confirmar o pagamento do agendamento de ${extra.service?.name ?? 'serviço'} (${extra.professional?.nickname ?? 'profissional'}).`
+            });
+            continue;
+          }
+          if (extra.service_id) {
+            try {
+              await registerServiceConsumption(extra.service_id, extra.id);
+            } catch (error) {
+              console.error('Error registering service consumption for included appointment:', error);
+            }
+          }
+        } catch (error) {
+          console.error('Error closing included appointment:', error);
+          toast({
+            variant: "destructive",
+            title: "Comanda fechada com alerta",
+            description: `Falha ao fechar o agendamento de ${extra.service?.name ?? 'serviço'}. Feche-o individualmente.`
+          });
+        }
       }
 
       await fetchScheduleAppointments(currentDate);
@@ -726,13 +785,15 @@ export function Schedule() {
 
       toast({
         title: "Comanda fechada",
-        description: `R$ ${totalValue.toFixed(2)} - ${paymentLabels[selectedPaymentMethod]}${billItems.length > 0 ? ` (+${billItems.length} item(s))` : ''}`
+        description: `R$ ${totalValue.toFixed(2)} - ${paymentLabels[selectedPaymentMethod]}${includedExtras.length > 0 ? ` (${includedExtras.length + 1} agendamentos)` : ''}${billItems.length > 0 ? ` (+${billItems.length} item(s))` : ''}`
       });
 
       setIsClosingBill(false);
       setIsAppointmentDetailOpen(false);
       setSelectedAppointment(null);
       setBillItems([]);
+      setExtraSameDayAppointments([]);
+      setIncludedExtraIds([]);
     } catch (error) {
       console.error('Error closing bill:', error);
       toast({
@@ -1290,6 +1351,61 @@ export function Schedule() {
               baseServiceValue={parseFloat(editValue) || selectedAppointment?.total_value || 0}
               onBaseServiceValueChange={(value) => setEditValue(value.toString())}
             />
+
+            {extraSameDayAppointments.length > 0 && (
+              <div className="space-y-2 rounded-lg border border-primary/30 bg-primary-soft/20 p-3">
+                <Label className="font-medium">Outros agendamentos do cliente no dia</Label>
+                <p className="text-xs text-muted-foreground">
+                  Marcados abaixo serão cobrados juntos nesta comanda, cada um com sua comissão.
+                </p>
+                <div className="space-y-2">
+                  {extraSameDayAppointments.map((extra) => {
+                    const isIncluded = includedExtraIds.includes(extra.id);
+                    return (
+                      <label
+                        key={extra.id}
+                        className="flex items-center gap-3 rounded-md bg-background/60 px-3 py-2 cursor-pointer"
+                      >
+                        <Checkbox
+                          checked={isIncluded}
+                          disabled={isSubmittingBill}
+                          onCheckedChange={(checked) => {
+                            setIncludedExtraIds((previous) => checked
+                              ? [...previous, extra.id]
+                              : previous.filter((id) => id !== extra.id));
+                          }}
+                        />
+                        <div className="flex-1 min-w-0">
+                          <p className="text-sm font-medium truncate">
+                            {new Date(extra.start_time).toLocaleTimeString('pt-BR', { hour: '2-digit', minute: '2-digit' })}
+                            {' • '}
+                            {extra.service?.name ?? 'Serviço'}
+                          </p>
+                          <p className="text-xs text-muted-foreground truncate">
+                            {extra.professional?.nickname ?? extra.professional?.name ?? 'Profissional'}
+                          </p>
+                        </div>
+                        <span className="text-sm font-semibold whitespace-nowrap">
+                          R$ {(extra.total_value || 0).toFixed(2)}
+                        </span>
+                      </label>
+                    );
+                  })}
+                </div>
+                <div className="flex justify-between border-t border-primary/20 pt-2 text-sm">
+                  <span className="font-medium">Total da comanda</span>
+                  <span className="font-bold text-primary">
+                    R$ {(
+                      (parseFloat(editValue) || selectedAppointment?.total_value || 0)
+                      + billItems.reduce((sum, item) => sum + item.total, 0)
+                      + extraSameDayAppointments
+                        .filter((extra) => includedExtraIds.includes(extra.id))
+                        .reduce((sum, extra) => sum + (extra.total_value || 0), 0)
+                    ).toFixed(2)}
+                  </span>
+                </div>
+              </div>
+            )}
 
             <div className="space-y-2">
               <Label>Forma de Pagamento</Label>
