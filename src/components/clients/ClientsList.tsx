@@ -11,6 +11,7 @@ import {
   Trash2,
   ChevronLeft,
   ChevronRight,
+  Eye,
 } from 'lucide-react';
 import { Card } from '@/components/ui/card';
 import { Button } from '@/components/ui/button';
@@ -53,6 +54,7 @@ import { useToast } from '@/hooks/use-toast';
 import { Client } from '@/context/DataContext';
 import { useStableData } from '@/context/StableDataContext';
 import { ClientPhotoUpload } from './ClientPhotoUpload';
+import { ClientHistoryDialog } from '@/components/schedule/ClientHistoryDialog';
 import { useAuth } from '@/contexts/AuthContext';
 import { supabase } from '@/integrations/supabase/client';
 import {
@@ -87,6 +89,7 @@ export function ClientsList() {
   const [debouncedSearchQuery, setDebouncedSearchQuery] = useState('');
   const [isDialogOpen, setIsDialogOpen] = useState(false);
   const [editingClient, setEditingClient] = useState<Client | null>(null);
+  const [viewingClient, setViewingClient] = useState<Client | null>(null);
   const [isSubmitting, setIsSubmitting] = useState(false);
   const [deletingClient, setDeletingClient] = useState<Client | null>(null);
   const [page, setPage] = useState(1);
@@ -350,6 +353,10 @@ export function ClientsList() {
                       </Button>
                     </DropdownMenuTrigger>
                     <DropdownMenuContent align="end">
+                      <DropdownMenuItem onClick={() => setViewingClient(client)}>
+                        <Eye className="w-4 h-4 mr-2" />
+                        Visualizar
+                      </DropdownMenuItem>
                       <DropdownMenuItem onClick={() => openEditClient(client)}>
                         <Edit2 className="w-4 h-4 mr-2" />
                         Editar
@@ -440,6 +447,9 @@ export function ClientsList() {
                   )}
                   <TableCell className="text-right">
                     <div className="flex justify-end gap-1">
+                      <Button variant="ghost" size="icon" onClick={() => setViewingClient(client)} title="Visualizar cliente">
+                        <Eye className="h-4 w-4" />
+                      </Button>
                       <Button variant="ghost" size="icon" onClick={() => openEditClient(client)} title="Editar cliente">
                         <Edit2 className="h-4 w-4" />
                       </Button>
@@ -473,6 +483,14 @@ export function ClientsList() {
           </Button>
         </div>
       )}
+
+      {/* Visualização: dados cadastrais + histórico de comandas */}
+      <ClientHistoryDialog
+        open={!!viewingClient}
+        onOpenChange={open => !open && setViewingClient(null)}
+        clientId={viewingClient?.id ?? null}
+        clientName={viewingClient?.name ?? ''}
+      />
 
       {/* Confirmação de exclusão */}
       <AlertDialog open={!!deletingClient} onOpenChange={open => !open && setDeletingClient(null)}>
