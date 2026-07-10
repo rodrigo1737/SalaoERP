@@ -121,7 +121,7 @@ const normalizeText = (value?: string | null) => {
 };
 
 export function Schedule() {
-  const { clients, professionals, services, products, loading, addClient, addService, addAppointment, updateAppointment, deleteAppointment, refundAppointment, currentCashSession, pendingCashSession, completeAppointment } = useData();
+  const { clients, professionals, services, products, loading, addClient, addService, addAppointment, updateAppointment, deleteAppointment, refundAppointment, ensureCashSessionState, completeAppointment } = useData();
   const { settings: tenantSettings } = useTenantSettings();
   const navigate = useNavigate();
 
@@ -572,7 +572,7 @@ export function Schedule() {
     setSelectedAppointment({ ...selectedAppointment, status: newStatus });
   };
 
-  const handleOpenCloseBill = () => {
+  const handleOpenCloseBill = async () => {
     if (!canCloseBill) {
       toast({
         variant: "destructive",
@@ -592,8 +592,11 @@ export function Schedule() {
       return;
     }
 
-    // Check if cash session is open
-    if (pendingCashSession) {
+    // Estado ao vivo: evita acusar "caixa fechado" enquanto a sincronização
+    // inicial ainda não terminou.
+    const cashState = await ensureCashSessionState();
+
+    if (cashState.pendingCashSession) {
       toast({
         variant: "destructive",
         title: "Caixa pendente",
@@ -602,7 +605,7 @@ export function Schedule() {
       return;
     }
 
-    if (!currentCashSession) {
+    if (!cashState.currentCashSession) {
       toast({
         variant: "destructive",
         title: "Caixa fechado",
@@ -618,7 +621,9 @@ export function Schedule() {
   const handleCloseBill = async () => {
     if (!selectedAppointment || !selectedPaymentMethod || isSubmittingBill) return;
 
-    if (pendingCashSession) {
+    const cashState = await ensureCashSessionState();
+
+    if (cashState.pendingCashSession) {
       toast({
         variant: "destructive",
         title: "Caixa pendente",
@@ -627,7 +632,7 @@ export function Schedule() {
       return;
     }
 
-    if (!currentCashSession) {
+    if (!cashState.currentCashSession) {
       toast({
         variant: "destructive",
         title: "Caixa fechado",

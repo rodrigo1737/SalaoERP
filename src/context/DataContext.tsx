@@ -170,6 +170,10 @@ interface DataContextType {
   pendingCashSession: CashSession | null;
   loading: boolean;
   cashLoading: boolean;
+  ensureCashSessionState: () => Promise<{
+    currentCashSession: CashSession | null;
+    pendingCashSession: CashSession | null;
+  }>;
   refreshData: (entities?: Array<'clients'|'professionals'|'services'|'products'|'appointments'|'cash'|'transactions'|'commissions'>) => Promise<void>;
   // Clients
   addClient: (client: Omit<Client, 'id' | 'created_at'>) => Promise<Client | null>;
@@ -476,6 +480,21 @@ export const DataProvider: React.FC<{ children: ReactNode }> = ({ children }) =>
     lastLoadedTenantRef.current = tenantId;
 
     try {
+      // O caixa é resolvido em paralelo e aplicado assim que responder: a
+      // tabela é pequena e o estado do caixa não pode esperar o download de
+      // transações/agendamentos/comissões (potencialmente lento).
+      const cashFetchPromise = (!isCleaningTenant && canViewCashData ? fetchCash() : Promise.resolve([] as CashSession[]))
+        .then((cashData) => {
+          if (requestId !== fetchRequestRef.current) return;
+          applyCashSessionsState(cashData);
+        })
+        .catch((err) => {
+          console.error('Error fetching cash sessions:', err);
+        })
+        .finally(() => {
+          if (requestId === fetchRequestRef.current) setCashLoading(false);
+        });
+
       const [
         clientsData,
         professionalsData,
@@ -498,25 +517,18 @@ export const DataProvider: React.FC<{ children: ReactNode }> = ({ children }) =>
 
       const backgroundResults = await Promise.allSettled([
         !isCleaningTenant && canViewScheduleData ? fetchAppointments() : Promise.resolve([] as Appointment[]),
-        !isCleaningTenant && canViewCashData ? fetchCash() : Promise.resolve([] as CashSession[]),
         canViewCashData ? fetchTransactions() : Promise.resolve([] as Transaction[]),
         !isCleaningTenant && canViewCommissionsData ? fetchCommissions() : Promise.resolve([] as Commission[]),
       ]);
 
       if (requestId !== fetchRequestRef.current) return;
 
-      const [appointmentsResult, cashResult, transactionsResult, commissionsResult] = backgroundResults;
+      const [appointmentsResult, transactionsResult, commissionsResult] = backgroundResults;
 
       if (appointmentsResult.status === 'fulfilled') {
         setAppointments(joinAppointments(appointmentsResult.value, clientsData, professionalsData, servicesData));
       } else {
         console.error('Error fetching appointments:', appointmentsResult.reason);
-      }
-
-      if (cashResult.status === 'fulfilled') {
-        applyCashSessionsState(cashResult.value);
-      } else {
-        console.error('Error fetching cash sessions:', cashResult.reason);
       }
 
       if (transactionsResult.status === 'fulfilled') {
@@ -531,7 +543,7 @@ export const DataProvider: React.FC<{ children: ReactNode }> = ({ children }) =>
         console.error('Error fetching commissions:', commissionsResult.reason);
       }
 
-      setCashLoading(false);
+      await cashFetchPromise;
     } catch (err) {
       console.error('Error fetching data:', err);
       setLoading(false);
@@ -687,6 +699,24 @@ export const DataProvider: React.FC<{ children: ReactNode }> = ({ children }) =>
       return false;
     }
     return true;
+  };
+
+  // Garante um estado de caixa confiável antes de guards de fluxo (fechar
+  // comanda, etc.): se a sincronização inicial ainda não terminou, consulta o
+  // banco diretamente em vez de acusar "caixa fechado" com dados incompletos.
+  const ensureCashSessionState = async () => {
+    if (!cashLoading) {
+      return { currentCashSession, pendingCashSession };
+    }
+    try {
+      const cashData = await fetchCash();
+      applyCashSessionsState(cashData);
+      setCashLoading(false);
+      return resolveCashSessionState(cashData);
+    } catch (err) {
+      console.error('Error fetching cash sessions:', err);
+      return { currentCashSession, pendingCashSession };
+    }
   };
 
   const getCashOperationTargetSession = (
@@ -1695,6 +1725,7 @@ export const DataProvider: React.FC<{ children: ReactNode }> = ({ children }) =>
     <DataContext.Provider value={{
       clients, professionals, services, products, appointments,
       cashSessions, transactions, commissions, currentCashSession, pendingCashSession, loading, cashLoading,
+      ensureCashSessionState,
       refreshData,
       addClient, updateClient, deleteClient,
       addProfessional, updateProfessional, deleteProfessional,
