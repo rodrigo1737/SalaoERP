@@ -1,4 +1,5 @@
 import React, { createContext, useContext, useState, useEffect, useRef, ReactNode } from 'react';
+import { REALTIME_SUBSCRIBE_STATES } from '@supabase/supabase-js';
 import { supabase } from '@/integrations/supabase/client';
 import { useAuth } from '@/contexts/AuthContext';
 import { toast } from 'sonner';
@@ -168,6 +169,7 @@ interface DataContextType {
   currentCashSession: CashSession | null;
   pendingCashSession: CashSession | null;
   loading: boolean;
+  cashLoading: boolean;
   refreshData: (entities?: Array<'clients'|'professionals'|'services'|'products'|'appointments'|'cash'|'transactions'|'commissions'>) => Promise<void>;
   // Clients
   addClient: (client: Omit<Client, 'id' | 'created_at'>) => Promise<Client | null>;
@@ -295,8 +297,10 @@ export const DataProvider: React.FC<{ children: ReactNode }> = ({ children }) =>
   const [commissions, setCommissions] = useState<Commission[]>([]);
   const [currentCashSession, setCurrentCashSession] = useState<CashSession | null>(null);
   const [pendingCashSession, setPendingCashSession] = useState<CashSession | null>(null);
+  const [cashLoading, setCashLoading] = useState(true);
   const realtimeChannelRef = useRef<ReturnType<typeof supabase.channel> | null>(null);
   const fetchRequestRef = useRef(0);
+  const lastLoadedTenantRef = useRef<string | null>(null);
   const isCleaningTenant = isCleaningControlTenant(currentTenant);
   const isAdminUser = userRole === 'admin';
   const canViewScheduleData = isAdminUser || hasPermission('view_schedule') || hasPermission('edit_schedule');
@@ -450,17 +454,26 @@ export const DataProvider: React.FC<{ children: ReactNode }> = ({ children }) =>
       setCommissions([]);
       setCurrentCashSession(null);
       setPendingCashSession(null);
+      setCashLoading(false);
       setLoading(false);
+      lastLoadedTenantRef.current = null;
       return;
     }
 
     setLoading(true);
-    setAppointments([]);
-    setCashSessions([]);
-    setCurrentCashSession(null);
-    setPendingCashSession(null);
-    setTransactions([]);
-    setCommissions([]);
+    setCashLoading(true);
+    // Só descarta o estado atual quando o tenant muda; em recargas do mesmo
+    // tenant (ex.: permissões que terminam de carregar) os dados anteriores
+    // permanecem visíveis até a nova resposta chegar.
+    if (lastLoadedTenantRef.current !== tenantId) {
+      setAppointments([]);
+      setCashSessions([]);
+      setCurrentCashSession(null);
+      setPendingCashSession(null);
+      setTransactions([]);
+      setCommissions([]);
+    }
+    lastLoadedTenantRef.current = tenantId;
 
     try {
       const [
@@ -517,9 +530,12 @@ export const DataProvider: React.FC<{ children: ReactNode }> = ({ children }) =>
       } else {
         console.error('Error fetching commissions:', commissionsResult.reason);
       }
+
+      setCashLoading(false);
     } catch (err) {
       console.error('Error fetching data:', err);
       setLoading(false);
+      setCashLoading(false);
     }
   };
 
@@ -596,7 +612,22 @@ export const DataProvider: React.FC<{ children: ReactNode }> = ({ children }) =>
           () => refreshData(['commissions']));
     }
 
-    realtimeChannelRef.current = channel.subscribe();
+    let hasSubscribed = false;
+    realtimeChannelRef.current = channel.subscribe((status) => {
+      if (status === REALTIME_SUBSCRIBE_STATES.SUBSCRIBED) {
+        // Reassinatura após queda de conexão: eventos podem ter sido perdidos
+        // enquanto o socket esteve fora, então re-sincroniza o essencial.
+        if (hasSubscribed) {
+          refreshData(isCleaningTenant ? ['transactions'] : ['cash', 'transactions']);
+        }
+        hasSubscribed = true;
+      } else if (
+        status === REALTIME_SUBSCRIBE_STATES.CHANNEL_ERROR
+        || status === REALTIME_SUBSCRIBE_STATES.TIMED_OUT
+      ) {
+        console.error('Supabase Realtime indisponível:', status);
+      }
+    });
   };
 
   useEffect(() => {
@@ -623,6 +654,19 @@ export const DataProvider: React.FC<{ children: ReactNode }> = ({ children }) =>
     canViewCashData,
     canViewCommissionsData,
   ]);
+
+  // Ao voltar o foco para a aba, re-sincroniza o caixa: o socket Realtime pode
+  // ter sido derrubado pelo navegador enquanto a aba esteve inativa.
+  useEffect(() => {
+    if (!user || !tenantId) return;
+    const handleVisibility = () => {
+      if (document.visibilityState === 'visible') {
+        refreshData(['cash']);
+      }
+    };
+    document.addEventListener('visibilitychange', handleVisibility);
+    return () => document.removeEventListener('visibilitychange', handleVisibility);
+  }, [user, tenantId, isCleaningTenant, canViewCashData]);
 
   // ── guard helper ──
   const guardModify = (label = 'realizar esta operação') => {
@@ -1650,7 +1694,7 @@ export const DataProvider: React.FC<{ children: ReactNode }> = ({ children }) =>
   return (
     <DataContext.Provider value={{
       clients, professionals, services, products, appointments,
-      cashSessions, transactions, commissions, currentCashSession, pendingCashSession, loading,
+      cashSessions, transactions, commissions, currentCashSession, pendingCashSession, loading, cashLoading,
       refreshData,
       addClient, updateClient, deleteClient,
       addProfessional, updateProfessional, deleteProfessional,

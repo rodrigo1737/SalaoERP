@@ -65,6 +65,7 @@ export function Cashier() {
     pendingCashSession,
     transactions,
     professionals,
+    cashLoading,
     openCashSession,
     closeCashSession,
     addTransaction,
@@ -330,11 +331,17 @@ export function Cashier() {
           tone: 'text-warning',
           description: `Aberto em ${formatDateTime(pendingCashSession.opened_at)} e aguardando encerramento`,
         }
-      : {
-          title: 'Caixa fechado',
-          tone: 'text-muted-foreground',
-          description: 'Sem caixa aberto no momento',
-        };
+      : cashLoading
+        ? {
+            title: 'Carregando caixa',
+            tone: 'text-muted-foreground',
+            description: 'Sincronizando com o servidor...',
+          }
+        : {
+            title: 'Caixa fechado',
+            tone: 'text-muted-foreground',
+            description: 'Sem caixa aberto no momento',
+          };
 
   if (!canManageCashFlow && !canPerformAdvancedFinancialOps) {
     return (
@@ -369,10 +376,12 @@ export function Cashier() {
 
         <div className="flex flex-wrap gap-2">
           {!activeSession ? (
-            <Button onClick={() => setIsOpenDialogOpen(true)}>
-              <DollarSign className="w-4 h-4 mr-2" />
-              Abrir Caixa
-            </Button>
+            cashLoading ? null : (
+              <Button onClick={() => setIsOpenDialogOpen(true)}>
+                <DollarSign className="w-4 h-4 mr-2" />
+                Abrir Caixa
+              </Button>
+            )
           ) : isPendingOnlyState ? (
             canPerformAdvancedFinancialOps ? (
               <Button variant="destructive" onClick={() => openCloseDialog(pendingCashSession?.id)}>
@@ -558,6 +567,12 @@ export function Cashier() {
             )}
           </Card>
         </>
+      ) : cashLoading ? (
+        <Card className="p-12 border-0 shadow-lg text-center">
+          <Clock className="w-16 h-16 mx-auto mb-4 text-muted-foreground opacity-50" />
+          <h2 className="text-xl font-display font-semibold text-foreground mb-2">Carregando caixa...</h2>
+          <p className="text-muted-foreground">Sincronizando o estado do caixa com o servidor.</p>
+        </Card>
       ) : (
         <Card className="p-12 border-0 shadow-lg text-center">
           <DollarSign className="w-16 h-16 mx-auto mb-4 text-muted-foreground opacity-50" />
