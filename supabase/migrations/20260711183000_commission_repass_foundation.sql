@@ -31,61 +31,64 @@ ALTER TABLE public.commissions
   ADD COLUMN IF NOT EXISTS rule_source_id uuid REFERENCES public.service_professionals(id) ON DELETE SET NULL,
   ADD COLUMN IF NOT EXISTS calculation_source text;
 
+-- UPDATE ... FROM não permite referenciar a tabela-alvo dentro dos JOINs do
+-- FROM; por isso as junções ficam numa CTE que resolve os valores por id.
+WITH commission_snapshot AS (
+  SELECT
+    c.id,
+    COALESCE(c.service_id, aps.service_id, a.service_id) AS service_id,
+    COALESCE(c.service_name_snapshot, s.name, legacy_service.name) AS service_name_snapshot,
+    COALESCE(c.professional_name_snapshot, p.nickname, p.name) AS professional_name_snapshot,
+    COALESCE(
+      c.settlement_kind,
+      sp.settlement_kind,
+      CASE
+        WHEN c.type = 'voucher' THEN 'commission_payable'
+        WHEN COALESCE(p.settlement_type, 'commission') = 'transfer' THEN 'transfer_receivable'
+        ELSE 'commission_payable'
+      END
+    ) AS settlement_kind,
+    COALESCE(c.rule_source_id, sp.id) AS rule_source_id,
+    COALESCE(
+      c.calculation_source,
+      CASE
+        WHEN sp.id IS NOT NULL THEN 'service_mapping'
+        WHEN c.type = 'voucher' THEN 'voucher'
+        ELSE 'legacy'
+      END
+    ) AS calculation_source
+  FROM public.commissions c
+  LEFT JOIN public.professionals p
+    ON p.id = c.professional_id
+  LEFT JOIN public.appointments a
+    ON a.id = c.appointment_id
+  LEFT JOIN LATERAL (
+    SELECT aps_inner.service_id
+    FROM public.appointment_services aps_inner
+    WHERE aps_inner.appointment_id = c.appointment_id
+      AND aps_inner.professional_id = c.professional_id
+    ORDER BY aps_inner.position
+    LIMIT 1
+  ) aps ON true
+  LEFT JOIN public.services s
+    ON s.id = COALESCE(aps.service_id, a.service_id)
+  LEFT JOIN public.services legacy_service
+    ON legacy_service.id = a.service_id
+  LEFT JOIN public.service_professionals sp
+    ON sp.service_id = COALESCE(aps.service_id, a.service_id)
+   AND sp.professional_id = c.professional_id
+   AND sp.tenant_id = c.tenant_id
+)
 UPDATE public.commissions c
 SET
-  service_id = COALESCE(
-    c.service_id,
-    aps.service_id,
-    a.service_id
-  ),
-  service_name_snapshot = COALESCE(
-    c.service_name_snapshot,
-    s.name,
-    legacy_service.name
-  ),
-  professional_name_snapshot = COALESCE(
-    c.professional_name_snapshot,
-    p.nickname,
-    p.name
-  ),
-  settlement_kind = COALESCE(
-    c.settlement_kind,
-    sp.settlement_kind,
-    CASE
-      WHEN c.type = 'voucher' THEN 'commission_payable'
-      WHEN COALESCE(p.settlement_type, 'commission') = 'transfer' THEN 'transfer_receivable'
-      ELSE 'commission_payable'
-    END
-  ),
-  rule_source_id = COALESCE(c.rule_source_id, sp.id),
-  calculation_source = COALESCE(
-    c.calculation_source,
-    CASE
-      WHEN sp.id IS NOT NULL THEN 'service_mapping'
-      WHEN c.type = 'voucher' THEN 'voucher'
-      ELSE 'legacy'
-    END
-  )
-FROM public.professionals p
-LEFT JOIN public.appointments a
-  ON a.id = c.appointment_id
-LEFT JOIN LATERAL (
-  SELECT aps_inner.service_id
-  FROM public.appointment_services aps_inner
-  WHERE aps_inner.appointment_id = c.appointment_id
-    AND aps_inner.professional_id = c.professional_id
-  ORDER BY aps_inner.position
-  LIMIT 1
-) aps ON true
-LEFT JOIN public.services s
-  ON s.id = COALESCE(aps.service_id, a.service_id)
-LEFT JOIN public.services legacy_service
-  ON legacy_service.id = a.service_id
-LEFT JOIN public.service_professionals sp
-  ON sp.service_id = COALESCE(aps.service_id, a.service_id)
- AND sp.professional_id = c.professional_id
- AND sp.tenant_id = c.tenant_id
-WHERE p.id = c.professional_id;
+  service_id = commission_snapshot.service_id,
+  service_name_snapshot = commission_snapshot.service_name_snapshot,
+  professional_name_snapshot = commission_snapshot.professional_name_snapshot,
+  settlement_kind = commission_snapshot.settlement_kind,
+  rule_source_id = commission_snapshot.rule_source_id,
+  calculation_source = commission_snapshot.calculation_source
+FROM commission_snapshot
+WHERE commission_snapshot.id = c.id;
 
 UPDATE public.commissions
 SET settlement_kind = 'commission_payable'
