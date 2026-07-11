@@ -24,7 +24,8 @@ import {
   Truck,
   ArrowRightLeft,
   PackagePlus,
-  Sparkles
+  Sparkles,
+  Percent
 } from 'lucide-react';
 import { cn } from '@/lib/utils';
 import { Button } from '@/components/ui/button';
@@ -53,6 +54,7 @@ const salonMenuItems: MenuItem[] = [
   { id: 'clients', label: 'Clientes', icon: Users, adminOnly: true, permission: 'view_clients' },
   { id: 'professionals', label: 'Profissionais', icon: UserCircle, adminOnly: true },
   { id: 'services', label: 'Serviços', icon: Scissors, adminOnly: true },
+  { id: 'commission-matrix', label: 'Habilitações e Comissões', icon: Percent, adminOnly: true },
   { id: 'products', label: 'Produtos', icon: ShoppingBag, adminOnly: true },
   { id: 'aesthetics', label: 'Estética', icon: UserCircle, adminOnly: true, packageRequired: 'aesthetic_clinic' },
   { id: 'cleaning', label: 'Limpeza', icon: Sparkles, adminOnly: false, permission: 'view_schedule', packageRequired: 'cleaning_control' },
@@ -87,7 +89,7 @@ export function Sidebar({ currentPage, onNavigate }: SidebarProps) {
   const { user, userRole, isOwner, isSuperAdmin, currentTenant, signOut, hasPermission } = useAuth();
   const { settings: tenantSettings } = useTenantSettings();
   const isCleaningTenant = isCleaningControlTenant(currentTenant);
-  const cleaningHiddenItems = ['agenda', 'services', 'products', 'stock', 'cashier', 'financial-management', 'commissions'];
+  const cleaningHiddenItems = ['agenda', 'services', 'commission-matrix', 'products', 'stock', 'cashier', 'financial-management', 'commissions'];
 
   const handleLogout = async () => {
     await signOut();
