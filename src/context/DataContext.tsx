@@ -272,6 +272,21 @@ function isSessionFromPreviousDay(session: CashSession, reference = new Date()) 
   return getBusinessDateKey(session.opened_at) < getBusinessDateKey(reference);
 }
 
+// Movimentos lançados num caixa aberto de data anterior carregam a data
+// daquele caixa (com o horário atual), para o fechamento e os relatórios
+// refletirem o dia do movimento do caixa — ex.: caixa de sábado regularizado
+// na terça recebe lançamentos datados de sábado. Retorna undefined quando o
+// caixa é do dia (usa o default now() do banco).
+function getSessionMovementTimestamp(session: CashSession | null | undefined) {
+  if (!session || !isSessionFromPreviousDay(session)) return undefined;
+  const openedAt = new Date(session.opened_at);
+  const now = new Date();
+  const stamped = new Date(openedAt);
+  stamped.setHours(now.getHours(), now.getMinutes(), now.getSeconds(), now.getMilliseconds());
+  if (stamped < openedAt) return session.opened_at;
+  return stamped.toISOString();
+}
+
 function resolveCashSessionState(cashSessions: CashSession[]) {
   const openSessions = cashSessions
     .filter((session) => session.status === 'open')
@@ -1254,6 +1269,7 @@ export const DataProvider: React.FC<{ children: ReactNode }> = ({ children }) =>
     // receber (linha de comissão abaixo), sem transação de entrada.
     const appointmentProfessional = professionals.find(p => p.id === appointment.professional_id);
     const isTransferSettlement = appointmentProfessional?.settlement_type === 'transfer';
+    const movementTimestamp = getSessionMovementTimestamp(billingSession);
 
     if (billingSession && !transactionId && !isTransferSettlement) {
       const { data: txData, error: txError } = await supabase
@@ -1269,6 +1285,7 @@ export const DataProvider: React.FC<{ children: ReactNode }> = ({ children }) =>
           reference_type: 'appointment',
           created_by: user?.id,
           tenant_id: tenantId,
+          ...(movementTimestamp ? { created_at: movementTimestamp } : {}),
         })
         .select()
         .single();
@@ -1307,6 +1324,7 @@ export const DataProvider: React.FC<{ children: ReactNode }> = ({ children }) =>
         commission_value: commissionValue,
         status: 'pending',
         tenant_id: tenantId,
+        ...(movementTimestamp ? { created_at: movementTimestamp } : {}),
       });
 
       if (commError) {
@@ -1432,9 +1450,16 @@ export const DataProvider: React.FC<{ children: ReactNode }> = ({ children }) =>
       permissionMessage: 'Somente usuários financeiros podem ajustar movimentos em caixas pendentes.',
     });
     if (!targetSession) return null;
+    const movementTimestamp = getSessionMovementTimestamp(targetSession);
     const { data, error } = await supabase
       .from('transactions')
-      .insert({ ...transactionData, cash_session_id: targetSession.id, created_by: user?.id, tenant_id: tenantId })
+      .insert({
+        ...transactionData,
+        cash_session_id: targetSession.id,
+        created_by: user?.id,
+        tenant_id: tenantId,
+        ...(movementTimestamp ? { created_at: movementTimestamp } : {}),
+      })
       .select()
       .single();
     if (error) { toast.error('Erro ao registrar transação.'); return null; }
@@ -1617,6 +1642,8 @@ export const DataProvider: React.FC<{ children: ReactNode }> = ({ children }) =>
     // porcentagem do salão — o acerto entra no caixa em vez de sair.
     const isTransfer = professional?.settlement_type === 'transfer';
     const methodLabel = paymentMethod === 'cash' ? 'Dinheiro' : paymentMethod === 'pix' ? 'PIX' : 'Transferência';
+    const movementTimestamp = getSessionMovementTimestamp(targetSession);
+    const paidAt = movementTimestamp ?? new Date().toISOString();
     const { data: txData, error: txError } = await supabase
       .from('transactions')
       .insert({
@@ -1630,13 +1657,14 @@ export const DataProvider: React.FC<{ children: ReactNode }> = ({ children }) =>
         reference_type: 'commission',
         created_by: user?.id,
         tenant_id: tenantId,
+        ...(movementTimestamp ? { created_at: movementTimestamp } : {}),
       })
       .select()
       .single();
     if (txError) { toast.error(isTransfer ? 'Erro ao registrar recebimento no caixa.' : 'Erro ao registrar pagamento no caixa.'); return; }
     await supabase.from('commissions').update({
       status: 'paid',
-      paid_at: new Date().toISOString(),
+      paid_at: paidAt,
       transaction_id: txData?.id,
       payment_method: paymentMethod,
     })
@@ -1645,7 +1673,7 @@ export const DataProvider: React.FC<{ children: ReactNode }> = ({ children }) =>
     setCommissions(prev => prev.map(c => c.id === id ? {
       ...c,
       status: 'paid',
-      paid_at: new Date().toISOString(),
+      paid_at: paidAt,
       transaction_id: txData?.id,
       payment_method: paymentMethod,
     } : c));
@@ -1673,6 +1701,8 @@ export const DataProvider: React.FC<{ children: ReactNode }> = ({ children }) =>
     const professional = professionals.find(p => p.id === professionalId);
     const isTransfer = professional?.settlement_type === 'transfer';
     const methodLabel = paymentMethod === 'cash' ? 'Dinheiro' : paymentMethod === 'pix' ? 'PIX' : 'Transferência';
+    const movementTimestamp = getSessionMovementTimestamp(targetSession);
+    const paidAt = movementTimestamp ?? new Date().toISOString();
     const { data: txData, error: txError } = await supabase
       .from('transactions')
       .insert({
@@ -1686,6 +1716,7 @@ export const DataProvider: React.FC<{ children: ReactNode }> = ({ children }) =>
         reference_type: 'commission_batch',
         created_by: user?.id,
         tenant_id: tenantId,
+        ...(movementTimestamp ? { created_at: movementTimestamp } : {}),
       })
       .select()
       .single();
@@ -1695,7 +1726,7 @@ export const DataProvider: React.FC<{ children: ReactNode }> = ({ children }) =>
       .from('commissions')
       .update({
         status: 'paid',
-        paid_at: new Date().toISOString(),
+        paid_at: paidAt,
         transaction_id: txData?.id,
         payment_method: paymentMethod,
       })
@@ -1708,7 +1739,7 @@ export const DataProvider: React.FC<{ children: ReactNode }> = ({ children }) =>
         ? {
             ...c,
             status: 'paid',
-            paid_at: new Date().toISOString(),
+            paid_at: paidAt,
             transaction_id: txData?.id,
             payment_method: paymentMethod,
           }
@@ -1731,6 +1762,7 @@ export const DataProvider: React.FC<{ children: ReactNode }> = ({ children }) =>
     }
     const professional = professionals.find(p => p.id === professionalId);
     const voucherDescription = description ?? `Vale para ${professional?.nickname ?? 'Profissional'}`;
+    const movementTimestamp = getSessionMovementTimestamp(targetSession);
     const { data: txData, error: txError } = await supabase
       .from('transactions')
       .insert({
@@ -1744,6 +1776,7 @@ export const DataProvider: React.FC<{ children: ReactNode }> = ({ children }) =>
         reference_type: 'voucher',
         created_by: user?.id,
         tenant_id: tenantId,
+        ...(movementTimestamp ? { created_at: movementTimestamp } : {}),
       })
       .select()
       .single();
@@ -1756,8 +1789,9 @@ export const DataProvider: React.FC<{ children: ReactNode }> = ({ children }) =>
       commission_rate: 100,
       commission_value: -amount,
       status: 'paid',
-      paid_at: new Date().toISOString(),
+      paid_at: movementTimestamp ?? new Date().toISOString(),
       tenant_id: tenantId,
+      ...(movementTimestamp ? { created_at: movementTimestamp } : {}),
     });
     if (commError) { toast.error('Erro ao registrar vale nas comissões.'); return; }
     await refreshData(['transactions', 'commissions']);
