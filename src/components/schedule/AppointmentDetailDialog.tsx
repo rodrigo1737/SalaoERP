@@ -88,13 +88,20 @@ interface AppointmentDetailDialogProps {
   canOpenBill?: boolean;
   canEditAppointment: boolean;
   onUpdateStatus: (status: Appointment['status']) => void;
-  onSave: (data: { 
-    total_value: number; 
+  onSave: (data: {
+    total_value: number;
     professional_id: string;
     service_id: string;
     start_time: string;
     end_time: string;
     notes: string;
+    additionalServices?: Array<{
+      professional_id: string;
+      service_id: string;
+      start_time: string;
+      end_time: string;
+      total_value: number;
+    }>;
   }) => void;
   onOpenCloseBill: () => void;
   onRefund: () => void;
@@ -361,32 +368,48 @@ export function AppointmentDetailDialog({
       return;
     }
     
-    const [startHour, startMin] = mainRow.startTime.split(':').map(Number);
-    
-    // Calculate total end time from all services
-    const lastRow = serviceRows[serviceRows.length - 1];
-    const [endHour, endMin] = lastRow.endTime.split(':').map(Number);
-    
-    const newStartTime = new Date(selectedDate);
-    newStartTime.setHours(startHour, startMin, 0, 0);
-    
-    const newEndTime = new Date(selectedDate);
-    newEndTime.setHours(endHour, endMin, 0, 0);
-    
-    // Calculate total value from all services
-    const totalValue = serviceRows.reduce((sum, row) => sum + (parseFloat(row.value) || 0), 0);
-    
+    const buildRowTimes = (row: ServiceRow) => {
+      const [startH, startM] = row.startTime.split(':').map(Number);
+      const [endH, endM] = row.endTime.split(':').map(Number);
+      const start = new Date(selectedDate);
+      start.setHours(startH, startM, 0, 0);
+      const end = new Date(selectedDate);
+      end.setHours(endH, endM, 0, 0);
+      if (end.getTime() <= start.getTime()) {
+        end.setTime(start.getTime() + 30 * 60 * 1000);
+      }
+      return { start, end };
+    };
+
+    // O agendamento principal guarda o serviço da 1ª linha; cada serviço
+    // adicional vira um agendamento-irmão (mesmo cliente/dia) para não perder
+    // dados — o modelo guarda um serviço por agendamento e a comanda unificada
+    // reagrupa todos na cobrança.
+    const { start: newStartTime, end: mainEndTime } = buildRowTimes(mainRow);
+
+    const additionalServices = serviceRows.slice(1).map((row) => {
+      const { start, end } = buildRowTimes(row);
+      return {
+        professional_id: row.professionalId,
+        service_id: row.serviceId,
+        start_time: start.toISOString(),
+        end_time: end.toISOString(),
+        total_value: parseFloat(row.value) || 0,
+      };
+    });
+
     const saveData = {
-      total_value: totalValue,
+      total_value: parseFloat(mainRow.value) || 0,
       professional_id: mainRow.professionalId,
       service_id: mainRow.serviceId,
       start_time: newStartTime.toISOString(),
-      end_time: newEndTime.toISOString(),
+      end_time: mainEndTime.toISOString(),
       notes,
+      additionalServices,
     };
     
     // Check for conflicts
-    const conflicts = checkForConflicts(mainRow.professionalId, newStartTime, newEndTime);
+    const conflicts = checkForConflicts(mainRow.professionalId, newStartTime, mainEndTime);
     
     if (conflicts.length > 0) {
       // Store pending save data and show confirmation dialog
@@ -493,8 +516,16 @@ export function AppointmentDetailDialog({
                 </div>
               </div>
               {canCloseBill && canOpenBill && (
-                <Button 
-                  onClick={onOpenCloseBill}
+                <Button
+                  onClick={() => {
+                    // Serviços adicionais precisam estar salvos como agendamentos
+                    // antes de abrir a comanda — senão não entram na cobrança.
+                    if (serviceRows.length > 1) {
+                      toast.warning('Salve os serviços adicionais antes de abrir a comanda: clique em "Salvar" e reabra a comanda.');
+                      return;
+                    }
+                    onOpenCloseBill();
+                  }}
                   disabled={appointment.status === 'completed' || appointment.status === 'cancelled'}
                   className="bg-success hover:bg-success/90 text-success-foreground"
                 >

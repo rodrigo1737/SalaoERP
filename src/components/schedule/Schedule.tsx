@@ -1435,8 +1435,29 @@ export function Schedule() {
             end_time: data.end_time,
             notes: data.notes,
           });
+
+          // Serviços adicionais viram agendamentos-irmãos do mesmo cliente/dia.
+          const additionalServices = data.additionalServices ?? [];
+          let createdExtras = 0;
+          for (const extra of additionalServices) {
+            const created = await addAppointment({
+              client_id: selectedAppointment.client_id,
+              professional_id: extra.professional_id,
+              service_id: extra.service_id,
+              start_time: extra.start_time,
+              end_time: extra.end_time,
+              status: 'scheduled',
+              notes: '',
+              total_value: extra.total_value,
+            });
+            if (created) createdExtras += 1;
+          }
+
           await fetchScheduleAppointments(currentDate);
-          toast({ title: "Agendamento atualizado" });
+          toast({
+            title: "Agendamento atualizado",
+            description: createdExtras > 0 ? `${createdExtras} serviço(s) adicional(is) incluído(s) na agenda.` : undefined,
+          });
           setIsAppointmentDetailOpen(false);
         }}
         onOpenCloseBill={handleOpenCloseBill}
