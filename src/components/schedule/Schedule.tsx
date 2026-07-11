@@ -1403,7 +1403,7 @@ export function Schedule() {
             </div>
             <div className="flex justify-end gap-2">
               <Button variant="outline" onClick={() => setIsNewAppointmentOpen(false)}>Cancelar</Button>
-              <Button onClick={handleCreateAppointment} disabled={!canCreateAppointment}><Plus className="w-4 h-4 mr-2" />Agendar</Button>
+              <Button onClick={handleCreateAppointment} disabled={!canCreateAppointment}>Salvar</Button>
             </div>
           </div>
         </DialogContent>
