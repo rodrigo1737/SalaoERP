@@ -195,6 +195,28 @@ export interface CommissionReprocessResult {
   skippedItems: string[];
 }
 
+export interface CommissionReprocessPreviewItem {
+  commissionId: string;
+  professionalName: string;
+  serviceName: string;
+  baseValue: number;
+  currentRate: number;
+  currentValue: number;
+  nextRate: number | null;
+  nextValue: number | null;
+  difference: number;
+  status: 'ok' | 'no_rule' | 'no_service';
+}
+
+export interface CommissionReprocessPreview {
+  items: CommissionReprocessPreviewItem[];
+  affectedCount: number;
+  skippedCount: number;
+  totalCurrent: number;
+  totalNext: number;
+  totalDifference: number;
+}
+
 interface DataContextType {
   clients: Client[];
   professionals: Professional[];
@@ -260,6 +282,9 @@ interface DataContextType {
   reprocessPendingCommissions: (
     filters: { dateFrom: string; dateTo: string; professionalId?: string | null }
   ) => Promise<CommissionReprocessResult | null>;
+  previewReprocessPendingCommissions: (
+    filters: { dateFrom: string; dateTo: string; professionalId?: string | null }
+  ) => Promise<CommissionReprocessPreview | null>;
 }
 
 const DataContext = createContext<DataContextType | undefined>(undefined);
@@ -1958,6 +1983,79 @@ export const DataProvider: React.FC<{ children: ReactNode }> = ({ children }) =>
     toast.success('Vale registrado!');
   };
 
+  // Simulação: calcula o recálculo SEM gravar, para a tela mostrar diferença
+  // e sinalizar riscos antes de aplicar.
+  const previewReprocessPendingCommissions = async (
+    filters: { dateFrom: string; dateTo: string; professionalId?: string | null }
+  ): Promise<CommissionReprocessPreview | null> => {
+    if (!guardFinancialPermission(canViewFinancialHistory || canPerformAdvancedFinancialOps, 'Sem permissão para simular reprocessamento.')) return null;
+    if (!tenantId) return null;
+
+    const baseQuery = supabase
+      .from('commissions')
+      .select('*')
+      .eq('tenant_id', tenantId)
+      .eq('status', 'pending')
+      .eq('type', 'service')
+      .gte('created_at', filters.dateFrom)
+      .lte('created_at', filters.dateTo)
+      .order('created_at', { ascending: true });
+
+    const { data, error } = await (filters.professionalId ? baseQuery.eq('professional_id', filters.professionalId) : baseQuery);
+    if (error) {
+      console.error('Erro ao simular reprocessamento:', error);
+      toast.error('Não foi possível simular o reprocessamento.');
+      return null;
+    }
+
+    const rows = (data as Commission[]) ?? [];
+    const items: CommissionReprocessPreviewItem[] = [];
+    let affectedCount = 0;
+    let skippedCount = 0;
+    let totalCurrent = 0;
+    let totalNext = 0;
+
+    for (const commission of rows) {
+      const professional = professionals.find((item) => item.id === commission.professional_id);
+      const service = services.find((item) => item.id === commission.service_id);
+      const professionalName = professional?.nickname ?? professional?.name ?? commission.professional_name_snapshot ?? 'Profissional';
+      const serviceName = service?.name ?? commission.service_name_snapshot ?? 'Serviço';
+      const currentValue = Number(commission.commission_value) || 0;
+      totalCurrent += currentValue;
+
+      if (!commission.service_id || !commission.professional_id) {
+        skippedCount += 1;
+        totalNext += currentValue;
+        items.push({ commissionId: commission.id, professionalName, serviceName, baseValue: Number(commission.base_value) || 0, currentRate: Number(commission.commission_rate) || 0, currentValue, nextRate: null, nextValue: null, difference: 0, status: 'no_service' });
+        continue;
+      }
+
+      const mapping = await resolveCommissionMapping(commission.service_id, commission.professional_id);
+      if (!mapping) {
+        skippedCount += 1;
+        totalNext += currentValue;
+        items.push({ commissionId: commission.id, professionalName, serviceName, baseValue: Number(commission.base_value) || 0, currentRate: Number(commission.commission_rate) || 0, currentValue, nextRate: null, nextValue: null, difference: 0, status: 'no_rule' });
+        continue;
+      }
+
+      const nextRate = Number(mapping.commission_rate) || 0;
+      const nextValue = (Number(commission.base_value) * nextRate) / 100;
+      totalNext += nextValue;
+      const difference = nextValue - currentValue;
+      if (Math.abs(difference) > 0.009) affectedCount += 1;
+      items.push({ commissionId: commission.id, professionalName, serviceName, baseValue: Number(commission.base_value) || 0, currentRate: Number(commission.commission_rate) || 0, currentValue, nextRate, nextValue, difference, status: 'ok' });
+    }
+
+    return {
+      items,
+      affectedCount,
+      skippedCount,
+      totalCurrent,
+      totalNext,
+      totalDifference: totalNext - totalCurrent,
+    };
+  };
+
   const reprocessPendingCommissions = async (
     filters: { dateFrom: string; dateTo: string; professionalId?: string | null }
   ): Promise<CommissionReprocessResult | null> => {
@@ -2066,7 +2164,7 @@ export const DataProvider: React.FC<{ children: ReactNode }> = ({ children }) =>
       addAppointment, updateAppointment, deleteAppointment, refundAppointment, completeAppointment,
       fetchAppointmentServices, saveAppointmentServices,
       openCashSession, closeCashSession, addTransaction, reverseTransaction,
-      payCommission, payAllCommissions, addVoucher, reprocessPendingCommissions,
+      payCommission, payAllCommissions, addVoucher, reprocessPendingCommissions, previewReprocessPendingCommissions,
     }}>
       {children}
     </DataContext.Provider>

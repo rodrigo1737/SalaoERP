@@ -9,6 +9,7 @@ import { ClientsList } from '@/components/clients/ClientsList';
 import { ProfessionalsList } from '@/components/professionals/ProfessionalsList';
 import { ServicesList } from '@/components/services/ServicesList';
 import { ServiceCommissionMatrix } from '@/components/services/ServiceCommissionMatrix';
+import { CommissionReprocessing } from '@/components/commissions/CommissionReprocessing';
 import { ProductsList } from '@/components/products/ProductsList';
 import { AestheticsModule } from '@/components/aesthetics/AestheticsModule';
 import { CleaningModule } from '@/components/cleaning/CleaningModule';
@@ -32,10 +33,10 @@ import { Loader2 } from 'lucide-react';
 
 // Páginas válidas por perfil
 const ADMIN_PAGES = ['dashboard', 'agenda', 'clients', 'professionals', 'services', 'commission-matrix', 'products', 'aesthetics',
-  'cleaning', 'suppliers', 'purchase', 'stock-movements', 'commissions', 'reports', 'cashier', 'financial-management', 'settings'];
+  'cleaning', 'suppliers', 'purchase', 'stock-movements', 'commissions', 'commission-reprocessing', 'reports', 'cashier', 'financial-management', 'settings'];
 const PROFESSIONAL_PAGES = ['agenda', 'cleaning', 'commissions', 'settings'];
 const SUPER_ADMIN_PAGES = ['super-dashboard', 'tenants'];
-const CLEANING_BLOCKED_PAGES = ['agenda', 'services', 'commission-matrix', 'products', 'suppliers', 'purchase', 'stock-movements', 'commissions', 'cashier', 'financial-management'];
+const CLEANING_BLOCKED_PAGES = ['agenda', 'services', 'commission-matrix', 'products', 'suppliers', 'purchase', 'stock-movements', 'commissions', 'commission-reprocessing', 'cashier', 'financial-management'];
 
 const Index = () => {
   const { page } = useParams<{ page?: string }>();
@@ -137,6 +138,7 @@ const Index = () => {
       case 'purchase':         return <PurchaseEntry />;
       case 'stock-movements':  return <StockMovements />;
       case 'commissions':      return <Commissions />;
+      case 'commission-reprocessing': return <CommissionReprocessing />;
       case 'reports':          return <Reports />;
       case 'cashier':          return <Cashier />;
       case 'financial-management': return <CashHistory />;
