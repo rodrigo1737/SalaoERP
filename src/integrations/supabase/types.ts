@@ -482,6 +482,7 @@ export type Database = {
           phone: string | null
           photo_url: string | null
           schedule_color: string
+          settlement_type: string
           specialty: string | null
           tenant_id: string | null
           type: string
@@ -502,6 +503,7 @@ export type Database = {
           phone?: string | null
           photo_url?: string | null
           schedule_color?: string
+          settlement_type?: string
           specialty?: string | null
           tenant_id?: string | null
           type?: string
@@ -522,6 +524,7 @@ export type Database = {
           phone?: string | null
           photo_url?: string | null
           schedule_color?: string
+          settlement_type?: string
           specialty?: string | null
           tenant_id?: string | null
           type?: string

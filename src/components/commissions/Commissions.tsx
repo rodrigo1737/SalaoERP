@@ -56,6 +56,7 @@ interface PaymentDialogState {
   professionalName?: string;
   amount?: number;
   count?: number;
+  isTransfer?: boolean;
 }
 
 const paymentMethodLabels = {
@@ -183,6 +184,7 @@ export function Commissions() {
       commissionId,
       professionalName: professional?.nickname || 'Profissional',
       amount: Number(commission.commission_value),
+      isTransfer: professional?.settlement_type === 'transfer',
     });
     setSelectedPaymentMethod('pix');
   };
@@ -201,6 +203,7 @@ export function Commissions() {
       professionalName: professional?.nickname || 'Profissional',
       amount: totalAmount,
       count: profCommissions.length,
+      isTransfer: professional?.settlement_type === 'transfer',
     });
     setSelectedPaymentMethod('pix');
   };
@@ -210,10 +213,16 @@ export function Commissions() {
     try {
       if (paymentDialog.type === 'single' && paymentDialog.commissionId) {
         await payCommission(paymentDialog.commissionId, selectedPaymentMethod);
-        toast({ title: "Comissão paga", description: "Pagamento registrado no fluxo de caixa" });
+        toast({
+          title: paymentDialog.isTransfer ? "Repasse recebido" : "Comissão paga",
+          description: paymentDialog.isTransfer ? "Recebimento registrado no fluxo de caixa" : "Pagamento registrado no fluxo de caixa",
+        });
       } else if (paymentDialog.type === 'all' && paymentDialog.professionalId) {
         await payAllCommissions(paymentDialog.professionalId, selectedPaymentMethod);
-        toast({ title: "Comissões pagas", description: `${paymentDialog.count} comissões registradas no fluxo de caixa` });
+        toast({
+          title: paymentDialog.isTransfer ? "Repasses recebidos" : "Comissões pagas",
+          description: `${paymentDialog.count} ${paymentDialog.isTransfer ? 'repasses registrados' : 'comissões registradas'} no fluxo de caixa`,
+        });
       }
       setPaymentDialog({ isOpen: false, type: 'single' });
     } catch (error) {
@@ -286,13 +295,18 @@ export function Commissions() {
                     <p className="text-sm text-muted-foreground">{item.professional.name}</p>
                   </div>
                 </div>
+                {item.professional.settlement_type === 'transfer' && (
+                  <Badge variant="outline" className="border-primary/40 text-primary">Repasse</Badge>
+                )}
               </div>
 
               <div className="space-y-2 mb-4">
                 <div className="flex items-center justify-between p-2 rounded-lg bg-warning-soft">
                   <div className="flex items-center gap-2">
                     <Clock className="w-4 h-4 text-warning shrink-0" />
-                    <span className="text-xs text-muted-foreground">Pendente</span>
+                    <span className="text-xs text-muted-foreground">
+                      {item.professional.settlement_type === 'transfer' ? 'A receber' : 'Pendente'}
+                    </span>
                   </div>
                   <p className="text-sm font-bold text-warning">
                     {formatCurrency(item.totalPending)}
@@ -301,7 +315,9 @@ export function Commissions() {
                 <div className="flex items-center justify-between p-2 rounded-lg bg-success-soft">
                   <div className="flex items-center gap-2">
                     <Check className="w-4 h-4 text-success shrink-0" />
-                    <span className="text-xs text-muted-foreground">Pago</span>
+                    <span className="text-xs text-muted-foreground">
+                      {item.professional.settlement_type === 'transfer' ? 'Recebido' : 'Pago'}
+                    </span>
                   </div>
                   <p className="text-sm font-bold text-success">
                     {formatCurrency(item.totalPaid)}
@@ -328,13 +344,15 @@ export function Commissions() {
               </div>
 
               {isAdmin && item.pendingCount > 0 && (
-                <Button 
-                  className="w-full" 
+                <Button
+                  className="w-full"
                   onClick={() => openPayAllDialog(item.professional.id)}
                   disabled={isSubmitting}
                 >
                   <DollarSign className="w-4 h-4 mr-2" />
-                  Pagar Todas ({item.pendingCount})
+                  {item.professional.settlement_type === 'transfer'
+                    ? `Receber Todos (${item.pendingCount})`
+                    : `Pagar Todas (${item.pendingCount})`}
                 </Button>
               )}
             </Card>
@@ -540,17 +558,19 @@ export function Commissions() {
                     )}
                     
                     {isAdmin && commission.type !== 'voucher' && commission.status === 'pending' && (
-                      <Button 
-                        size="sm" 
+                      <Button
+                        size="sm"
                         onClick={() => openPaySingleDialog(commission.id)}
                         disabled={isSubmitting}
                       >
-                        Pagar
+                        {professionals.find(p => p.id === commission.professional_id)?.settlement_type === 'transfer' ? 'Receber' : 'Pagar'}
                       </Button>
                     )}
-                    
+
                     {commission.type !== 'voucher' && commission.status === 'paid' && (
-                      <Badge variant="success">Pago</Badge>
+                      <Badge variant="success">
+                        {professionals.find(p => p.id === commission.professional_id)?.settlement_type === 'transfer' ? 'Recebido' : 'Pago'}
+                      </Badge>
                     )}
                   </div>
                 </motion.div>
@@ -564,11 +584,15 @@ export function Commissions() {
       <Dialog open={paymentDialog.isOpen} onOpenChange={(open) => !open && setPaymentDialog({ isOpen: false, type: 'single' })}>
         <DialogContent className="sm:max-w-md">
           <DialogHeader>
-            <DialogTitle>Confirmar Pagamento</DialogTitle>
+            <DialogTitle>{paymentDialog.isTransfer ? 'Confirmar Recebimento' : 'Confirmar Pagamento'}</DialogTitle>
             <DialogDescription>
-              {paymentDialog.type === 'single' 
-                ? `Pagar comissão de ${paymentDialog.professionalName}`
-                : `Pagar ${paymentDialog.count} comissões de ${paymentDialog.professionalName}`
+              {paymentDialog.isTransfer
+                ? (paymentDialog.type === 'single'
+                    ? `Receber repasse de ${paymentDialog.professionalName}`
+                    : `Receber ${paymentDialog.count} repasses de ${paymentDialog.professionalName}`)
+                : (paymentDialog.type === 'single'
+                    ? `Pagar comissão de ${paymentDialog.professionalName}`
+                    : `Pagar ${paymentDialog.count} comissões de ${paymentDialog.professionalName}`)
               }
             </DialogDescription>
           </DialogHeader>
@@ -646,7 +670,7 @@ export function Commissions() {
               Cancelar
             </Button>
             <Button onClick={handleConfirmPayment} disabled={isSubmitting}>
-              {isSubmitting ? 'Processando...' : 'Confirmar Pagamento'}
+              {isSubmitting ? 'Processando...' : paymentDialog.isTransfer ? 'Confirmar Recebimento' : 'Confirmar Pagamento'}
             </Button>
           </DialogFooter>
         </DialogContent>

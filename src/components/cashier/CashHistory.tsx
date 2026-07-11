@@ -81,6 +81,19 @@ const normalizeDateInput = (value: string, endOfDay = false) => {
   return new Date(`${value}T${endOfDay ? '23:59:59' : '00:00:00'}`);
 };
 
+const toInputDate = (date: Date) =>
+  `${date.getFullYear()}-${String(date.getMonth() + 1).padStart(2, '0')}-${String(date.getDate()).padStart(2, '0')}`;
+
+// Competência atual como período padrão: sem isso a tela renderiza o
+// histórico completo e trava em bases grandes.
+const currentMonthRange = () => {
+  const now = new Date();
+  return {
+    from: toInputDate(new Date(now.getFullYear(), now.getMonth(), 1)),
+    to: toInputDate(new Date(now.getFullYear(), now.getMonth() + 1, 0)),
+  };
+};
+
 const isDateBetween = (dateString: string, dateFrom: string, dateTo: string) => {
   const date = new Date(dateString);
   const from = normalizeDateInput(dateFrom, false);
@@ -116,8 +129,8 @@ export function CashHistory({ onBack }: CashHistoryProps) {
     || hasPermission('reverse_financial_entries');
 
   const [tab, setTab] = useState('sessions');
-  const [dateFrom, setDateFrom] = useState('');
-  const [dateTo, setDateTo] = useState('');
+  const [dateFrom, setDateFrom] = useState(() => currentMonthRange().from);
+  const [dateTo, setDateTo] = useState(() => currentMonthRange().to);
   const [search, setSearch] = useState('');
 
   const normalizedSearch = search.trim().toLowerCase();

@@ -168,6 +168,7 @@ export function Schedule() {
 
   const [formClient, setFormClient] = useState('');
   const [formService, setFormService] = useState('');
+  const [formServices, setFormServices] = useState<string[]>([]);
   const [formNotes, setFormNotes] = useState('');
   const [formTime, setFormTime] = useState('');
   const [newClientName, setNewClientName] = useState('');
@@ -309,6 +310,12 @@ export function Schedule() {
     setFormService('');
   }, [formService, selectedSlot?.professionalId, serviceProfessionalLinks]);
 
+  useEffect(() => {
+    if (!selectedSlot?.professionalId) return;
+    setFormServices((previous) => previous.filter((serviceId) =>
+      isServiceAvailableForProfessional(serviceProfessionalLinks, selectedSlot.professionalId, serviceId)));
+  }, [selectedSlot?.professionalId, serviceProfessionalLinks]);
+
   const navigateDate = (direction: 'prev' | 'next') => {
     const newDate = new Date(currentDate);
     newDate.setDate(newDate.getDate() + (direction === 'next' ? 1 : -1));
@@ -357,7 +364,10 @@ export function Schedule() {
   }, [clientsById, normalizedScheduleSearch, professionalsById, servicesById]);
 
   const dayAppointments = useMemo(
-    () => scheduleAppointments.filter((appointment) => isSameCalendarDay(new Date(appointment.start_time), currentDate)),
+    () => scheduleAppointments.filter((appointment) =>
+      isSameCalendarDay(new Date(appointment.start_time), currentDate)
+      // Cancelados saem da grade e liberam o horário para novos agendamentos.
+      && appointment.status !== 'cancelled'),
     [currentDate, scheduleAppointments],
   );
 
@@ -432,6 +442,7 @@ export function Schedule() {
     setSelectedSlot({ time, professionalId });
     setFormClient('');
     setFormService('');
+    setFormServices([]);
     setFormNotes('');
     setFormTime(time);
     setIsAddingClient(false);
@@ -440,7 +451,27 @@ export function Schedule() {
   };
 
   const canUseQuickService = isAddingService && !!newServiceName.trim();
-  const canCreateAppointment = !!formClient && !!formTime && (!!formService || canUseQuickService);
+  const canCreateAppointment = !!formClient && !!formTime && (formServices.length > 0 || canUseQuickService);
+
+  const resolveServiceDuration = (serviceId: string) => {
+    const service = servicesById.get(serviceId);
+    if (!service) return 0;
+    if (!selectedSlot?.professionalId) return service.duration_minutes;
+    return getServiceDurationForProfessional(
+      services,
+      serviceProfessionalLinks,
+      selectedSlot.professionalId,
+      serviceId,
+    ) ?? service.duration_minutes;
+  };
+
+  const formServicesDuration = formServices.reduce((sum, serviceId) => sum + resolveServiceDuration(serviceId), 0);
+  const formServicesEndTime = (() => {
+    if (!formTime || formServicesDuration === 0) return '';
+    const [hour, minute] = formTime.split(':').map(Number);
+    const totalMinutes = hour * 60 + minute + formServicesDuration;
+    return `${String(Math.floor(totalMinutes / 60) % 24).padStart(2, '0')}:${String(totalMinutes % 60).padStart(2, '0')}`;
+  })();
 
   const resetQuickServiceForm = () => {
     setIsAddingService(false);
@@ -504,7 +535,7 @@ export function Schedule() {
         }
       }
 
-      setFormService(service.id);
+      setFormServices((previous) => previous.includes(service.id) ? previous : [...previous, service.id]);
       resetQuickServiceForm();
     }
 
@@ -520,50 +551,74 @@ export function Schedule() {
     if (!selectedSlot || !formClient || !formTime) return;
 
     const client = clientsById.get(formClient);
-    let service = servicesById.get(formService);
-    if (!service && canUseQuickService) {
-      service = await createQuickService();
-    }
     const professional = professionalsById.get(selectedSlot.professionalId);
+    if (!client || !professional) return;
 
-    if (!client || !service || !professional) return;
+    let serviceIds = [...formServices];
+    if (serviceIds.length === 0 && canUseQuickService) {
+      const quickService = await createQuickService();
+      if (quickService) serviceIds = [quickService.id];
+    }
+    if (serviceIds.length === 0) return;
 
-    if (!isServiceAvailableForProfessional(serviceProfessionalLinks, professional.id, service.id)) {
+    const selectedServices = serviceIds.flatMap((serviceId) => {
+      const service = servicesById.get(serviceId);
+      return service ? [service] : [];
+    });
+
+    const unavailableService = selectedServices.find(
+      (service) => !isServiceAvailableForProfessional(serviceProfessionalLinks, professional.id, service.id),
+    );
+    if (unavailableService) {
       toast({
         variant: 'destructive',
         title: 'Serviço não permitido',
-        description: `${professional.nickname} não está habilitado para este serviço.`,
+        description: `${professional.nickname} não está habilitado para ${unavailableService.name}.`,
       });
       return;
     }
 
+    // Múltiplos serviços entram em sequência a partir do horário inicial,
+    // reservando na agenda a somatória das durações para o mesmo cliente.
     const [hour, minute] = formTime.split(':').map(Number);
-    const startTime = new Date(currentDate);
-    startTime.setHours(hour, minute, 0, 0);
+    let cursor = new Date(currentDate);
+    cursor.setHours(hour, minute, 0, 0);
 
-    const endTime = new Date(startTime);
-    const resolvedDuration = getServiceDurationForProfessional(
-      services,
-      serviceProfessionalLinks,
-      professional.id,
-      service.id,
-    ) ?? service.duration_minutes;
-    endTime.setMinutes(endTime.getMinutes() + resolvedDuration);
+    let createdCount = 0;
+    for (const service of selectedServices) {
+      const resolvedDuration = getServiceDurationForProfessional(
+        services,
+        serviceProfessionalLinks,
+        professional.id,
+        service.id,
+      ) ?? service.duration_minutes;
 
-    await addAppointment({
-      client_id: client.id,
-      professional_id: professional.id,
-      service_id: service.id,
-      start_time: startTime.toISOString(),
-      end_time: endTime.toISOString(),
-      status: 'scheduled',
-      notes: formNotes,
-      total_value: service.default_price,
-    });
+      const startTime = new Date(cursor);
+      const endTime = new Date(startTime);
+      endTime.setMinutes(endTime.getMinutes() + resolvedDuration);
+
+      const created = await addAppointment({
+        client_id: client.id,
+        professional_id: professional.id,
+        service_id: service.id,
+        start_time: startTime.toISOString(),
+        end_time: endTime.toISOString(),
+        status: 'scheduled',
+        notes: createdCount === 0 ? formNotes : '',
+        total_value: service.default_price,
+      });
+      if (created) createdCount += 1;
+      cursor = endTime;
+    }
 
     await fetchScheduleAppointments(currentDate);
 
-    toast({ title: "Agendamento criado", description: `${client.name} às ${formTime}` });
+    toast({
+      title: "Agendamento criado",
+      description: createdCount > 1
+        ? `${client.name} às ${formTime} — ${createdCount} serviços em sequência até ${formServicesEndTime}`
+        : `${client.name} às ${formTime}`,
+    });
     setIsNewAppointmentOpen(false);
   };
 
@@ -599,7 +654,9 @@ export function Schedule() {
     // inicial ainda não terminou.
     const cashState = await ensureCashSessionState();
 
-    if (cashState.pendingCashSession) {
+    // Admin pode faturar com caixa pendente: o movimento entra na sessão
+    // aberta de data anterior com a data do próprio lançamento.
+    if (cashState.pendingCashSession && !isAdmin) {
       toast({
         variant: "destructive",
         title: "Caixa pendente",
@@ -608,13 +665,20 @@ export function Schedule() {
       return;
     }
 
-    if (!cashState.currentCashSession) {
+    if (!cashState.currentCashSession && !(isAdmin && cashState.pendingCashSession)) {
       toast({
         variant: "destructive",
         title: "Caixa fechado",
         description: "Abra o caixa antes de fechar comandas"
       });
       return;
+    }
+
+    if (isAdmin && cashState.pendingCashSession && !cashState.currentCashSession) {
+      toast({
+        title: "Caixa pendente em uso",
+        description: "A comanda será lançada no caixa aberto de data anterior, com a data de hoje no movimento."
+      });
     }
 
     // Comanda unificada: outros agendamentos em aberto do mesmo cliente no
@@ -640,7 +704,7 @@ export function Schedule() {
 
     const cashState = await ensureCashSessionState();
 
-    if (cashState.pendingCashSession) {
+    if (cashState.pendingCashSession && !isAdmin) {
       toast({
         variant: "destructive",
         title: "Caixa pendente",
@@ -649,7 +713,7 @@ export function Schedule() {
       return;
     }
 
-    if (!cashState.currentCashSession) {
+    if (!cashState.currentCashSession && !(isAdmin && cashState.pendingCashSession)) {
       toast({
         variant: "destructive",
         title: "Caixa fechado",
@@ -699,7 +763,10 @@ export function Schedule() {
         notes,
       });
 
-      if (!transactionId && selectedAppointment.status !== 'completed') {
+      const mainIsTransfer = selectedAppointment.professional_id
+        ? professionalsById.get(selectedAppointment.professional_id)?.settlement_type === 'transfer'
+        : false;
+      if (!transactionId && !mainIsTransfer && selectedAppointment.status !== 'completed') {
         toast({
           variant: "destructive",
           title: "Falha ao fechar comanda",
@@ -720,7 +787,10 @@ export function Schedule() {
             paymentMethodMap[selectedPaymentMethod],
             extraOverrides,
           );
-          if (!extraTransactionId && extra.status !== 'completed') {
+          const extraIsTransfer = extra.professional_id
+            ? professionalsById.get(extra.professional_id)?.settlement_type === 'transfer'
+            : false;
+          if (!extraTransactionId && !extraIsTransfer && extra.status !== 'completed') {
             toast({
               variant: "destructive",
               title: "Comanda fechada com alerta",
@@ -1229,13 +1299,42 @@ export function Schedule() {
             </div>
             <div className="space-y-2">
               <div className="flex items-center justify-between">
-                <Label>Serviço</Label>
+                <Label>Serviços</Label>
                 {!isAddingService && (
                   <Button type="button" variant="ghost" size="sm" className="h-7 text-xs" onClick={() => setIsAddingService(true)}>
                     <Plus className="w-3 h-3 mr-1" />Novo
                   </Button>
                 )}
               </div>
+              {formServices.length > 0 && (
+                <div className="space-y-1">
+                  {formServices.map((serviceId, index) => {
+                    const service = servicesById.get(serviceId);
+                    if (!service) return null;
+                    return (
+                      <div key={serviceId} className="flex items-center justify-between rounded-md bg-secondary/40 px-3 py-2 text-sm">
+                        <span className="truncate">{index + 1}. {service.name}</span>
+                        <div className="flex items-center gap-2 shrink-0">
+                          <span className="text-xs text-muted-foreground">{resolveServiceDuration(serviceId)} min</span>
+                          <Button
+                            type="button"
+                            variant="ghost"
+                            size="sm"
+                            className="h-6 w-6 p-0"
+                            onClick={() => setFormServices((previous) => previous.filter((id) => id !== serviceId))}
+                          >
+                            <X className="w-3 h-3" />
+                          </Button>
+                        </div>
+                      </div>
+                    );
+                  })}
+                  <p className="text-xs text-muted-foreground text-right">
+                    Duração total: {formServicesDuration} min
+                    {formTime && formServicesEndTime ? ` (${formTime} – ${formServicesEndTime})` : ''}
+                  </p>
+                </div>
+              )}
               {isAddingService ? (
                 <div className="p-3 rounded-lg border bg-secondary/30 space-y-2">
                   <Input placeholder="Nome do serviço" value={newServiceName} onChange={(e) => setNewServiceName(e.target.value)} />
@@ -1257,8 +1356,12 @@ export function Schedule() {
                 <Combobox
                   options={serviceOptions}
                   value={formService}
-                  onValueChange={setFormService}
-                  placeholder="Selecione"
+                  onValueChange={(value) => {
+                    if (!value) return;
+                    setFormServices((previous) => previous.includes(value) ? previous : [...previous, value]);
+                    setFormService('');
+                  }}
+                  placeholder={formServices.length > 0 ? 'Adicionar outro serviço...' : 'Selecione'}
                   searchPlaceholder="Buscar serviço..."
                   emptyMessage="Nenhum serviço encontrado."
                   maxVisibleOptions={80}

@@ -125,6 +125,7 @@ export function ProfessionalsList() {
   const [formName, setFormName] = useState('');
   const [formNickname, setFormNickname] = useState('');
   const [formType, setFormType] = useState<'owner' | 'employee' | 'freelancer'>('employee');
+  const [formSettlementType, setFormSettlementType] = useState<'commission' | 'transfer'>('commission');
   const [formSpecialty, setFormSpecialty] = useState('cabeleireira');
   const [formActive, setFormActive] = useState(true);
   const [formHasSchedule, setFormHasSchedule] = useState(true);
@@ -162,6 +163,7 @@ export function ProfessionalsList() {
     setFormName('');
     setFormNickname('');
     setFormType('employee');
+    setFormSettlementType('commission');
     setFormSpecialty('cabeleireira');
     setFormActive(true);
     setFormHasSchedule(true);
@@ -190,6 +192,7 @@ export function ProfessionalsList() {
     setFormName(professional.name);
     setFormNickname(professional.nickname);
     setFormType(professional.type);
+    setFormSettlementType(professional.settlement_type ?? 'commission');
     setFormSpecialty((professional as any).specialty || 'cabeleireira');
     setFormActive(professional.is_active);
     setFormHasSchedule(professional.has_schedule ?? true);
@@ -330,6 +333,7 @@ export function ProfessionalsList() {
           name: formName,
           nickname: formNickname,
           type: formType,
+          settlement_type: formSettlementType,
           specialty: formSpecialty,
           email: formEmail || undefined,
           is_active: formActive,
@@ -344,6 +348,7 @@ export function ProfessionalsList() {
           name: formName,
           nickname: formNickname,
           type: formType,
+          settlement_type: formSettlementType,
           specialty: formSpecialty,
           email: formEmail || undefined,
           user_id: userId,
@@ -703,6 +708,19 @@ export function ProfessionalsList() {
                       {type.label}
                     </SelectItem>
                   ))}
+                </SelectContent>
+              </Select>
+            </div>
+
+            <div className="space-y-2">
+              <Label>Forma de Acerto</Label>
+              <Select value={formSettlementType} onValueChange={(v) => setFormSettlementType(v as 'commission' | 'transfer')}>
+                <SelectTrigger>
+                  <SelectValue />
+                </SelectTrigger>
+                <SelectContent>
+                  <SelectItem value="commission">Comissão — o salão recebe e paga o profissional</SelectItem>
+                  <SelectItem value="transfer">Repasse — o profissional recebe e repassa ao salão</SelectItem>
                 </SelectContent>
               </Select>
             </div>

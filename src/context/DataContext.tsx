@@ -24,6 +24,7 @@ export interface Professional {
   phone?: string;
   email?: string;
   type: 'owner' | 'employee' | 'freelancer';
+  settlement_type?: 'commission' | 'transfer';
   specialty?: string;
   commission_service?: number;
   commission_product?: number;
@@ -1180,7 +1181,9 @@ export const DataProvider: React.FC<{ children: ReactNode }> = ({ children }) =>
   const completeAppointment = async (id: string, paymentMethod: string, overrides?: Partial<Appointment>) => {
     if (!guardModify()) return null;
     if (!guardFinancialPermission(canCloseBill, 'Você não tem permissão para receber e encerrar comandas.')) return null;
-    if (pendingCashSession) {
+    // Admin pode faturar comandas mesmo com caixa pendente de data anterior:
+    // o movimento entra na sessão aberta com a data do próprio lançamento.
+    if (pendingCashSession && !isAdminUser) {
       toast.error('Existe um caixa pendente de data anterior. Regularize o fechamento antes de receber novas comandas.');
       return null;
     }
@@ -1245,11 +1248,18 @@ export const DataProvider: React.FC<{ children: ReactNode }> = ({ children }) =>
       transactionId = persistedPaymentTx?.id;
     }
 
-    if (currentCashSession && !transactionId) {
+    const billingSession = currentCashSession ?? (isAdminUser ? pendingCashSession : null);
+    // Repasse: o cliente paga direto ao profissional (maquininha própria), o
+    // dinheiro não passa pelo caixa do salão — registra-se apenas o repasse a
+    // receber (linha de comissão abaixo), sem transação de entrada.
+    const appointmentProfessional = professionals.find(p => p.id === appointment.professional_id);
+    const isTransferSettlement = appointmentProfessional?.settlement_type === 'transfer';
+
+    if (billingSession && !transactionId && !isTransferSettlement) {
       const { data: txData, error: txError } = await supabase
         .from('transactions')
         .insert({
-          cash_session_id: currentCashSession.id,
+          cash_session_id: billingSession.id,
           type: 'income',
           category: 'service',
           description: `${appointment.service?.name ?? 'Serviço'} - ${appointment.client?.name ?? 'Cliente'}`,
@@ -1603,14 +1613,17 @@ export const DataProvider: React.FC<{ children: ReactNode }> = ({ children }) =>
     const commission = commissions.find(c => c.id === id);
     if (!commission) { toast.error('Comissão não encontrada.'); return; }
     const professional = professionals.find(p => p.id === commission.professional_id);
+    // Repasse: o profissional recebeu na própria maquininha e devolve a
+    // porcentagem do salão — o acerto entra no caixa em vez de sair.
+    const isTransfer = professional?.settlement_type === 'transfer';
     const methodLabel = paymentMethod === 'cash' ? 'Dinheiro' : paymentMethod === 'pix' ? 'PIX' : 'Transferência';
     const { data: txData, error: txError } = await supabase
       .from('transactions')
       .insert({
         cash_session_id: targetSession.id,
-        type: 'expense',
-        category: 'Pagamento de Comissão',
-        description: `Comissão - ${professional?.nickname ?? 'Profissional'} (${methodLabel})`,
+        type: isTransfer ? 'income' : 'expense',
+        category: isTransfer ? 'Recebimento de Repasse' : 'Pagamento de Comissão',
+        description: `${isTransfer ? 'Repasse' : 'Comissão'} - ${professional?.nickname ?? 'Profissional'} (${methodLabel})`,
         amount: Number(commission.commission_value),
         payment_method: paymentMethod === 'transfer' ? 'other' : paymentMethod,
         reference_id: id,
@@ -1620,7 +1633,7 @@ export const DataProvider: React.FC<{ children: ReactNode }> = ({ children }) =>
       })
       .select()
       .single();
-    if (txError) { toast.error('Erro ao registrar pagamento no caixa.'); return; }
+    if (txError) { toast.error(isTransfer ? 'Erro ao registrar recebimento no caixa.' : 'Erro ao registrar pagamento no caixa.'); return; }
     await supabase.from('commissions').update({
       status: 'paid',
       paid_at: new Date().toISOString(),
@@ -1637,7 +1650,7 @@ export const DataProvider: React.FC<{ children: ReactNode }> = ({ children }) =>
       payment_method: paymentMethod,
     } : c));
     setTransactions(prev => [txData as Transaction, ...prev]);
-    toast.success('Comissão paga!');
+    toast.success(isTransfer ? 'Repasse recebido!' : 'Comissão paga!');
   };
 
   // ITEM 1: corrigido — inclui .neq('type', 'voucher') no UPDATE do banco
@@ -1658,14 +1671,15 @@ export const DataProvider: React.FC<{ children: ReactNode }> = ({ children }) =>
     if (pendingCommissions.length === 0) { toast.info('Nenhuma comissão pendente para pagar.'); return; }
     const totalAmount = pendingCommissions.reduce((s, c) => s + Number(c.commission_value), 0);
     const professional = professionals.find(p => p.id === professionalId);
+    const isTransfer = professional?.settlement_type === 'transfer';
     const methodLabel = paymentMethod === 'cash' ? 'Dinheiro' : paymentMethod === 'pix' ? 'PIX' : 'Transferência';
     const { data: txData, error: txError } = await supabase
       .from('transactions')
       .insert({
         cash_session_id: targetSession.id,
-        type: 'expense',
-        category: 'Pagamento de Comissão',
-        description: `Comissões (${pendingCommissions.length}x) - ${professional?.nickname ?? 'Profissional'} (${methodLabel})`,
+        type: isTransfer ? 'income' : 'expense',
+        category: isTransfer ? 'Recebimento de Repasse' : 'Pagamento de Comissão',
+        description: `${isTransfer ? 'Repasses' : 'Comissões'} (${pendingCommissions.length}x) - ${professional?.nickname ?? 'Profissional'} (${methodLabel})`,
         amount: totalAmount,
         payment_method: paymentMethod === 'transfer' ? 'other' : paymentMethod,
         reference_id: professionalId,
@@ -1675,7 +1689,7 @@ export const DataProvider: React.FC<{ children: ReactNode }> = ({ children }) =>
       })
       .select()
       .single();
-    if (txError) { toast.error('Erro ao registrar pagamento no caixa.'); return; }
+    if (txError) { toast.error(isTransfer ? 'Erro ao registrar recebimento no caixa.' : 'Erro ao registrar pagamento no caixa.'); return; }
     // ITEM 1: filtro .neq('type', 'voucher') adicionado para evitar pagar vouchers
     await supabase
       .from('commissions')
@@ -1701,7 +1715,7 @@ export const DataProvider: React.FC<{ children: ReactNode }> = ({ children }) =>
         : c
     ));
     setTransactions(prev => [txData as Transaction, ...prev]);
-    toast.success(`${pendingCommissions.length} comissões pagas!`);
+    toast.success(isTransfer ? `${pendingCommissions.length} repasses recebidos!` : `${pendingCommissions.length} comissões pagas!`);
   };
 
   const addVoucher = async (professionalId: string, amount: number, description?: string) => {
