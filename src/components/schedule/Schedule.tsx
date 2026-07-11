@@ -135,7 +135,7 @@ const normalizeText = (value?: string | null) => {
 };
 
 export function Schedule() {
-  const { clients, professionals, services, products, appointments, loading, addClient, addService, addAppointment, updateAppointment, deleteAppointment, refundAppointment, ensureCashSessionState, completeAppointment } = useData();
+  const { clients, professionals, services, products, appointments, loading, addClient, addService, addAppointment, updateAppointment, deleteAppointment, refundAppointment, ensureCashSessionState, completeAppointment, fetchAppointmentServices, saveAppointmentServices } = useData();
   const { settings: tenantSettings } = useTenantSettings();
   const navigate = useNavigate();
 
@@ -177,6 +177,22 @@ export function Schedule() {
   const [includedExtraIds, setIncludedExtraIds] = useState<string[]>([]);
   const [clientPendingTotal, setClientPendingTotal] = useState(0);
   const [generateCommissionOnPending, setGenerateCommissionOnPending] = useState(true);
+  const [detailServiceLines, setDetailServiceLines] = useState<Array<{ service_id: string; professional_id: string; start_time?: string | null; end_time?: string | null; value: number }>>([]);
+  const [billServiceLines, setBillServiceLines] = useState<Array<{ service_id: string; professional_id: string; value: number }>>([]);
+
+  const openAppointmentDetail = async (appointment: Appointment) => {
+    setSelectedAppointment(appointment);
+    setDetailServiceLines([]);
+    setIsAppointmentDetailOpen(true);
+    const lines = await fetchAppointmentServices(appointment.id);
+    setDetailServiceLines(lines.map((line) => ({
+      service_id: line.service_id,
+      professional_id: line.professional_id,
+      start_time: line.start_time,
+      end_time: line.end_time,
+      value: Number(line.value),
+    })));
+  };
   const [scheduleLoading, setScheduleLoading] = useState(false);
   const [scheduleAppointmentsRaw, setScheduleAppointmentsRaw] = useState<Appointment[]>([]);
   const [serviceProfessionalLinks, setServiceProfessionalLinks] = useState<ServiceProfessional[]>([]);
@@ -593,45 +609,62 @@ export function Schedule() {
       return;
     }
 
-    // Múltiplos serviços entram em sequência a partir do horário inicial,
-    // reservando na agenda a somatória das durações para o mesmo cliente.
+    // Múltiplos serviços entram em sequência a partir do horário inicial num
+    // ÚNICO agendamento: o card guarda o 1º serviço + total somado e reserva a
+    // duração total; cada serviço vira uma linha em appointment_services.
     const [hour, minute] = formTime.split(':').map(Number);
     let cursor = new Date(currentDate);
     cursor.setHours(hour, minute, 0, 0);
 
-    let createdCount = 0;
-    for (const service of selectedServices) {
+    const lines = selectedServices.map((service) => {
       const resolvedDuration = getServiceDurationForProfessional(
         services,
         serviceProfessionalLinks,
         professional.id,
         service.id,
       ) ?? service.duration_minutes;
-
       const startTime = new Date(cursor);
       const endTime = new Date(startTime);
       endTime.setMinutes(endTime.getMinutes() + resolvedDuration);
-
-      const created = await addAppointment({
-        client_id: client.id,
-        professional_id: professional.id,
+      cursor = endTime;
+      return {
         service_id: service.id,
+        professional_id: professional.id,
         start_time: startTime.toISOString(),
         end_time: endTime.toISOString(),
-        status: 'scheduled',
-        notes: createdCount === 0 ? formNotes : '',
-        total_value: service.default_price,
-      });
-      if (created) createdCount += 1;
-      cursor = endTime;
+        value: service.default_price,
+      };
+    });
+
+    const firstLine = lines[0];
+    const lastLine = lines[lines.length - 1];
+    const summedValue = lines.reduce((sum, line) => sum + (line.value || 0), 0);
+
+    const created = await addAppointment({
+      client_id: client.id,
+      professional_id: professional.id,
+      service_id: firstLine.service_id,
+      start_time: firstLine.start_time,
+      end_time: lastLine.end_time,
+      status: 'scheduled',
+      notes: formNotes,
+      total_value: summedValue,
+    });
+
+    if (created && lines.length > 1) {
+      try {
+        await saveAppointmentServices(created.id, lines);
+      } catch {
+        toast({ variant: 'destructive', title: 'Erro', description: 'Agendamento criado, mas houve falha ao salvar os serviços adicionais.' });
+      }
     }
 
     await fetchScheduleAppointments(currentDate);
 
     toast({
       title: "Agendamento criado",
-      description: createdCount > 1
-        ? `${client.name} às ${formTime} — ${createdCount} serviços em sequência até ${formServicesEndTime}`
+      description: lines.length > 1
+        ? `${client.name} às ${formTime} — ${lines.length} serviços até ${formServicesEndTime}`
         : `${client.name} às ${formTime}`,
     });
     setIsNewAppointmentOpen(false);
@@ -645,7 +678,7 @@ export function Schedule() {
     setSelectedAppointment({ ...selectedAppointment, status: newStatus });
   };
 
-  const handleOpenCloseBill = async () => {
+  const handleOpenCloseBill = async (serviceLines?: Array<{ service_id: string; professional_id: string; value: number }>) => {
     if (!canCloseBill) {
       toast({
         variant: "destructive",
@@ -720,8 +753,43 @@ export function Schedule() {
     setClientPendingTotal(pendingTotal);
     setGenerateCommissionOnPending(true);
 
+    // Linhas de serviço da comanda: as passadas pela tela de detalhe (ao vivo),
+    // senão as persistidas, senão o serviço único do agendamento.
+    let liveLines = serviceLines && serviceLines.length > 0
+      ? serviceLines
+      : detailServiceLines.map((line) => ({
+          service_id: line.service_id,
+          professional_id: line.professional_id,
+          value: line.value,
+        }));
+    if (liveLines.length === 0 && selectedAppointment?.service_id && selectedAppointment.professional_id) {
+      liveLines = [{
+        service_id: selectedAppointment.service_id,
+        professional_id: selectedAppointment.professional_id,
+        value: selectedAppointment.total_value || 0,
+      }];
+    }
+
+    // 1ª linha vira o serviço principal (valor editável); as demais entram como
+    // itens adicionais da comanda, com a somatória calculada pelo editor.
+    const baseLine = liveLines[0];
+    const extraLines = liveLines.slice(1);
+    setEditValue(baseLine ? String(baseLine.value) : (selectedAppointment?.total_value?.toString() || ''));
+    setBillServiceLines(liveLines);
+    setBillItems(extraLines.map((line) => {
+      const service = servicesById.get(line.service_id);
+      return {
+        id: crypto.randomUUID(),
+        type: 'service' as const,
+        name: service?.name ?? 'Serviço',
+        quantity: 1,
+        unitPrice: line.value,
+        total: line.value,
+        serviceId: line.service_id,
+      };
+    }));
+
     setSelectedPaymentMethod('');
-    setBillItems([]); // Reset additional items
     setIsClosingBill(true);
   };
 
@@ -786,10 +854,24 @@ export function Schedule() {
 
       const skipCommission = selectedPaymentMethod === 'pending' && !generateCommissionOnPending;
 
+      // Comissão por linha: a 1ª usa o valor base editado; as demais usam o
+      // valor atual do item correspondente na comanda (sincroniza com a cobrança).
+      const commissionLines = billServiceLines.map((line, index) => {
+        if (index === 0) {
+          return { service_id: line.service_id, professional_id: line.professional_id, value: baseValue };
+        }
+        const matchingItem = billItems.find((item) => item.type === 'service' && item.serviceId === line.service_id);
+        return {
+          service_id: line.service_id,
+          professional_id: line.professional_id,
+          value: matchingItem ? matchingItem.total : line.value,
+        };
+      });
+
       const transactionId = await completeAppointment(selectedAppointment.id, paymentMethodMap[selectedPaymentMethod], {
         total_value: mainTotal,
         notes,
-      }, { skipCommission });
+      }, { skipCommission, commissionLines: commissionLines.length > 0 ? commissionLines : undefined });
 
       const mainIsTransfer = selectedAppointment.professional_id
         ? professionalsById.get(selectedAppointment.professional_id)?.settlement_type === 'transfer'
@@ -1223,8 +1305,7 @@ export function Schedule() {
                                           }}
                                           onClick={(e) => {
                                             e.stopPropagation();
-                                            setSelectedAppointment(appointment);
-                                            setIsAppointmentDetailOpen(true);
+                                            void openAppointmentDetail(appointment);
                                           }}
                                         >
                                           <div className="flex flex-col h-full overflow-hidden">
@@ -1415,6 +1496,7 @@ export function Schedule() {
         onOpenChange={setIsAppointmentDetailOpen}
         appointment={selectedAppointment}
         appointments={scheduleAppointments}
+        initialServiceLines={detailServiceLines}
         professionals={scheduleProfessionals}
         services={services}
         serviceProfessionalLinks={serviceProfessionalLinks}
@@ -1427,36 +1509,52 @@ export function Schedule() {
         onSave={async (data) => {
           if (!canEditSchedule) return;
           if (!selectedAppointment) return;
+
+          // Todas as linhas de serviço (principal + adicionais) do mesmo card.
+          const allLines = [
+            {
+              service_id: data.service_id,
+              professional_id: data.professional_id,
+              start_time: data.start_time,
+              end_time: data.end_time,
+              value: data.total_value,
+            },
+            ...(data.additionalServices ?? []).map((extra) => ({
+              service_id: extra.service_id,
+              professional_id: extra.professional_id,
+              start_time: extra.start_time,
+              end_time: extra.end_time,
+              value: extra.total_value,
+            })),
+          ];
+          const lastLine = allLines[allLines.length - 1];
+          const summedValue = allLines.reduce((sum, line) => sum + (line.value || 0), 0);
+
+          // O card guarda o 1º serviço + total somado; as linhas ficam na tabela
+          // appointment_services (só grava linhas extras quando há mais de uma).
           await updateAppointment(selectedAppointment.id, {
-            total_value: data.total_value,
+            total_value: summedValue,
             professional_id: data.professional_id,
             service_id: data.service_id,
             start_time: data.start_time,
-            end_time: data.end_time,
+            end_time: lastLine.end_time,
             notes: data.notes,
           });
 
-          // Serviços adicionais viram agendamentos-irmãos do mesmo cliente/dia.
-          const additionalServices = data.additionalServices ?? [];
-          let createdExtras = 0;
-          for (const extra of additionalServices) {
-            const created = await addAppointment({
-              client_id: selectedAppointment.client_id,
-              professional_id: extra.professional_id,
-              service_id: extra.service_id,
-              start_time: extra.start_time,
-              end_time: extra.end_time,
-              status: 'scheduled',
-              notes: '',
-              total_value: extra.total_value,
-            });
-            if (created) createdExtras += 1;
+          try {
+            await saveAppointmentServices(
+              selectedAppointment.id,
+              allLines.length > 1 ? allLines : [],
+            );
+          } catch {
+            toast({ variant: 'destructive', title: 'Erro', description: 'Não foi possível salvar todos os serviços do agendamento.' });
+            return;
           }
 
           await fetchScheduleAppointments(currentDate);
           toast({
             title: "Agendamento atualizado",
-            description: createdExtras > 0 ? `${createdExtras} serviço(s) adicional(is) incluído(s) na agenda.` : undefined,
+            description: allLines.length > 1 ? `${allLines.length} serviços salvos neste agendamento.` : undefined,
           });
           setIsAppointmentDetailOpen(false);
         }}

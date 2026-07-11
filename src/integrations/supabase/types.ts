@@ -14,6 +14,53 @@ export type Database = {
   }
   public: {
     Tables: {
+      appointment_services: {
+        Row: {
+          appointment_id: string
+          created_at: string
+          end_time: string | null
+          id: string
+          position: number
+          professional_id: string
+          service_id: string
+          start_time: string | null
+          tenant_id: string
+          value: number
+        }
+        Insert: {
+          appointment_id: string
+          created_at?: string
+          end_time?: string | null
+          id?: string
+          position?: number
+          professional_id: string
+          service_id: string
+          start_time?: string | null
+          tenant_id: string
+          value?: number
+        }
+        Update: {
+          appointment_id?: string
+          created_at?: string
+          end_time?: string | null
+          id?: string
+          position?: number
+          professional_id?: string
+          service_id?: string
+          start_time?: string | null
+          tenant_id?: string
+          value?: number
+        }
+        Relationships: [
+          {
+            foreignKeyName: "appointment_services_appointment_id_fkey"
+            columns: ["appointment_id"]
+            isOneToOne: false
+            referencedRelation: "appointments"
+            referencedColumns: ["id"]
+          },
+        ]
+      }
       appointments: {
         Row: {
           booking_source: string

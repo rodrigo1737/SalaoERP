@@ -79,6 +79,13 @@ interface AppointmentDetailDialogProps {
   onOpenChange: (open: boolean) => void;
   appointment: Appointment | null;
   appointments: Appointment[];
+  initialServiceLines?: Array<{
+    service_id: string;
+    professional_id: string;
+    start_time?: string | null;
+    end_time?: string | null;
+    value: number;
+  }>;
   professionals: Professional[];
   services: Service[];
   serviceProfessionalLinks: ServiceProfessional[];
@@ -103,7 +110,7 @@ interface AppointmentDetailDialogProps {
       total_value: number;
     }>;
   }) => void;
-  onOpenCloseBill: () => void;
+  onOpenCloseBill: (serviceLines?: Array<{ service_id: string; professional_id: string; value: number }>) => void;
   onRefund: () => void;
   onDelete: () => void;
 }
@@ -162,6 +169,7 @@ export function AppointmentDetailDialog({
   onOpenChange,
   appointment,
   appointments,
+  initialServiceLines,
   professionals,
   services,
   serviceProfessionalLinks,
@@ -217,19 +225,41 @@ export function AppointmentDetailDialog({
       setSelectedDate(start);
       setNotes(appointment.notes || '');
       setSelectedStatus(appointment.status);
-      
-      // Set main service row
-      setServiceRows([{
-        id: 'main',
-        serviceId: appointment.service_id || '',
-        professionalId: appointment.professional_id || '',
-        duration: durationMinutes.toString(),
-        startTime: format(start, 'HH:mm'),
-        endTime: format(end, 'HH:mm'),
-        value: appointment.total_value?.toString() || '',
-      }]);
+
+      // Múltiplos serviços persistidos → uma linha por serviço; senão, a linha
+      // única a partir do próprio agendamento (compatível com registros antigos).
+      if (initialServiceLines && initialServiceLines.length > 0) {
+        setServiceRows(initialServiceLines.map((line, index) => {
+          const lineStart = line.start_time && isValidDateValue(line.start_time)
+            ? new Date(line.start_time)
+            : start;
+          const lineEnd = line.end_time && isValidDateValue(line.end_time)
+            ? new Date(line.end_time)
+            : new Date(lineStart.getTime() + 30 * 60 * 1000);
+          const lineDuration = Math.max(1, Math.round((lineEnd.getTime() - lineStart.getTime()) / (1000 * 60)));
+          return {
+            id: index === 0 ? 'main' : (crypto.randomUUID?.() ?? `line-${index}`),
+            serviceId: line.service_id || '',
+            professionalId: line.professional_id || '',
+            duration: lineDuration.toString(),
+            startTime: format(lineStart, 'HH:mm'),
+            endTime: format(lineEnd, 'HH:mm'),
+            value: line.value?.toString() || '',
+          };
+        }));
+      } else {
+        setServiceRows([{
+          id: 'main',
+          serviceId: appointment.service_id || '',
+          professionalId: appointment.professional_id || '',
+          duration: durationMinutes.toString(),
+          startTime: format(start, 'HH:mm'),
+          endTime: format(end, 'HH:mm'),
+          value: appointment.total_value?.toString() || '',
+        }]);
+      }
     }
-  }, [appointment]);
+  }, [appointment, initialServiceLines]);
 
   // Calculate end time based on start time and duration for a specific row
   const calculateEndTime = (startTime: string, duration: string): string => {
@@ -518,13 +548,16 @@ export function AppointmentDetailDialog({
               {canCloseBill && canOpenBill && (
                 <Button
                   onClick={() => {
-                    // Serviços adicionais precisam estar salvos como agendamentos
-                    // antes de abrir a comanda — senão não entram na cobrança.
-                    if (serviceRows.length > 1) {
-                      toast.warning('Salve os serviços adicionais antes de abrir a comanda: clique em "Salvar" e reabra a comanda.');
-                      return;
-                    }
-                    onOpenCloseBill();
+                    // Leva as linhas atuais (serviço, profissional, valor) para a
+                    // comanda — inclusive alterações ainda não salvas.
+                    const lines = serviceRows
+                      .filter((row) => row.serviceId && row.professionalId)
+                      .map((row) => ({
+                        service_id: row.serviceId,
+                        professional_id: row.professionalId,
+                        value: parseFloat(row.value) || 0,
+                      }));
+                    onOpenCloseBill(lines);
                   }}
                   disabled={appointment.status === 'completed' || appointment.status === 'cancelled'}
                   className="bg-success hover:bg-success/90 text-success-foreground"

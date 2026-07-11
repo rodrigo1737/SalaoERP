@@ -107,6 +107,23 @@ export interface Appointment {
   service?: Service;
 }
 
+// Linha de serviço de um agendamento (múltiplos serviços por card).
+export interface AppointmentServiceLine {
+  service_id: string;
+  professional_id: string;
+  start_time?: string | null;
+  end_time?: string | null;
+  value: number;
+}
+
+export interface AppointmentServiceRow extends AppointmentServiceLine {
+  id: string;
+  appointment_id: string;
+  tenant_id: string;
+  position: number;
+  created_at: string;
+}
+
 export interface CashSession {
   id: string;
   opened_at: string;
@@ -203,8 +220,10 @@ interface DataContextType {
     id: string,
     paymentMethod: string,
     overrides?: Partial<Appointment>,
-    options?: { skipCommission?: boolean },
+    options?: { skipCommission?: boolean; commissionLines?: AppointmentServiceLine[] },
   ) => Promise<string | null>;
+  fetchAppointmentServices: (appointmentId: string) => Promise<AppointmentServiceRow[]>;
+  saveAppointmentServices: (appointmentId: string, lines: AppointmentServiceLine[]) => Promise<void>;
   // Cash
   openCashSession: (openingBalance: number) => Promise<CashSession | null>;
   closeCashSession: (
@@ -1197,12 +1216,58 @@ export const DataProvider: React.FC<{ children: ReactNode }> = ({ children }) =>
     toast.success('Pagamento estornado e comanda reaberta com sucesso.');
   };
 
+  // ── APPOINTMENT SERVICES (múltiplos serviços por agendamento) ────────────
+  const fetchAppointmentServices = async (appointmentId: string): Promise<AppointmentServiceRow[]> => {
+    if (!tenantId) return [];
+    const { data, error } = await supabase
+      .from('appointment_services')
+      .select('*')
+      .eq('tenant_id', tenantId)
+      .eq('appointment_id', appointmentId)
+      .order('position', { ascending: true });
+    if (error) {
+      console.error('Erro ao carregar serviços do agendamento:', error);
+      return [];
+    }
+    return (data as AppointmentServiceRow[]) ?? [];
+  };
+
+  const saveAppointmentServices = async (appointmentId: string, lines: AppointmentServiceLine[]) => {
+    if (!tenantId) return;
+    // Substitui o conjunto de linhas do agendamento (delete + insert).
+    const { error: deleteError } = await supabase
+      .from('appointment_services')
+      .delete()
+      .eq('tenant_id', tenantId)
+      .eq('appointment_id', appointmentId);
+    if (deleteError) {
+      console.error('Erro ao limpar serviços do agendamento:', deleteError);
+      throw deleteError;
+    }
+    if (lines.length === 0) return;
+    const payload = lines.map((line, index) => ({
+      tenant_id: tenantId,
+      appointment_id: appointmentId,
+      service_id: line.service_id,
+      professional_id: line.professional_id,
+      start_time: line.start_time ?? null,
+      end_time: line.end_time ?? null,
+      value: line.value,
+      position: index,
+    }));
+    const { error: insertError } = await supabase.from('appointment_services').insert(payload);
+    if (insertError) {
+      console.error('Erro ao salvar serviços do agendamento:', insertError);
+      throw insertError;
+    }
+  };
+
   // ITEM 3: completeAppointment com tratamento de erros e rollback parcial
   const completeAppointment = async (
     id: string,
     paymentMethod: string,
     overrides?: Partial<Appointment>,
-    options?: { skipCommission?: boolean },
+    options?: { skipCommission?: boolean; commissionLines?: AppointmentServiceLine[] },
   ) => {
     if (!guardModify()) return null;
     if (!guardFinancialPermission(canCloseBill, 'Você não tem permissão para receber e encerrar comandas.')) return null;
@@ -1307,38 +1372,54 @@ export const DataProvider: React.FC<{ children: ReactNode }> = ({ children }) =>
       }
     }
 
-    if (appointment.professional_id && appointment.total_value && appointment.service_id && !existingCommission?.id && !options?.skipCommission) {
-      const { data: spData } = await supabase
-        .from('service_professionals')
-        .select('commission_rate')
-        .eq('service_id', appointment.service_id)
-        .eq('professional_id', appointment.professional_id)
-        .eq('tenant_id', tenantId)
-        .maybeSingle();
+    // Linhas de comissão: quando a comanda tem vários serviços, cada linha
+    // gera comissão para o profissional que a executou. Sem linhas explícitas,
+    // usa o serviço único do agendamento (comportamento legado).
+    const commissionLines: AppointmentServiceLine[] = options?.commissionLines?.length
+      ? options.commissionLines
+      : (appointment.professional_id && appointment.service_id && appointment.total_value
+          ? [{
+              service_id: appointment.service_id,
+              professional_id: appointment.professional_id,
+              value: appointment.total_value,
+            }]
+          : []);
 
-      // ITEM 20: aviso explícito quando usando comissão padrão
-      const usingDefault = !spData;
-      const commissionRate = spData?.commission_rate ?? 50;
-      if (usingDefault) {
-        toast.warning(`Comissão padrão de 50% aplicada (profissional sem tabela para este serviço).`);
+    if (commissionLines.length > 0 && !existingCommission?.id && !options?.skipCommission) {
+      let usedDefaultRate = false;
+      for (const line of commissionLines) {
+        if (!line.professional_id || !line.service_id || !line.value) continue;
+        const { data: spData } = await supabase
+          .from('service_professionals')
+          .select('commission_rate')
+          .eq('service_id', line.service_id)
+          .eq('professional_id', line.professional_id)
+          .eq('tenant_id', tenantId)
+          .maybeSingle();
+
+        const commissionRate = spData?.commission_rate ?? 50;
+        if (!spData) usedDefaultRate = true;
+
+        const commissionValue = (line.value * commissionRate) / 100;
+        const { error: commError } = await supabase.from('commissions').insert({
+          professional_id: line.professional_id,
+          appointment_id: id,
+          transaction_id: transactionId,
+          type: 'service',
+          base_value: line.value,
+          commission_rate: commissionRate,
+          commission_value: commissionValue,
+          status: 'pending',
+          tenant_id: tenantId,
+          ...(movementTimestamp ? { created_at: movementTimestamp } : {}),
+        });
+
+        if (commError) {
+          toast.warning('Atendimento finalizado, mas houve erro ao registrar comissão. Verifique manualmente.');
+        }
       }
-
-      const commissionValue = (appointment.total_value * commissionRate) / 100;
-      const { error: commError } = await supabase.from('commissions').insert({
-        professional_id: appointment.professional_id,
-        appointment_id: id,
-        transaction_id: transactionId,
-        type: 'service',
-        base_value: appointment.total_value,
-        commission_rate: commissionRate,
-        commission_value: commissionValue,
-        status: 'pending',
-        tenant_id: tenantId,
-        ...(movementTimestamp ? { created_at: movementTimestamp } : {}),
-      });
-
-      if (commError) {
-        toast.warning('Atendimento finalizado, mas houve erro ao registrar comissão. Verifique manualmente.');
+      if (usedDefaultRate) {
+        toast.warning('Comissão padrão de 50% aplicada em algum serviço (profissional sem tabela para o serviço).');
       }
     }
 
@@ -1819,6 +1900,7 @@ export const DataProvider: React.FC<{ children: ReactNode }> = ({ children }) =>
       addService, updateService, deleteService,
       addProduct, updateProduct, deleteProduct, updateProductStock,
       addAppointment, updateAppointment, deleteAppointment, refundAppointment, completeAppointment,
+      fetchAppointmentServices, saveAppointmentServices,
       openCashSession, closeCashSession, addTransaction, reverseTransaction,
       payCommission, payAllCommissions, addVoucher,
     }}>
