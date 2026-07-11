@@ -98,10 +98,12 @@ export function Commissions() {
     };
   }, [startDate, endDate]);
 
-  // Refresh data when window gains focus (catches updates from other users)
+  // Refresh data when window gains focus (catches updates from other users).
+  // Somente comissões: o refresh completo recarregava todas as entidades
+  // (transações inteiras inclusive) e travava a tela.
   useEffect(() => {
     const handleFocus = () => {
-      refreshData();
+      refreshData(['commissions']);
     };
     window.addEventListener('focus', handleFocus);
     return () => window.removeEventListener('focus', handleFocus);
@@ -109,7 +111,7 @@ export function Commissions() {
 
   const handleManualRefresh = useCallback(async () => {
     setIsRefreshing(true);
-    await refreshData();
+    await refreshData(['professionals', 'commissions']);
     setIsRefreshing(false);
   }, [refreshData]);
 
@@ -140,6 +142,18 @@ export function Commissions() {
     const matchesStatus = statusFilter === 'all' || comm.status === statusFilter;
     return matchesProfessional && matchesStatus;
   });
+
+  const professionalsById = useMemo(
+    () => new Map(professionals.map((professional) => [professional.id, professional])),
+    [professionals],
+  );
+
+  // Renderização incremental: listas grandes travavam a página.
+  const [visibleCount, setVisibleCount] = useState(50);
+  useEffect(() => {
+    setVisibleCount(50);
+  }, [professionalFilter, statusFilter, startDate, endDate]);
+  const visibleFilteredCommissions = filteredCommissions.slice(0, visibleCount);
 
   // Filter professionals for display - professionals only see themselves
   const visibleProfessionals = useMemo(() => (
@@ -471,12 +485,12 @@ export function Commissions() {
             </h2>
             
             <div className="space-y-3">
-              {filteredCommissions.map((commission, index) => (
+              {visibleFilteredCommissions.map((commission, index) => (
                 <motion.div
                   key={commission.id}
                   initial={{ opacity: 0, x: -20 }}
                   animate={{ opacity: 1, x: 0 }}
-                  transition={{ delay: index * 0.03 }}
+                  transition={{ delay: Math.min(index * 0.03, 0.4) }}
                   className="flex items-center justify-between p-4 rounded-xl bg-secondary/30"
                 >
                   <div className="flex items-center gap-4">
@@ -563,19 +577,27 @@ export function Commissions() {
                         onClick={() => openPaySingleDialog(commission.id)}
                         disabled={isSubmitting}
                       >
-                        {professionals.find(p => p.id === commission.professional_id)?.settlement_type === 'transfer' ? 'Receber' : 'Pagar'}
+                        {professionalsById.get(commission.professional_id)?.settlement_type === 'transfer' ? 'Receber' : 'Pagar'}
                       </Button>
                     )}
 
                     {commission.type !== 'voucher' && commission.status === 'paid' && (
                       <Badge variant="success">
-                        {professionals.find(p => p.id === commission.professional_id)?.settlement_type === 'transfer' ? 'Recebido' : 'Pago'}
+                        {professionalsById.get(commission.professional_id)?.settlement_type === 'transfer' ? 'Recebido' : 'Pago'}
                       </Badge>
                     )}
                   </div>
                 </motion.div>
               ))}
             </div>
+
+            {filteredCommissions.length > visibleCount && (
+              <div className="mt-4 text-center">
+                <Button variant="outline" onClick={() => setVisibleCount((count) => count + 100)}>
+                  Mostrar mais ({filteredCommissions.length - visibleCount} restantes)
+                </Button>
+              </div>
+            )}
           </Card>
         </>
       )}

@@ -255,8 +255,11 @@ export function Dashboard({ onNavigate }: DashboardProps) {
             professional: { nickname: row.assignee_name_snapshot },
           })) as DashboardAppointment[]));
         } else {
+          // Receita/despesa vêm das transações do caixa — mesma base da tela
+          // de Gestão Financeira — para os números baterem entre as telas.
           const [
             todayRevenueResponse,
+            todayExpenseResponse,
             todayAppointmentsResponse,
             monthRevenueResponse,
             upcomingResponse,
@@ -264,13 +267,19 @@ export function Dashboard({ onNavigate }: DashboardProps) {
             clientsCountResponse,
           ] = await Promise.all([
             supabase
-              .from('appointments')
-              .select('total_value')
+              .from('transactions')
+              .select('amount')
               .eq('tenant_id', tenantId)
-              .is('deleted_at', null)
-              .eq('status', 'completed')
-              .gte('start_time', todayStart.toISOString())
-              .lte('start_time', todayEnd.toISOString()),
+              .eq('type', 'income')
+              .gte('created_at', todayStart.toISOString())
+              .lte('created_at', todayEnd.toISOString()),
+            supabase
+              .from('transactions')
+              .select('amount')
+              .eq('tenant_id', tenantId)
+              .eq('type', 'expense')
+              .gte('created_at', todayStart.toISOString())
+              .lte('created_at', todayEnd.toISOString()),
             supabase
               .from('appointments')
               .select('id', { count: 'exact', head: true })
@@ -280,13 +289,12 @@ export function Dashboard({ onNavigate }: DashboardProps) {
               .gte('start_time', todayStart.toISOString())
               .lte('start_time', todayEnd.toISOString()),
             supabase
-              .from('appointments')
-              .select('total_value')
+              .from('transactions')
+              .select('amount')
               .eq('tenant_id', tenantId)
-              .is('deleted_at', null)
-              .eq('status', 'completed')
-              .gte('start_time', monthStart.toISOString())
-              .lte('start_time', todayEnd.toISOString()),
+              .eq('type', 'income')
+              .gte('created_at', monthStart.toISOString())
+              .lte('created_at', todayEnd.toISOString()),
             supabase
               .from('appointments')
               .select(`
@@ -322,8 +330,9 @@ export function Dashboard({ onNavigate }: DashboardProps) {
 
           if (cancelled) return;
 
-          const todayRevenue = (todayRevenueResponse.data || []).reduce((sum, item) => sum + Number(item.total_value || 0), 0);
-          const monthRevenue = (monthRevenueResponse.data || []).reduce((sum, item) => sum + Number(item.total_value || 0), 0);
+          const todayRevenue = (todayRevenueResponse.data || []).reduce((sum, item) => sum + Number(item.amount || 0), 0);
+          const todayExpense = (todayExpenseResponse.data || []).reduce((sum, item) => sum + Number(item.amount || 0), 0);
+          const monthRevenue = (monthRevenueResponse.data || []).reduce((sum, item) => sum + Number(item.amount || 0), 0);
           const activeClients = new Set((activeClientsResponse.data || []).map((item) => item.client_id).filter(Boolean)).size;
 
           setDashboardStats({
@@ -332,8 +341,8 @@ export function Dashboard({ onNavigate }: DashboardProps) {
             clientsCount: clientsCountResponse.count || 0,
             activeClients,
             monthRevenue,
-            todayExpense: 0,
-            todayNetBalance: todayRevenue,
+            todayExpense,
+            todayNetBalance: todayRevenue - todayExpense,
             cashSessionIncome: 0,
             cashSessionExpense: 0,
             cashSessionBalance: 0,

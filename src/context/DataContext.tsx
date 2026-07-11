@@ -199,7 +199,12 @@ interface DataContextType {
   updateAppointment: (id: string, data: Partial<Appointment>) => Promise<void>;
   deleteAppointment: (id: string) => Promise<void>;
   refundAppointment: (id: string) => Promise<void>;
-  completeAppointment: (id: string, paymentMethod: string, overrides?: Partial<Appointment>) => Promise<string | null>;
+  completeAppointment: (
+    id: string,
+    paymentMethod: string,
+    overrides?: Partial<Appointment>,
+    options?: { skipCommission?: boolean },
+  ) => Promise<string | null>;
   // Cash
   openCashSession: (openingBalance: number) => Promise<CashSession | null>;
   closeCashSession: (
@@ -1193,7 +1198,12 @@ export const DataProvider: React.FC<{ children: ReactNode }> = ({ children }) =>
   };
 
   // ITEM 3: completeAppointment com tratamento de erros e rollback parcial
-  const completeAppointment = async (id: string, paymentMethod: string, overrides?: Partial<Appointment>) => {
+  const completeAppointment = async (
+    id: string,
+    paymentMethod: string,
+    overrides?: Partial<Appointment>,
+    options?: { skipCommission?: boolean },
+  ) => {
     if (!guardModify()) return null;
     if (!guardFinancialPermission(canCloseBill, 'Você não tem permissão para receber e encerrar comandas.')) return null;
     // Admin pode faturar comandas mesmo com caixa pendente de data anterior:
@@ -1297,7 +1307,7 @@ export const DataProvider: React.FC<{ children: ReactNode }> = ({ children }) =>
       }
     }
 
-    if (appointment.professional_id && appointment.total_value && appointment.service_id && !existingCommission?.id) {
+    if (appointment.professional_id && appointment.total_value && appointment.service_id && !existingCommission?.id && !options?.skipCommission) {
       const { data: spData } = await supabase
         .from('service_professionals')
         .select('commission_rate')

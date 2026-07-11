@@ -93,6 +93,19 @@ const getTimeFromISO = (isoString: string) => {
   return `${date.getHours().toString().padStart(2, '0')}:${date.getMinutes().toString().padStart(2, '0')}`;
 };
 
+// Pendências de comandas anteriores ficam marcadas nas observações do
+// agendamento como "[PENDENTE: R$valor]" (convenção do fechamento pendente).
+const PENDING_TAG_REGEX = /\[PENDENTE: R\$\s*([\d]+(?:[.,]\d{1,2})?)\]/g;
+
+const sumPendingTags = (notes?: string | null) => {
+  if (!notes) return 0;
+  let total = 0;
+  for (const match of notes.matchAll(PENDING_TAG_REGEX)) {
+    total += parseFloat(match[1].replace(',', '.')) || 0;
+  }
+  return total;
+};
+
 const isSameCalendarDay = (first: Date, second: Date) => {
   return first.getFullYear() === second.getFullYear()
     && first.getMonth() === second.getMonth()
@@ -122,7 +135,7 @@ const normalizeText = (value?: string | null) => {
 };
 
 export function Schedule() {
-  const { clients, professionals, services, products, loading, addClient, addService, addAppointment, updateAppointment, deleteAppointment, refundAppointment, ensureCashSessionState, completeAppointment } = useData();
+  const { clients, professionals, services, products, appointments, loading, addClient, addService, addAppointment, updateAppointment, deleteAppointment, refundAppointment, ensureCashSessionState, completeAppointment } = useData();
   const { settings: tenantSettings } = useTenantSettings();
   const navigate = useNavigate();
 
@@ -162,6 +175,8 @@ export function Schedule() {
   const [billItems, setBillItems] = useState<BillItem[]>([]);
   const [extraSameDayAppointments, setExtraSameDayAppointments] = useState<Appointment[]>([]);
   const [includedExtraIds, setIncludedExtraIds] = useState<string[]>([]);
+  const [clientPendingTotal, setClientPendingTotal] = useState(0);
+  const [generateCommissionOnPending, setGenerateCommissionOnPending] = useState(true);
   const [scheduleLoading, setScheduleLoading] = useState(false);
   const [scheduleAppointmentsRaw, setScheduleAppointmentsRaw] = useState<Appointment[]>([]);
   const [serviceProfessionalLinks, setServiceProfessionalLinks] = useState<ServiceProfessional[]>([]);
@@ -694,6 +709,17 @@ export function Schedule() {
     setExtraSameDayAppointments(extras);
     setIncludedExtraIds(extras.map((appointment) => appointment.id));
 
+    // Pendências de comandas anteriores do cliente (todas as datas).
+    const pendingTotal = selectedAppointment?.client_id
+      ? appointments
+          .filter((appointment) =>
+            appointment.client_id === selectedAppointment.client_id
+            && appointment.id !== selectedAppointment.id)
+          .reduce((sum, appointment) => sum + sumPendingTags(appointment.notes), 0)
+      : 0;
+    setClientPendingTotal(pendingTotal);
+    setGenerateCommissionOnPending(true);
+
     setSelectedPaymentMethod('');
     setBillItems([]); // Reset additional items
     setIsClosingBill(true);
@@ -758,10 +784,12 @@ export function Schedule() {
         pending: 'other'
       };
 
+      const skipCommission = selectedPaymentMethod === 'pending' && !generateCommissionOnPending;
+
       const transactionId = await completeAppointment(selectedAppointment.id, paymentMethodMap[selectedPaymentMethod], {
         total_value: mainTotal,
         notes,
-      });
+      }, { skipCommission });
 
       const mainIsTransfer = selectedAppointment.professional_id
         ? professionalsById.get(selectedAppointment.professional_id)?.settlement_type === 'transfer'
@@ -786,6 +814,7 @@ export function Schedule() {
             extra.id,
             paymentMethodMap[selectedPaymentMethod],
             extraOverrides,
+            { skipCommission },
           );
           const extraIsTransfer = extra.professional_id
             ? professionalsById.get(extra.professional_id)?.settlement_type === 'transfer'
@@ -1115,7 +1144,7 @@ export function Schedule() {
                           </Avatar>
                           <div className="min-w-0">
                             <p className="truncate text-sm font-medium text-foreground">{professional.nickname || professional.name}</p>
-                            <p className="text-[11px] text-muted-foreground capitalize">{professional.type}</p>
+                            <p className="truncate text-[11px] text-muted-foreground capitalize">{professional.specialty || ''}</p>
                           </div>
                         </div>
                       </div>
@@ -1436,6 +1465,17 @@ export function Schedule() {
             </DialogDescription>
           </DialogHeader>
           <div className="space-y-4 py-4">
+            {clientPendingTotal > 0 && (
+              <div className="rounded-lg border border-warning/40 bg-warning-soft/40 p-3 text-sm">
+                <p className="font-medium text-warning">
+                  Cliente possui pendências anteriores: R$ {clientPendingTotal.toFixed(2)}
+                </p>
+                <p className="text-xs text-muted-foreground">
+                  Valores de comandas fechadas como "Pendente". Considere cobrar junto com esta comanda.
+                </p>
+              </div>
+            )}
+
             {/* Bill Items Editor */}
             <BillItemsEditor
               items={billItems}
@@ -1565,9 +1605,24 @@ export function Schedule() {
                 </Button>
               </div>
               {selectedPaymentMethod === 'pending' && (
-                <p className="text-xs text-warning text-center mt-2">
-                  O valor será acumulado como pendente para este cliente
-                </p>
+                <div className="mt-2 space-y-2">
+                  <p className="text-xs text-warning text-center">
+                    O valor será acumulado como pendente para este cliente
+                  </p>
+                  <label className="flex items-center gap-2 rounded-lg border border-border bg-secondary/30 px-3 py-2 cursor-pointer">
+                    <Checkbox
+                      checked={generateCommissionOnPending}
+                      disabled={isSubmittingBill}
+                      onCheckedChange={(checked) => setGenerateCommissionOnPending(Boolean(checked))}
+                    />
+                    <div className="text-sm">
+                      <p className="font-medium">Gerar comissão do profissional mesmo com pendência</p>
+                      <p className="text-xs text-muted-foreground">
+                        Desmarque para não gerar a comissão agora — ela não será criada para esta comanda.
+                      </p>
+                    </div>
+                  </label>
+                </div>
               )}
             </div>
 
