@@ -23,6 +23,10 @@ import { Input } from '@/components/ui/input';
 import { useData, CashSession, Transaction } from '@/context/DataContext';
 import { useAuth } from '@/contexts/AuthContext';
 import { cn } from '@/lib/utils';
+import {
+  getSettlementPaidLabel,
+  normalizeCommissionSettlementKind,
+} from '@/lib/commissionSettlement';
 
 interface CashHistoryProps {
   onBack?: () => void;
@@ -186,8 +190,18 @@ export function CashHistory({ onBack }: CashHistoryProps) {
       if (!normalizedSearch) return true;
 
       const professionalName = commission.professional?.nickname ?? commission.professional?.name ?? '';
-      const typeLabel = commission.type === 'voucher' ? 'vale' : 'comissão';
-      return [professionalName, typeLabel, commission.status].join(' ').toLowerCase().includes(normalizedSearch);
+      const typeLabel = commission.type === 'voucher'
+        ? 'vale'
+        : normalizeCommissionSettlementKind(commission.settlement_kind, commission.professional?.settlement_type) === 'transfer_receivable'
+          ? 'repasse'
+          : 'comissão';
+      return [
+        professionalName,
+        typeLabel,
+        commission.status,
+        commission.service_name_snapshot,
+        commission.professional_name_snapshot,
+      ].join(' ').toLowerCase().includes(normalizedSearch);
     })
   ), [commissions, dateFrom, dateTo, normalizedSearch]);
 
@@ -619,6 +633,12 @@ export function CashHistory({ onBack }: CashHistoryProps) {
               const relatedTransaction = commission.transaction_id
                 ? transactionById.get(commission.transaction_id)
                 : undefined;
+              const settlementKind = normalizeCommissionSettlementKind(
+                commission.settlement_kind,
+                commission.professional?.settlement_type,
+              );
+              const isTransfer = settlementKind === 'transfer_receivable';
+              const displayValue = Math.abs(Number(commission.commission_value));
 
               return (
                 <motion.div
@@ -640,25 +660,28 @@ export function CashHistory({ onBack }: CashHistoryProps) {
                             ) : (
                               <>
                                 <Receipt className="w-3.5 h-3.5 mr-1" />
-                                Comissão
+                                {isTransfer ? 'Repasse' : 'Comissão'}
                               </>
                             )}
                           </Badge>
                           <Badge variant={commission.status === 'paid' ? 'success' : 'secondary'}>
-                            {commission.status === 'paid' ? 'Pago' : 'Pendente'}
+                            {commission.status === 'paid'
+                              ? getSettlementPaidLabel(settlementKind)
+                              : isTransfer ? 'A receber' : 'Pendente'}
                           </Badge>
                           {relatedTransaction?.reversed_at ? <Badge variant="warning">Movimento estornado</Badge> : null}
                         </div>
                         <p className="font-medium text-foreground">
-                          {commission.professional?.nickname ?? commission.professional?.name ?? 'Profissional'}
+                          {commission.professional_name_snapshot ?? commission.professional?.nickname ?? commission.professional?.name ?? 'Profissional'}
                         </p>
                         <div className="flex flex-wrap gap-3 text-sm text-muted-foreground">
                           <span>Base: {formatCurrency(Number(commission.base_value))}</span>
-                          <span>Valor: {formatCurrency(Number(commission.commission_value))}</span>
+                          <span>Valor: {formatCurrency(displayValue)}</span>
                           <span>Percentual: {Number(commission.commission_rate)}%</span>
+                          {commission.service_name_snapshot ? <span>Serviço: {commission.service_name_snapshot}</span> : null}
                           <span>
                             {commission.status === 'paid'
-                              ? `Pago em ${formatDateTime(commission.paid_at)}`
+                              ? `${getSettlementPaidLabel(settlementKind)} em ${formatDateTime(commission.paid_at)}`
                               : `Criado em ${formatDateTime(commission.created_at)}`}
                           </span>
                         </div>
@@ -667,9 +690,14 @@ export function CashHistory({ onBack }: CashHistoryProps) {
                       <div className="flex items-center gap-3 lg:flex-col lg:items-end">
                         <p className={cn(
                           'text-lg font-semibold',
-                          commission.commission_value >= 0 ? 'text-foreground' : 'text-destructive',
+                          commission.type === 'voucher'
+                            ? 'text-destructive'
+                            : isTransfer
+                              ? 'text-success'
+                              : 'text-foreground',
                         )}>
-                          {formatCurrency(Number(commission.commission_value))}
+                          {commission.type === 'voucher' ? '-' : isTransfer ? '+' : ''}
+                          {formatCurrency(displayValue)}
                         </p>
                         {relatedTransaction && canReverseTransaction(relatedTransaction) ? (
                           <Button variant="outline" size="sm" onClick={() => handleReverse(relatedTransaction)}>

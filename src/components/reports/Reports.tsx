@@ -41,6 +41,10 @@ import {
 import { supabase } from '@/integrations/supabase/client';
 import { useAuth } from '@/contexts/AuthContext';
 import { Appointment, Commission, Transaction } from '@/context/DataContext';
+import {
+  type CommissionSettlementKind,
+  normalizeCommissionSettlementKind,
+} from '@/lib/commissionSettlement';
 
 type PeriodFilter = '7d' | '30d' | '90d' | '12m' | 'custom';
 
@@ -49,6 +53,7 @@ type EffectiveCommission = {
   professional_id: string;
   appointment_id?: string | null;
   commission_value: number;
+  settlement_kind: CommissionSettlementKind;
   status: 'pending' | 'paid';
   created_at: string;
   paid_at?: string | null;
@@ -220,6 +225,10 @@ export function Reports() {
       professional_id: commission.professional_id,
       appointment_id: commission.appointment_id,
       commission_value: Number(commission.commission_value),
+      settlement_kind: normalizeCommissionSettlementKind(
+        commission.settlement_kind,
+        commission.professional?.settlement_type,
+      ),
       status: commission.status,
       created_at: commission.created_at,
       paid_at: commission.paid_at,
@@ -248,6 +257,10 @@ export function Reports() {
           professional_id: appointment.professional_id!,
           appointment_id: appointment.id,
           commission_value: Number(effectiveValue),
+          settlement_kind: normalizeCommissionSettlementKind(
+            undefined,
+            appointment.professional?.settlement_type,
+          ),
           status: 'paid' as const,
           created_at: appointment.start_time,
           paid_at: appointment.end_time,
@@ -276,7 +289,7 @@ export function Reports() {
       }
     });
 
-    // Add paid commissions as expenses (using paid_at date, avoiding double counting)
+    // Add paid commissions not represented in transactions yet
     const commissionTransactionIds = new Set(
       filteredTransactions
         .filter(t => t.reference_type === 'commission' || t.reference_type === 'commission_batch')
@@ -291,7 +304,15 @@ export function Reports() {
         if (!dailyData[dateKey]) {
           dailyData[dateKey] = { date: dateKey, income: 0, expense: 0 };
         }
-        dailyData[dateKey].expense += Number(c.commission_value);
+        const settlementKind = normalizeCommissionSettlementKind(
+          c.settlement_kind,
+          c.professional?.settlement_type,
+        );
+        if (settlementKind === 'transfer_receivable') {
+          dailyData[dateKey].income += Math.abs(Number(c.commission_value));
+        } else {
+          dailyData[dateKey].expense += Math.abs(Number(c.commission_value));
+        }
       });
     
     return Object.values(dailyData)
@@ -312,20 +333,29 @@ export function Reports() {
     .filter(t => t.type === 'expense')
     .reduce((sum, t) => sum + Number(t.amount), 0);
 
-  // Calculate paid commissions (those that might not have expense transactions)
-  const paidCommissionsTotal = filteredCommissions
+  const paidCommissionExpenseTotal = filteredCommissions
     .filter(c => c.status === 'paid' && c.type !== 'voucher')
-    .reduce((sum, c) => sum + Number(c.commission_value), 0);
+    .filter(c => normalizeCommissionSettlementKind(c.settlement_kind, c.professional?.settlement_type) !== 'transfer_receivable')
+    .reduce((sum, c) => sum + Math.abs(Number(c.commission_value)), 0);
+
+  const paidTransferIncomeTotal = filteredCommissions
+    .filter(c => c.status === 'paid' && c.type !== 'voucher')
+    .filter(c => normalizeCommissionSettlementKind(c.settlement_kind, c.professional?.settlement_type) === 'transfer_receivable')
+    .reduce((sum, c) => sum + Math.abs(Number(c.commission_value)), 0);
 
   // Get commission expense transactions to avoid double counting
   const commissionExpenseTransactions = filteredTransactions
     .filter(t => t.type === 'expense' && (t.category === 'Pagamento de Comissão' || t.reference_type === 'commission' || t.reference_type === 'commission_batch'))
     .reduce((sum, t) => sum + Number(t.amount), 0);
 
-  // Total expense = transaction expenses + paid commissions not yet recorded as transactions
-  const totalExpense = transactionExpenses + Math.max(0, paidCommissionsTotal - commissionExpenseTransactions);
+  const transferIncomeTransactions = filteredTransactions
+    .filter(t => t.type === 'income' && t.category === 'Recebimento de Repasse' && (t.reference_type === 'commission' || t.reference_type === 'commission_batch'))
+    .reduce((sum, t) => sum + Number(t.amount), 0);
 
-  const netBalance = totalIncome - totalExpense;
+  const totalIncomeAdjusted = totalIncome + Math.max(0, paidTransferIncomeTotal - transferIncomeTransactions);
+  const totalExpense = transactionExpenses + Math.max(0, paidCommissionExpenseTotal - commissionExpenseTransactions);
+
+  const netBalance = totalIncomeAdjusted - totalExpense;
 
   // Commission Data
   const commissionsByProfessional = useMemo(() => {
@@ -339,23 +369,30 @@ export function Reports() {
         data[c.professional_id] = { name, total: 0, pending: 0, paid: 0, count: 0 };
       }
       
-      data[c.professional_id].total += Number(c.commission_value);
+      data[c.professional_id].total += Math.abs(Number(c.commission_value));
       data[c.professional_id].count += 1;
       
       if (c.status === 'paid') {
-        data[c.professional_id].paid += Number(c.commission_value);
+        data[c.professional_id].paid += Math.abs(Number(c.commission_value));
       } else {
-        data[c.professional_id].pending += Number(c.commission_value);
+        data[c.professional_id].pending += Math.abs(Number(c.commission_value));
       }
     });
     
     return Object.values(data).sort((a, b) => b.total - a.total);
   }, [effectiveCommissions, professionalsById]);
 
-  const totalCommissions = effectiveCommissions.reduce((sum, c) => sum + Number(c.commission_value), 0);
+  const totalCommissions = effectiveCommissions
+    .filter((c) => c.settlement_kind !== 'transfer_receivable')
+    .reduce((sum, c) => sum + Math.abs(Number(c.commission_value)), 0);
   const pendingCommissions = filteredCommissions
     .filter(c => c.status === 'pending')
-    .reduce((sum, c) => sum + Number(c.commission_value), 0);
+    .filter(c => normalizeCommissionSettlementKind(c.settlement_kind, c.professional?.settlement_type) !== 'transfer_receivable')
+    .reduce((sum, c) => sum + Math.abs(Number(c.commission_value)), 0);
+  const pendingTransfers = filteredCommissions
+    .filter(c => c.status === 'pending')
+    .filter(c => normalizeCommissionSettlementKind(c.settlement_kind, c.professional?.settlement_type) === 'transfer_receivable')
+    .reduce((sum, c) => sum + Math.abs(Number(c.commission_value)), 0);
 
   // Most Profitable Professionals
   const profitableProfessionals = useMemo(() => {
@@ -379,7 +416,12 @@ export function Reports() {
     // Add commissions
     effectiveCommissions.forEach(c => {
       if (data[c.professional_id]) {
-        data[c.professional_id].commissions += Number(c.commission_value);
+        const commissionValue = Math.abs(Number(c.commission_value));
+        if (c.settlement_kind === 'transfer_receivable') {
+          data[c.professional_id].revenue += commissionValue;
+        } else {
+          data[c.professional_id].commissions += commissionValue;
+        }
       }
     });
     
@@ -525,10 +567,21 @@ export function Reports() {
     const unrecordedCommissions = filteredCommissions
       .filter(c => c.status === 'paid' && c.type !== 'voucher')
       .filter(c => !commissionTransactionIds.has(c.id))
-      .reduce((sum, c) => sum + Number(c.commission_value), 0);
+      .filter(c => normalizeCommissionSettlementKind(c.settlement_kind, c.professional?.settlement_type) !== 'transfer_receivable')
+      .reduce((sum, c) => sum + Math.abs(Number(c.commission_value)), 0);
+
+    const unrecordedTransfers = filteredCommissions
+      .filter(c => c.status === 'paid' && c.type !== 'voucher')
+      .filter(c => !commissionTransactionIds.has(c.id))
+      .filter(c => normalizeCommissionSettlementKind(c.settlement_kind, c.professional?.settlement_type) === 'transfer_receivable')
+      .reduce((sum, c) => sum + Math.abs(Number(c.commission_value)), 0);
 
     if (unrecordedCommissions > 0) {
       data['Comissões'] = (data['Comissões'] || 0) + unrecordedCommissions;
+    }
+
+    if (unrecordedTransfers > 0) {
+      data['Repasses recebidos'] = (data['Repasses recebidos'] || 0) + unrecordedTransfers;
     }
 
     // Normalize category names
@@ -594,7 +647,7 @@ export function Reports() {
             <div className="flex items-center justify-between">
               <div>
                 <p className="text-sm text-muted-foreground">Receita Total</p>
-                <p className="text-2xl font-bold text-success">{formatCurrency(totalIncome)}</p>
+                <p className="text-2xl font-bold text-success">{formatCurrency(totalIncomeAdjusted)}</p>
               </div>
               <div className="w-12 h-12 rounded-full bg-success/10 flex items-center justify-center">
                 <TrendingUp className="w-6 h-6 text-success" />
@@ -642,6 +695,20 @@ export function Reports() {
               </div>
               <div className="w-12 h-12 rounded-full bg-warning/10 flex items-center justify-center">
                 <Clock className="w-6 h-6 text-warning" />
+              </div>
+            </div>
+          </CardContent>
+        </Card>
+
+        <Card className="border-l-4 border-l-primary/60">
+          <CardContent className="p-4">
+            <div className="flex items-center justify-between">
+              <div>
+                <p className="text-sm text-muted-foreground">Repasses Pendentes</p>
+                <p className="text-2xl font-bold text-primary">{formatCurrency(pendingTransfers)}</p>
+              </div>
+              <div className="w-12 h-12 rounded-full bg-primary/10 flex items-center justify-center">
+                <ArrowUpRight className="w-6 h-6 text-primary" />
               </div>
             </div>
           </CardContent>

@@ -348,6 +348,7 @@ export type Database = {
         Row: {
           appointment_id: string | null
           base_value: number
+          calculation_source: string
           commission_rate: number
           commission_value: number
           created_at: string
@@ -355,6 +356,11 @@ export type Database = {
           paid_at: string | null
           payment_method: string | null
           professional_id: string
+          professional_name_snapshot: string | null
+          rule_source_id: string | null
+          service_id: string | null
+          service_name_snapshot: string | null
+          settlement_kind: string
           status: string
           tenant_id: string | null
           transaction_id: string | null
@@ -363,6 +369,7 @@ export type Database = {
         Insert: {
           appointment_id?: string | null
           base_value: number
+          calculation_source?: string
           commission_rate: number
           commission_value: number
           created_at?: string
@@ -370,6 +377,11 @@ export type Database = {
           paid_at?: string | null
           payment_method?: string | null
           professional_id: string
+          professional_name_snapshot?: string | null
+          rule_source_id?: string | null
+          service_id?: string | null
+          service_name_snapshot?: string | null
+          settlement_kind?: string
           status?: string
           tenant_id?: string | null
           transaction_id?: string | null
@@ -378,6 +390,7 @@ export type Database = {
         Update: {
           appointment_id?: string | null
           base_value?: number
+          calculation_source?: string
           commission_rate?: number
           commission_value?: number
           created_at?: string
@@ -385,6 +398,11 @@ export type Database = {
           paid_at?: string | null
           payment_method?: string | null
           professional_id?: string
+          professional_name_snapshot?: string | null
+          rule_source_id?: string | null
+          service_id?: string | null
+          service_name_snapshot?: string | null
+          settlement_kind?: string
           status?: string
           tenant_id?: string | null
           transaction_id?: string | null
@@ -406,6 +424,20 @@ export type Database = {
             referencedColumns: ["id"]
           },
           {
+            foreignKeyName: "commissions_rule_source_id_fkey"
+            columns: ["rule_source_id"]
+            isOneToOne: false
+            referencedRelation: "service_professionals"
+            referencedColumns: ["id"]
+          },
+          {
+            foreignKeyName: "commissions_service_id_fkey"
+            columns: ["service_id"]
+            isOneToOne: false
+            referencedRelation: "services"
+            referencedColumns: ["id"]
+          },
+          {
             foreignKeyName: "commissions_tenant_id_fkey"
             columns: ["tenant_id"]
             isOneToOne: false
@@ -417,6 +449,63 @@ export type Database = {
             columns: ["transaction_id"]
             isOneToOne: false
             referencedRelation: "transactions"
+            referencedColumns: ["id"]
+          },
+        ]
+      }
+      commission_reprocessing_runs: {
+        Row: {
+          created_at: string
+          created_by: string | null
+          date_from: string
+          date_to: string
+          id: string
+          mode: string
+          professional_id: string | null
+          recalculated_count: number
+          skipped_count: number
+          summary: Json
+          tenant_id: string
+        }
+        Insert: {
+          created_at?: string
+          created_by?: string | null
+          date_from: string
+          date_to: string
+          id?: string
+          mode?: string
+          professional_id?: string | null
+          recalculated_count?: number
+          skipped_count?: number
+          summary?: Json
+          tenant_id: string
+        }
+        Update: {
+          created_at?: string
+          created_by?: string | null
+          date_from?: string
+          date_to?: string
+          id?: string
+          mode?: string
+          professional_id?: string | null
+          recalculated_count?: number
+          skipped_count?: number
+          summary?: Json
+          tenant_id?: string
+        }
+        Relationships: [
+          {
+            foreignKeyName: "commission_reprocessing_runs_professional_id_fkey"
+            columns: ["professional_id"]
+            isOneToOne: false
+            referencedRelation: "professionals"
+            referencedColumns: ["id"]
+          },
+          {
+            foreignKeyName: "commission_reprocessing_runs_tenant_id_fkey"
+            columns: ["tenant_id"]
+            isOneToOne: false
+            referencedRelation: "tenants"
             referencedColumns: ["id"]
           },
         ]
@@ -690,6 +779,7 @@ export type Database = {
           id: string
           professional_id: string
           service_id: string
+          settlement_kind: string
           tenant_id: string | null
           updated_at: string
         }
@@ -701,6 +791,7 @@ export type Database = {
           id?: string
           professional_id: string
           service_id: string
+          settlement_kind?: string
           tenant_id?: string | null
           updated_at?: string
         }
@@ -712,6 +803,7 @@ export type Database = {
           id?: string
           professional_id?: string
           service_id?: string
+          settlement_kind?: string
           tenant_id?: string | null
           updated_at?: string
         }

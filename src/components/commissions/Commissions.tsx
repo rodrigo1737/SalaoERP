@@ -45,6 +45,13 @@ import { Label } from '@/components/ui/label';
 import { useToast } from '@/hooks/use-toast';
 import { useData } from '@/context/DataContext';
 import { useAuth } from '@/contexts/AuthContext';
+import {
+  getSettlementActionLabel,
+  getSettlementDialogTitle,
+  getSettlementPaidLabel,
+  getSettlementPendingLabel,
+  normalizeCommissionSettlementKind,
+} from '@/lib/commissionSettlement';
 
 type PaymentMethod = 'cash' | 'pix' | 'transfer';
 
@@ -74,7 +81,7 @@ function getCommissionPaymentMethod(method?: string | null) {
 }
 
 export function Commissions() {
-  const { professionals, commissions, payCommission, payAllCommissions, refreshData } = useData();
+  const { professionals, commissions, payCommission, payAllCommissions, refreshData, reprocessPendingCommissions } = useData();
   const { userRole, currentProfessional, hasPermission } = useAuth();
   const { toast } = useToast();
   const [professionalFilter, setProfessionalFilter] = useState<string>('all');
@@ -118,6 +125,8 @@ export function Commissions() {
   const isAdmin = userRole === 'admin';
   const isProfessionalScopedUser = userRole === 'staff' && !!currentProfessional;
   const canViewAllCommissions = isAdmin || (userRole === 'staff' && !isProfessionalScopedUser && hasPermission('view_commissions'));
+  const canSettleCommissions = isAdmin || hasPermission('reverse_financial_entries');
+  const canReprocessCommissions = isAdmin || hasPermission('reverse_financial_entries');
 
   // Filter commissions - professionals only see their own
   const visibleCommissions = useMemo(() => (
@@ -192,13 +201,17 @@ export function Commissions() {
     if (!commission) return;
     
     const professional = professionals.find(p => p.id === commission.professional_id);
+    const settlementKind = normalizeCommissionSettlementKind(
+      commission.settlement_kind,
+      professional?.settlement_type,
+    );
     setPaymentDialog({
       isOpen: true,
       type: 'single',
       commissionId,
       professionalName: professional?.nickname || 'Profissional',
       amount: Number(commission.commission_value),
-      isTransfer: professional?.settlement_type === 'transfer',
+      isTransfer: settlementKind === 'transfer_receivable',
     });
     setSelectedPaymentMethod('pix');
   };
@@ -209,6 +222,10 @@ export function Commissions() {
     );
     const totalAmount = profCommissions.reduce((sum, c) => sum + Number(c.commission_value), 0);
     const professional = professionals.find(p => p.id === professionalId);
+    const settlementKind = normalizeCommissionSettlementKind(
+      profCommissions[0]?.settlement_kind,
+      professional?.settlement_type,
+    );
     
     setPaymentDialog({
       isOpen: true,
@@ -217,9 +234,40 @@ export function Commissions() {
       professionalName: professional?.nickname || 'Profissional',
       amount: totalAmount,
       count: profCommissions.length,
-      isTransfer: professional?.settlement_type === 'transfer',
+      isTransfer: settlementKind === 'transfer_receivable',
     });
     setSelectedPaymentMethod('pix');
+  };
+
+  const handleReprocessPending = async () => {
+    if (!startDate || !endDate) {
+      toast({
+        variant: 'destructive',
+        title: 'Período obrigatório',
+        description: 'Informe as datas inicial e final para reprocessar as comissões pendentes.',
+      });
+      return;
+    }
+
+    setIsSubmitting(true);
+    try {
+      const result = await reprocessPendingCommissions({
+        dateFrom: startOfDay(startDate).toISOString(),
+        dateTo: endOfDay(endDate).toISOString(),
+        professionalId: professionalFilter === 'all' ? null : professionalFilter,
+      });
+
+      if (!result) return;
+
+      toast({
+        title: 'Reprocessamento concluído',
+        description: result.skippedCount > 0
+          ? `${result.recalculatedCount} comissão(ões) recalculada(s) e ${result.skippedCount} item(ns) pendente(s) para ajuste manual.`
+          : `${result.recalculatedCount} comissão(ões) recalculada(s) com sucesso.`,
+      });
+    } finally {
+      setIsSubmitting(false);
+    }
   };
 
   const handleConfirmPayment = async () => {
@@ -264,6 +312,13 @@ export function Commissions() {
     .filter(c => c.status === 'pending')
     .reduce((sum, c) => sum + Number(c.commission_value), 0);
 
+  const getCommissionSettlementKind = (commission: typeof commissions[number]) => (
+    normalizeCommissionSettlementKind(
+      commission.settlement_kind,
+      commission.professional?.settlement_type,
+    )
+  );
+
   return (
     <div className="p-6 lg:p-8 space-y-6">
       {/* Header */}
@@ -276,15 +331,28 @@ export function Commissions() {
             {formatCurrency(totalPendingAll)} pendente
           </p>
         </div>
-        <Button
-          variant="outline"
-          size="sm"
-          onClick={handleManualRefresh}
-          disabled={isRefreshing}
-        >
-          <RefreshCw className={`w-4 h-4 mr-2 ${isRefreshing ? 'animate-spin' : ''}`} />
-          Atualizar
-        </Button>
+        <div className="flex items-center gap-2">
+          <Button
+            variant="outline"
+            size="sm"
+            onClick={handleManualRefresh}
+            disabled={isRefreshing}
+          >
+            <RefreshCw className={`w-4 h-4 mr-2 ${isRefreshing ? 'animate-spin' : ''}`} />
+            Atualizar
+          </Button>
+          {canReprocessCommissions && (
+            <Button
+              variant="outline"
+              size="sm"
+              onClick={handleReprocessPending}
+              disabled={isSubmitting}
+            >
+              <RefreshCw className={`w-4 h-4 mr-2 ${isSubmitting ? 'animate-spin' : ''}`} />
+              Reprocessar pendentes
+            </Button>
+          )}
+        </div>
       </div>
 
       {/* Summary Cards */}
@@ -309,7 +377,7 @@ export function Commissions() {
                     <p className="text-sm text-muted-foreground">{item.professional.name}</p>
                   </div>
                 </div>
-                {item.professional.settlement_type === 'transfer' && (
+                {normalizeCommissionSettlementKind(undefined, item.professional.settlement_type) === 'transfer_receivable' && (
                   <Badge variant="outline" className="border-primary/40 text-primary">Repasse</Badge>
                 )}
               </div>
@@ -319,7 +387,7 @@ export function Commissions() {
                   <div className="flex items-center gap-2">
                     <Clock className="w-4 h-4 text-warning shrink-0" />
                     <span className="text-xs text-muted-foreground">
-                      {item.professional.settlement_type === 'transfer' ? 'A receber' : 'Pendente'}
+                      {getSettlementPendingLabel(normalizeCommissionSettlementKind(undefined, item.professional.settlement_type))}
                     </span>
                   </div>
                   <p className="text-sm font-bold text-warning">
@@ -330,7 +398,7 @@ export function Commissions() {
                   <div className="flex items-center gap-2">
                     <Check className="w-4 h-4 text-success shrink-0" />
                     <span className="text-xs text-muted-foreground">
-                      {item.professional.settlement_type === 'transfer' ? 'Recebido' : 'Pago'}
+                      {getSettlementPaidLabel(normalizeCommissionSettlementKind(undefined, item.professional.settlement_type))}
                     </span>
                   </div>
                   <p className="text-sm font-bold text-success">
@@ -357,16 +425,14 @@ export function Commissions() {
                 </div>
               </div>
 
-              {isAdmin && item.pendingCount > 0 && (
+              {canSettleCommissions && item.pendingCount > 0 && (
                 <Button
                   className="w-full"
                   onClick={() => openPayAllDialog(item.professional.id)}
                   disabled={isSubmitting}
                 >
                   <DollarSign className="w-4 h-4 mr-2" />
-                  {item.professional.settlement_type === 'transfer'
-                    ? `Receber Todos (${item.pendingCount})`
-                    : `Pagar Todas (${item.pendingCount})`}
+                  {`${getSettlementActionLabel(normalizeCommissionSettlementKind(undefined, item.professional.settlement_type))} Todos (${item.pendingCount})`}
                 </Button>
               )}
             </Card>
@@ -485,7 +551,9 @@ export function Commissions() {
             </h2>
             
             <div className="space-y-3">
-              {visibleFilteredCommissions.map((commission, index) => (
+              {visibleFilteredCommissions.map((commission, index) => {
+                const settlementKind = getCommissionSettlementKind(commission);
+                return (
                 <motion.div
                   key={commission.id}
                   initial={{ opacity: 0, x: -20 }}
@@ -529,6 +597,12 @@ export function Commissions() {
                             <span>{commission.commission_rate}%</span>
                           </>
                         )}
+                        {commission.type !== 'voucher' && (
+                          <>
+                            <span>•</span>
+                            <span>{commission.service_name_snapshot ?? 'Serviço'}</span>
+                          </>
+                        )}
                       </div>
                       {commission.type !== 'voucher' && commission.status === 'paid' && (
                         <div className="mt-1 flex flex-wrap items-center gap-2 text-xs text-muted-foreground">
@@ -570,25 +644,32 @@ export function Commissions() {
                     {commission.type === 'voucher' && (
                       <Badge variant="destructive">Vale</Badge>
                     )}
+
+                    {commission.type !== 'voucher' && (
+                      <Badge variant="outline">
+                        {settlementKind === 'transfer_receivable' ? 'Repasse' : 'Comissão'}
+                      </Badge>
+                    )}
                     
-                    {isAdmin && commission.type !== 'voucher' && commission.status === 'pending' && (
+                    {canSettleCommissions && commission.type !== 'voucher' && commission.status === 'pending' && (
                       <Button
                         size="sm"
                         onClick={() => openPaySingleDialog(commission.id)}
                         disabled={isSubmitting}
                       >
-                        {professionalsById.get(commission.professional_id)?.settlement_type === 'transfer' ? 'Receber' : 'Pagar'}
+                        {getSettlementActionLabel(settlementKind)}
                       </Button>
                     )}
 
                     {commission.type !== 'voucher' && commission.status === 'paid' && (
                       <Badge variant="success">
-                        {professionalsById.get(commission.professional_id)?.settlement_type === 'transfer' ? 'Recebido' : 'Pago'}
+                        {getSettlementPaidLabel(settlementKind)}
                       </Badge>
                     )}
                   </div>
                 </motion.div>
-              ))}
+                );
+              })}
             </div>
 
             {filteredCommissions.length > visibleCount && (
@@ -606,7 +687,7 @@ export function Commissions() {
       <Dialog open={paymentDialog.isOpen} onOpenChange={(open) => !open && setPaymentDialog({ isOpen: false, type: 'single' })}>
         <DialogContent className="sm:max-w-md">
           <DialogHeader>
-            <DialogTitle>{paymentDialog.isTransfer ? 'Confirmar Recebimento' : 'Confirmar Pagamento'}</DialogTitle>
+            <DialogTitle>{getSettlementDialogTitle(paymentDialog.isTransfer ? 'transfer_receivable' : 'commission_payable')}</DialogTitle>
             <DialogDescription>
               {paymentDialog.isTransfer
                 ? (paymentDialog.type === 'single'

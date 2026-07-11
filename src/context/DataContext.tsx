@@ -4,6 +4,13 @@ import { supabase } from '@/integrations/supabase/client';
 import { useAuth } from '@/contexts/AuthContext';
 import { toast } from 'sonner';
 import { isCleaningControlTenant } from '@/lib/tenantSegments';
+import {
+  CommissionSettlementKind,
+  DEFAULT_COMMISSION_SETTLEMENT_KIND,
+  getSettlementDirection,
+  getSettlementTransactionCategory,
+  normalizeCommissionSettlementKind,
+} from '@/lib/commissionSettlement';
 
 export interface Client {
   id: string;
@@ -63,6 +70,7 @@ export interface ServiceProfessional {
   professional_id: string;
   commission_rate: number;
   assistant_commission_rate: number;
+  settlement_kind?: CommissionSettlementKind;
   duration_minutes?: number;
   tenant_id?: string;
   created_at: string;
@@ -163,16 +171,28 @@ export interface Commission {
   id: string;
   professional_id: string;
   appointment_id?: string;
+  service_id?: string;
   transaction_id?: string;
   payment_method?: 'cash' | 'pix' | 'transfer' | null;
   type: 'service' | 'product' | 'voucher';
   base_value: number;
   commission_rate: number;
   commission_value: number;
+  settlement_kind?: CommissionSettlementKind;
+  service_name_snapshot?: string;
+  professional_name_snapshot?: string;
+  rule_source_id?: string | null;
+  calculation_source?: 'service_mapping' | 'manual_mapping' | 'reprocess' | 'legacy' | 'voucher';
   status: 'pending' | 'paid';
   paid_at?: string;
   created_at: string;
   professional?: Professional;
+}
+
+export interface CommissionReprocessResult {
+  recalculatedCount: number;
+  skippedCount: number;
+  skippedItems: string[];
 }
 
 interface DataContextType {
@@ -237,6 +257,9 @@ interface DataContextType {
   payCommission: (id: string, paymentMethod: 'cash' | 'pix' | 'transfer') => Promise<void>;
   payAllCommissions: (professionalId: string, paymentMethod: 'cash' | 'pix' | 'transfer') => Promise<void>;
   addVoucher: (professionalId: string, amount: number, description?: string) => Promise<void>;
+  reprocessPendingCommissions: (
+    filters: { dateFrom: string; dateTo: string; professionalId?: string | null }
+  ) => Promise<CommissionReprocessResult | null>;
 }
 
 const DataContext = createContext<DataContextType | undefined>(undefined);
@@ -273,6 +296,7 @@ function joinCommissions(comms: Commission[], professionals: Professional[]): Co
 
   return comms.map(c => ({
     ...c,
+    settlement_kind: normalizeCommissionSettlementKind(c.settlement_kind),
     professional: professionalsById.get(c.professional_id),
   }));
 }
@@ -483,6 +507,32 @@ export const DataProvider: React.FC<{ children: ReactNode }> = ({ children }) =>
         .eq('tenant_id', tenantId)
         .order('created_at', { ascending: false }),
     );
+  };
+
+  const resolveCommissionMapping = async (serviceId: string, professionalId: string) => {
+    if (!tenantId) return null;
+
+    const { data, error } = await supabase
+      .from('service_professionals')
+      .select('id, service_id, professional_id, commission_rate, assistant_commission_rate, settlement_kind, duration_minutes, tenant_id, created_at, updated_at')
+      .eq('service_id', serviceId)
+      .eq('professional_id', professionalId)
+      .eq('tenant_id', tenantId)
+      .maybeSingle();
+
+    if (error) {
+      console.error('Erro ao resolver vínculo de comissão:', error);
+      return null;
+    }
+
+    return (data as ServiceProfessional | null)
+      ? {
+          ...(data as ServiceProfessional),
+          settlement_kind: normalizeCommissionSettlementKind(
+            (data as ServiceProfessional).settlement_kind,
+          ),
+        }
+      : null;
   };
 
   // ── full initial load ──
@@ -1281,6 +1331,33 @@ export const DataProvider: React.FC<{ children: ReactNode }> = ({ children }) =>
     if (!existingAppointment) return null;
     const appointment = { ...existingAppointment, ...overrides };
 
+    const commissionLines: AppointmentServiceLine[] = options?.commissionLines?.length
+      ? options.commissionLines
+      : (appointment.professional_id && appointment.service_id && appointment.total_value
+          ? [{
+              service_id: appointment.service_id,
+              professional_id: appointment.professional_id,
+              value: appointment.total_value,
+            }]
+          : []);
+
+    const resolvedCommissionMappings = new Map<string, ServiceProfessional>();
+    if (commissionLines.length > 0 && !options?.skipCommission) {
+      for (const line of commissionLines) {
+        if (!line.professional_id || !line.service_id || !line.value) continue;
+        const mapping = await resolveCommissionMapping(line.service_id, line.professional_id);
+        if (!mapping) {
+          const serviceName = services.find((service) => service.id === line.service_id)?.name ?? 'Serviço';
+          const professionalName = professionals.find((professional) => professional.id === line.professional_id)?.nickname
+            ?? professionals.find((professional) => professional.id === line.professional_id)?.name
+            ?? 'Profissional';
+          toast.error(`Configure a comissão de ${professionalName} para ${serviceName} antes de fechar a comanda.`);
+          return null;
+        }
+        resolvedCommissionMappings.set(`${line.service_id}:${line.professional_id}`, mapping);
+      }
+    }
+
     const { data: existingPaymentTx } = await supabase
       .from('transactions')
       .select('id')
@@ -1339,14 +1416,13 @@ export const DataProvider: React.FC<{ children: ReactNode }> = ({ children }) =>
     }
 
     const billingSession = currentCashSession ?? (isAdminUser ? pendingCashSession : null);
-    // Repasse: o cliente paga direto ao profissional (maquininha própria), o
-    // dinheiro não passa pelo caixa do salão — registra-se apenas o repasse a
-    // receber (linha de comissão abaixo), sem transação de entrada.
-    const appointmentProfessional = professionals.find(p => p.id === appointment.professional_id);
-    const isTransferSettlement = appointmentProfessional?.settlement_type === 'transfer';
+    const billSettlementKinds = commissionLines
+      .map((line) => resolvedCommissionMappings.get(`${line.service_id}:${line.professional_id}`)?.settlement_kind)
+      .filter(Boolean) as CommissionSettlementKind[];
+    const allTransferSettlement = billSettlementKinds.length > 0 && billSettlementKinds.every((kind) => kind === 'transfer_receivable');
     const movementTimestamp = getSessionMovementTimestamp(billingSession);
 
-    if (billingSession && !transactionId && !isTransferSettlement) {
+    if (billingSession && !transactionId && !allTransferSettlement) {
       const { data: txData, error: txError } = await supabase
         .from('transactions')
         .insert({
@@ -1372,43 +1448,29 @@ export const DataProvider: React.FC<{ children: ReactNode }> = ({ children }) =>
       }
     }
 
-    // Linhas de comissão: quando a comanda tem vários serviços, cada linha
-    // gera comissão para o profissional que a executou. Sem linhas explícitas,
-    // usa o serviço único do agendamento (comportamento legado).
-    const commissionLines: AppointmentServiceLine[] = options?.commissionLines?.length
-      ? options.commissionLines
-      : (appointment.professional_id && appointment.service_id && appointment.total_value
-          ? [{
-              service_id: appointment.service_id,
-              professional_id: appointment.professional_id,
-              value: appointment.total_value,
-            }]
-          : []);
-
     if (commissionLines.length > 0 && !existingCommission?.id && !options?.skipCommission) {
-      let usedDefaultRate = false;
       for (const line of commissionLines) {
         if (!line.professional_id || !line.service_id || !line.value) continue;
-        const { data: spData } = await supabase
-          .from('service_professionals')
-          .select('commission_rate')
-          .eq('service_id', line.service_id)
-          .eq('professional_id', line.professional_id)
-          .eq('tenant_id', tenantId)
-          .maybeSingle();
-
-        const commissionRate = spData?.commission_rate ?? 50;
-        if (!spData) usedDefaultRate = true;
-
+        const mapping = resolvedCommissionMappings.get(`${line.service_id}:${line.professional_id}`);
+        if (!mapping) continue;
+        const commissionRate = Number(mapping.commission_rate) || 0;
         const commissionValue = (line.value * commissionRate) / 100;
+        const service = services.find((item) => item.id === line.service_id);
+        const professional = professionals.find((item) => item.id === line.professional_id);
         const { error: commError } = await supabase.from('commissions').insert({
           professional_id: line.professional_id,
           appointment_id: id,
+          service_id: line.service_id,
           transaction_id: transactionId,
           type: 'service',
           base_value: line.value,
           commission_rate: commissionRate,
           commission_value: commissionValue,
+          settlement_kind: normalizeCommissionSettlementKind(mapping.settlement_kind),
+          service_name_snapshot: service?.name ?? appointment.service?.name ?? 'Serviço',
+          professional_name_snapshot: professional?.nickname ?? professional?.name ?? 'Profissional',
+          rule_source_id: mapping.id,
+          calculation_source: 'service_mapping',
           status: 'pending',
           tenant_id: tenantId,
           ...(movementTimestamp ? { created_at: movementTimestamp } : {}),
@@ -1417,9 +1479,6 @@ export const DataProvider: React.FC<{ children: ReactNode }> = ({ children }) =>
         if (commError) {
           toast.warning('Atendimento finalizado, mas houve erro ao registrar comissão. Verifique manualmente.');
         }
-      }
-      if (usedDefaultRate) {
-        toast.warning('Comissão padrão de 50% aplicada em algum serviço (profissional sem tabela para o serviço).');
       }
     }
 
@@ -1729,9 +1788,10 @@ export const DataProvider: React.FC<{ children: ReactNode }> = ({ children }) =>
     const commission = commissions.find(c => c.id === id);
     if (!commission) { toast.error('Comissão não encontrada.'); return; }
     const professional = professionals.find(p => p.id === commission.professional_id);
-    // Repasse: o profissional recebeu na própria maquininha e devolve a
-    // porcentagem do salão — o acerto entra no caixa em vez de sair.
-    const isTransfer = professional?.settlement_type === 'transfer';
+    const settlementKind = normalizeCommissionSettlementKind(
+      commission.settlement_kind,
+      professional?.settlement_type,
+    );
     const methodLabel = paymentMethod === 'cash' ? 'Dinheiro' : paymentMethod === 'pix' ? 'PIX' : 'Transferência';
     const movementTimestamp = getSessionMovementTimestamp(targetSession);
     const paidAt = movementTimestamp ?? new Date().toISOString();
@@ -1739,10 +1799,10 @@ export const DataProvider: React.FC<{ children: ReactNode }> = ({ children }) =>
       .from('transactions')
       .insert({
         cash_session_id: targetSession.id,
-        type: isTransfer ? 'income' : 'expense',
-        category: isTransfer ? 'Recebimento de Repasse' : 'Pagamento de Comissão',
-        description: `${isTransfer ? 'Repasse' : 'Comissão'} - ${professional?.nickname ?? 'Profissional'} (${methodLabel})`,
-        amount: Number(commission.commission_value),
+        type: getSettlementDirection(settlementKind),
+        category: getSettlementTransactionCategory(settlementKind),
+        description: `${settlementKind === 'transfer_receivable' ? 'Repasse' : 'Comissão'} - ${commission.professional_name_snapshot ?? professional?.nickname ?? 'Profissional'} (${methodLabel})`,
+        amount: Math.abs(Number(commission.commission_value)),
         payment_method: paymentMethod === 'transfer' ? 'other' : paymentMethod,
         reference_id: id,
         reference_type: 'commission',
@@ -1752,7 +1812,7 @@ export const DataProvider: React.FC<{ children: ReactNode }> = ({ children }) =>
       })
       .select()
       .single();
-    if (txError) { toast.error(isTransfer ? 'Erro ao registrar recebimento no caixa.' : 'Erro ao registrar pagamento no caixa.'); return; }
+    if (txError) { toast.error(settlementKind === 'transfer_receivable' ? 'Erro ao registrar recebimento no caixa.' : 'Erro ao registrar pagamento no caixa.'); return; }
     await supabase.from('commissions').update({
       status: 'paid',
       paid_at: paidAt,
@@ -1769,7 +1829,7 @@ export const DataProvider: React.FC<{ children: ReactNode }> = ({ children }) =>
       payment_method: paymentMethod,
     } : c));
     setTransactions(prev => [txData as Transaction, ...prev]);
-    toast.success(isTransfer ? 'Repasse recebido!' : 'Comissão paga!');
+    toast.success(settlementKind === 'transfer_receivable' ? 'Repasse recebido!' : 'Comissão paga!');
   };
 
   // ITEM 1: corrigido — inclui .neq('type', 'voucher') no UPDATE do banco
@@ -1788,9 +1848,12 @@ export const DataProvider: React.FC<{ children: ReactNode }> = ({ children }) =>
       c => c.professional_id === professionalId && c.status === 'pending' && c.type !== 'voucher'
     );
     if (pendingCommissions.length === 0) { toast.info('Nenhuma comissão pendente para pagar.'); return; }
-    const totalAmount = pendingCommissions.reduce((s, c) => s + Number(c.commission_value), 0);
+    const totalAmount = pendingCommissions.reduce((s, c) => s + Math.abs(Number(c.commission_value)), 0);
     const professional = professionals.find(p => p.id === professionalId);
-    const isTransfer = professional?.settlement_type === 'transfer';
+    const settlementKind = normalizeCommissionSettlementKind(
+      pendingCommissions[0]?.settlement_kind,
+      professional?.settlement_type,
+    );
     const methodLabel = paymentMethod === 'cash' ? 'Dinheiro' : paymentMethod === 'pix' ? 'PIX' : 'Transferência';
     const movementTimestamp = getSessionMovementTimestamp(targetSession);
     const paidAt = movementTimestamp ?? new Date().toISOString();
@@ -1798,9 +1861,9 @@ export const DataProvider: React.FC<{ children: ReactNode }> = ({ children }) =>
       .from('transactions')
       .insert({
         cash_session_id: targetSession.id,
-        type: isTransfer ? 'income' : 'expense',
-        category: isTransfer ? 'Recebimento de Repasse' : 'Pagamento de Comissão',
-        description: `${isTransfer ? 'Repasses' : 'Comissões'} (${pendingCommissions.length}x) - ${professional?.nickname ?? 'Profissional'} (${methodLabel})`,
+        type: getSettlementDirection(settlementKind),
+        category: getSettlementTransactionCategory(settlementKind),
+        description: `${settlementKind === 'transfer_receivable' ? 'Repasses' : 'Comissões'} (${pendingCommissions.length}x) - ${professional?.nickname ?? 'Profissional'} (${methodLabel})`,
         amount: totalAmount,
         payment_method: paymentMethod === 'transfer' ? 'other' : paymentMethod,
         reference_id: professionalId,
@@ -1811,7 +1874,7 @@ export const DataProvider: React.FC<{ children: ReactNode }> = ({ children }) =>
       })
       .select()
       .single();
-    if (txError) { toast.error(isTransfer ? 'Erro ao registrar recebimento no caixa.' : 'Erro ao registrar pagamento no caixa.'); return; }
+    if (txError) { toast.error(settlementKind === 'transfer_receivable' ? 'Erro ao registrar recebimento no caixa.' : 'Erro ao registrar pagamento no caixa.'); return; }
     // ITEM 1: filtro .neq('type', 'voucher') adicionado para evitar pagar vouchers
     await supabase
       .from('commissions')
@@ -1837,7 +1900,9 @@ export const DataProvider: React.FC<{ children: ReactNode }> = ({ children }) =>
         : c
     ));
     setTransactions(prev => [txData as Transaction, ...prev]);
-    toast.success(isTransfer ? `${pendingCommissions.length} repasses recebidos!` : `${pendingCommissions.length} comissões pagas!`);
+    toast.success(settlementKind === 'transfer_receivable'
+      ? `${pendingCommissions.length} repasses recebidos!`
+      : `${pendingCommissions.length} comissões pagas!`);
   };
 
   const addVoucher = async (professionalId: string, amount: number, description?: string) => {
@@ -1879,6 +1944,10 @@ export const DataProvider: React.FC<{ children: ReactNode }> = ({ children }) =>
       base_value: amount,
       commission_rate: 100,
       commission_value: -amount,
+      settlement_kind: DEFAULT_COMMISSION_SETTLEMENT_KIND,
+      service_name_snapshot: 'Vale',
+      professional_name_snapshot: professional?.nickname ?? professional?.name ?? 'Profissional',
+      calculation_source: 'voucher',
       status: 'paid',
       paid_at: movementTimestamp ?? new Date().toISOString(),
       tenant_id: tenantId,
@@ -1887,6 +1956,101 @@ export const DataProvider: React.FC<{ children: ReactNode }> = ({ children }) =>
     if (commError) { toast.error('Erro ao registrar vale nas comissões.'); return; }
     await refreshData(['transactions', 'commissions']);
     toast.success('Vale registrado!');
+  };
+
+  const reprocessPendingCommissions = async (
+    filters: { dateFrom: string; dateTo: string; professionalId?: string | null }
+  ): Promise<CommissionReprocessResult | null> => {
+    if (!guardModify()) return null;
+    if (!guardFinancialPermission(canPerformAdvancedFinancialOps, 'Somente usuários financeiros podem reprocessar comissões.')) return null;
+    if (!tenantId) return null;
+
+    const query = supabase
+      .from('commissions')
+      .select('*')
+      .eq('tenant_id', tenantId)
+      .eq('status', 'pending')
+      .eq('type', 'service')
+      .gte('created_at', filters.dateFrom)
+      .lte('created_at', filters.dateTo)
+      .order('created_at', { ascending: true });
+
+    const scopedQuery = filters.professionalId
+      ? query.eq('professional_id', filters.professionalId)
+      : query;
+
+    const { data, error } = await scopedQuery;
+
+    if (error) {
+      console.error('Erro ao carregar comissões para reprocessamento:', error);
+      toast.error('Não foi possível carregar as comissões para reprocessamento.');
+      return null;
+    }
+
+    const rows = (data as Commission[]) ?? [];
+    let recalculatedCount = 0;
+    const skippedItems: string[] = [];
+
+    for (const commission of rows) {
+      if (!commission.service_id || !commission.professional_id) {
+        skippedItems.push(`${commission.professional_name_snapshot ?? 'Profissional'} sem serviço vinculado no histórico`);
+        continue;
+      }
+
+      const mapping = await resolveCommissionMapping(commission.service_id, commission.professional_id);
+      if (!mapping) {
+        skippedItems.push(`${commission.professional_name_snapshot ?? 'Profissional'} / ${commission.service_name_snapshot ?? 'Serviço'} sem regra cadastrada`);
+        continue;
+      }
+
+      const nextRate = Number(mapping.commission_rate) || 0;
+      const nextValue = (Number(commission.base_value) * nextRate) / 100;
+      const settlementKind = normalizeCommissionSettlementKind(mapping.settlement_kind);
+      const professional = professionals.find((item) => item.id === commission.professional_id);
+      const service = services.find((item) => item.id === commission.service_id);
+
+      const { error: updateError } = await supabase
+        .from('commissions')
+        .update({
+          commission_rate: nextRate,
+          commission_value: nextValue,
+          settlement_kind: settlementKind,
+          professional_name_snapshot: professional?.nickname ?? professional?.name ?? commission.professional_name_snapshot ?? 'Profissional',
+          service_name_snapshot: service?.name ?? commission.service_name_snapshot ?? 'Serviço',
+          rule_source_id: mapping.id,
+          calculation_source: 'reprocess',
+        })
+        .eq('id', commission.id)
+        .eq('tenant_id', tenantId);
+
+      if (updateError) {
+        console.error('Erro ao reprocessar comissão:', updateError);
+        skippedItems.push(`${commission.professional_name_snapshot ?? 'Profissional'} / ${commission.service_name_snapshot ?? 'Serviço'} com erro de atualização`);
+        continue;
+      }
+
+      recalculatedCount += 1;
+    }
+
+    await supabase.from('commission_reprocessing_runs').insert({
+      tenant_id: tenantId,
+      professional_id: filters.professionalId ?? null,
+      date_from: filters.dateFrom,
+      date_to: filters.dateTo,
+      mode: 'pending_only',
+      recalculated_count: recalculatedCount,
+      skipped_count: skippedItems.length,
+      summary: { skipped_items: skippedItems },
+      created_by: user?.id ?? null,
+    });
+
+    await refreshData(['commissions', 'transactions']);
+
+    return {
+      recalculatedCount,
+      skippedCount: skippedItems.length,
+      skippedItems,
+    };
   };
 
   return (
@@ -1902,7 +2066,7 @@ export const DataProvider: React.FC<{ children: ReactNode }> = ({ children }) =>
       addAppointment, updateAppointment, deleteAppointment, refundAppointment, completeAppointment,
       fetchAppointmentServices, saveAppointmentServices,
       openCashSession, closeCashSession, addTransaction, reverseTransaction,
-      payCommission, payAllCommissions, addVoucher,
+      payCommission, payAllCommissions, addVoucher, reprocessPendingCommissions,
     }}>
       {children}
     </DataContext.Provider>

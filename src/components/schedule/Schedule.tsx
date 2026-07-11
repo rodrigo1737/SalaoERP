@@ -50,6 +50,11 @@ import { BillItemsEditor, BillItem } from './BillItemsEditor';
 import { useNavigate } from 'react-router-dom';
 import { isCleaningControlTenant } from '@/lib/tenantSegments';
 import { getAvailableServicesForProfessional, getServiceDurationForProfessional, isServiceAvailableForProfessional } from '@/lib/serviceProfessionalAvailability';
+import {
+  COMMISSION_SETTLEMENT_OPTIONS,
+  CommissionSettlementKind,
+  normalizeCommissionSettlementKind,
+} from '@/lib/commissionSettlement';
 
 const appointmentStatusLabels: Record<string, string> = {
   pre_scheduled: 'Pré-Agendado',
@@ -196,6 +201,16 @@ export function Schedule() {
   const [scheduleLoading, setScheduleLoading] = useState(false);
   const [scheduleAppointmentsRaw, setScheduleAppointmentsRaw] = useState<Appointment[]>([]);
   const [serviceProfessionalLinks, setServiceProfessionalLinks] = useState<ServiceProfessional[]>([]);
+  const [missingMappings, setMissingMappings] = useState<Array<{
+    service_id: string;
+    professional_id: string;
+    service_name: string;
+    professional_name: string;
+    commission_rate: string;
+    settlement_kind: CommissionSettlementKind;
+  }>>([]);
+  const [isMissingMappingsDialogOpen, setIsMissingMappingsDialogOpen] = useState(false);
+  const [pendingBillAction, setPendingBillAction] = useState<null | (() => Promise<void>)>(null);
 
   const [formClient, setFormClient] = useState('');
   const [formService, setFormService] = useState('');
@@ -321,7 +336,7 @@ export function Schedule() {
 
       const { data, error } = await supabase
         .from('service_professionals')
-        .select('id, service_id, professional_id, commission_rate, assistant_commission_rate, duration_minutes, tenant_id, created_at, updated_at')
+        .select('id, service_id, professional_id, commission_rate, assistant_commission_rate, settlement_kind, duration_minutes, tenant_id, created_at, updated_at')
         .eq('tenant_id', tenantId);
 
       if (error) {
@@ -537,6 +552,7 @@ export function Schedule() {
           professional_id: selectedSlot.professionalId,
           commission_rate: professional?.commission_service ?? 50,
           assistant_commission_rate: 0,
+          settlement_kind: normalizeCommissionSettlementKind(undefined, professional?.settlement_type),
           duration_minutes: service.duration_minutes,
           tenant_id: tenantId,
         });
@@ -550,6 +566,7 @@ export function Schedule() {
               professional_id: selectedSlot.professionalId,
               commission_rate: professional?.commission_service ?? 50,
               assistant_commission_rate: 0,
+              settlement_kind: normalizeCommissionSettlementKind(undefined, professional?.settlement_type),
               duration_minutes: service.duration_minutes,
               tenant_id: tenantId,
               created_at: new Date().toISOString(),
@@ -793,6 +810,111 @@ export function Schedule() {
     setIsClosingBill(true);
   };
 
+  const buildCommissionLinesForClosing = (baseValue: number) => (
+    billServiceLines.map((line, index) => {
+      if (index === 0) {
+        return { service_id: line.service_id, professional_id: line.professional_id, value: baseValue };
+      }
+      const matchingItem = billItems.find((item) => item.type === 'service' && item.serviceId === line.service_id);
+      return {
+        service_id: line.service_id,
+        professional_id: line.professional_id,
+        value: matchingItem ? matchingItem.total : line.value,
+      };
+    })
+  );
+
+  const findMissingCommissionMappings = (
+    commissionLines: Array<{ service_id: string; professional_id: string; value: number }>,
+  ) => {
+    const uniqueMissing = new Map<string, {
+      service_id: string;
+      professional_id: string;
+      service_name: string;
+      professional_name: string;
+      commission_rate: string;
+      settlement_kind: CommissionSettlementKind;
+    }>();
+
+    commissionLines.forEach((line) => {
+      const key = `${line.service_id}:${line.professional_id}`;
+      const hasMapping = serviceProfessionalLinks.some((link) =>
+        link.service_id === line.service_id && link.professional_id === line.professional_id);
+
+      if (hasMapping || uniqueMissing.has(key)) return;
+
+      const service = servicesById.get(line.service_id);
+      const professional = professionalsById.get(line.professional_id);
+      uniqueMissing.set(key, {
+        service_id: line.service_id,
+        professional_id: line.professional_id,
+        service_name: service?.name ?? 'Serviço',
+        professional_name: professional?.nickname || professional?.name || 'Profissional',
+        commission_rate: String(professional?.commission_service ?? 50),
+        settlement_kind: normalizeCommissionSettlementKind(undefined, professional?.settlement_type),
+      });
+    });
+
+    return Array.from(uniqueMissing.values());
+  };
+
+  const persistMissingMappings = async () => {
+    if (!tenantId || missingMappings.length === 0) return true;
+
+    const payload = missingMappings.map((mapping) => {
+      const service = servicesById.get(mapping.service_id);
+      return {
+        tenant_id: tenantId,
+        service_id: mapping.service_id,
+        professional_id: mapping.professional_id,
+        commission_rate: Number(mapping.commission_rate) || 0,
+        assistant_commission_rate: 0,
+        settlement_kind: mapping.settlement_kind,
+        duration_minutes: service?.duration_minutes ?? null,
+      };
+    });
+
+    const { data, error } = await supabase
+      .from('service_professionals')
+      .insert(payload)
+      .select('id, service_id, professional_id, commission_rate, assistant_commission_rate, settlement_kind, duration_minutes, tenant_id, created_at, updated_at');
+
+    if (error) {
+      console.error('Erro ao salvar vínculos pendentes de comissão:', error);
+      toast({
+        variant: 'destructive',
+        title: 'Não foi possível salvar a regra de comissão',
+        description: 'Revise os percentuais e tente novamente.',
+      });
+      return false;
+    }
+
+    setServiceProfessionalLinks((previous) => {
+      const next = [...previous];
+      (data as ServiceProfessional[] | null)?.forEach((row) => {
+        const existingIndex = next.findIndex((link) =>
+          link.service_id === row.service_id && link.professional_id === row.professional_id);
+        if (existingIndex >= 0) {
+          next[existingIndex] = row;
+        } else {
+          next.push(row);
+        }
+      });
+      return next;
+    });
+
+    setIsMissingMappingsDialogOpen(false);
+    setMissingMappings([]);
+    return true;
+  };
+
+  const continuePendingBillAction = async () => {
+    if (!pendingBillAction) return;
+    const action = pendingBillAction;
+    setPendingBillAction(null);
+    await action();
+  };
+
   const handleCloseBill = async () => {
     if (!selectedAppointment || !selectedPaymentMethod || isSubmittingBill) return;
 
@@ -820,6 +942,18 @@ export function Schedule() {
 
     try {
       const baseValue = parseFloat(editValue) || selectedAppointment.total_value || 0;
+      const commissionLines = buildCommissionLinesForClosing(baseValue);
+      const unresolvedMappings = findMissingCommissionMappings(commissionLines);
+
+      if (unresolvedMappings.length > 0) {
+        setMissingMappings(unresolvedMappings);
+        setPendingBillAction(() => async () => {
+          await handleCloseBill();
+        });
+        setIsMissingMappingsDialogOpen(true);
+        return;
+      }
+
       const additionalTotal = billItems.reduce((sum, item) => sum + item.total, 0);
       const mainTotal = baseValue + additionalTotal;
       const includedExtras = extraSameDayAppointments.filter(
@@ -853,20 +987,6 @@ export function Schedule() {
       };
 
       const skipCommission = selectedPaymentMethod === 'pending' && !generateCommissionOnPending;
-
-      // Comissão por linha: a 1ª usa o valor base editado; as demais usam o
-      // valor atual do item correspondente na comanda (sincroniza com a cobrança).
-      const commissionLines = billServiceLines.map((line, index) => {
-        if (index === 0) {
-          return { service_id: line.service_id, professional_id: line.professional_id, value: baseValue };
-        }
-        const matchingItem = billItems.find((item) => item.type === 'service' && item.serviceId === line.service_id);
-        return {
-          service_id: line.service_id,
-          professional_id: line.professional_id,
-          value: matchingItem ? matchingItem.total : line.value,
-        };
-      });
 
       const transactionId = await completeAppointment(selectedAppointment.id, paymentMethodMap[selectedPaymentMethod], {
         total_value: mainTotal,
@@ -1749,6 +1869,105 @@ export function Schedule() {
               <Button variant="outline" onClick={() => setIsClosingBill(false)} disabled={isSubmittingBill}>Cancelar</Button>
               <Button onClick={handleCloseBill} disabled={!selectedPaymentMethod || isSubmittingBill}>
                 {isSubmittingBill ? 'Confirmando...' : 'Confirmar Pagamento'}
+              </Button>
+            </div>
+          </div>
+        </DialogContent>
+      </Dialog>
+
+      <Dialog
+        open={isMissingMappingsDialogOpen}
+        onOpenChange={(open) => {
+          if (!open) {
+            setIsMissingMappingsDialogOpen(false);
+            setPendingBillAction(null);
+          }
+        }}
+      >
+        <DialogContent className="sm:max-w-2xl max-h-[90vh] overflow-y-auto">
+          <DialogHeader>
+            <DialogTitle>Configurar comissão antes de fechar</DialogTitle>
+            <DialogDescription>
+              Encontramos serviços sem amarração para o profissional. Defina a regra agora e o sistema continuará o fechamento com o histórico correto.
+            </DialogDescription>
+          </DialogHeader>
+
+          <div className="space-y-4 py-2">
+            {missingMappings.map((mapping, index) => (
+              <div key={`${mapping.service_id}:${mapping.professional_id}`} className="rounded-xl border border-border p-4 space-y-3">
+                <div className="flex flex-col gap-1">
+                  <p className="font-medium text-foreground">
+                    {mapping.professional_name} • {mapping.service_name}
+                  </p>
+                  <p className="text-xs text-muted-foreground">
+                    Essa regra será gravada e reaproveitada nos próximos agendamentos, comandas e relatórios.
+                  </p>
+                </div>
+
+                <div className="grid gap-3 md:grid-cols-2">
+                  <div className="space-y-2">
+                    <Label>Percentual de comissão</Label>
+                    <div className="flex items-center gap-2">
+                      <Input
+                        type="number"
+                        min="0"
+                        max="100"
+                        value={mapping.commission_rate}
+                        onChange={(event) => {
+                          const value = event.target.value;
+                          setMissingMappings((previous) => previous.map((item, itemIndex) =>
+                            itemIndex === index ? { ...item, commission_rate: value } : item));
+                        }}
+                      />
+                      <span className="text-sm text-muted-foreground">%</span>
+                    </div>
+                  </div>
+
+                  <div className="space-y-2">
+                    <Label>Tipo de liquidação</Label>
+                    <Select
+                      value={mapping.settlement_kind}
+                      onValueChange={(value) => {
+                        setMissingMappings((previous) => previous.map((item, itemIndex) =>
+                          itemIndex === index
+                            ? { ...item, settlement_kind: value as CommissionSettlementKind }
+                            : item));
+                      }}
+                    >
+                      <SelectTrigger>
+                        <SelectValue />
+                      </SelectTrigger>
+                      <SelectContent>
+                        {COMMISSION_SETTLEMENT_OPTIONS.map((option) => (
+                          <SelectItem key={option.value} value={option.value}>
+                            {option.label}
+                          </SelectItem>
+                        ))}
+                      </SelectContent>
+                    </Select>
+                  </div>
+                </div>
+              </div>
+            ))}
+
+            <div className="flex justify-end gap-2 pt-2">
+              <Button
+                variant="outline"
+                onClick={() => {
+                  setIsMissingMappingsDialogOpen(false);
+                  setPendingBillAction(null);
+                }}
+              >
+                Cancelar
+              </Button>
+              <Button
+                onClick={async () => {
+                  const success = await persistMissingMappings();
+                  if (!success) return;
+                  await continuePendingBillAction();
+                }}
+              >
+                Salvar e continuar
               </Button>
             </div>
           </div>

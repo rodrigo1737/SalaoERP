@@ -80,6 +80,11 @@ import { useAuth } from '@/contexts/AuthContext';
 import { supabase } from '@/integrations/supabase/client';
 import { ServiceProductsEditor } from './ServiceProductsEditor';
 import {
+  COMMISSION_SETTLEMENT_OPTIONS,
+  CommissionSettlementKind,
+  normalizeCommissionSettlementKind,
+} from '@/lib/commissionSettlement';
+import {
   CadastroPageSize,
   CadastroViewMode,
   ListViewControls,
@@ -100,6 +105,7 @@ interface ProfessionalCommission {
   commission_rate: string;
   assistant_commission_rate: string;
   duration_minutes: string;
+  settlement_kind: CommissionSettlementKind;
 }
 
 interface ServiceProductItem {
@@ -169,6 +175,7 @@ export function ServicesList() {
         commission_rate: existing?.commission_rate?.toString() || '50',
         assistant_commission_rate: existing?.assistant_commission_rate?.toString() || '0',
         duration_minutes: existing?.duration_minutes?.toString() || '',
+        settlement_kind: normalizeCommissionSettlementKind(existing?.settlement_kind, prof.settlement_type),
       };
     });
 
@@ -182,6 +189,7 @@ export function ServicesList() {
       commission_rate: '50',
       assistant_commission_rate: '0',
       duration_minutes: '',
+      settlement_kind: normalizeCommissionSettlementKind(undefined, prof.settlement_type),
     }));
     setProfessionalCommissions(commissions);
   };
@@ -302,6 +310,7 @@ export function ServicesList() {
             commission_rate: parseFloat(pc.commission_rate),
             assistant_commission_rate: parseFloat(pc.assistant_commission_rate),
             duration_minutes: pc.duration_minutes ? parseInt(pc.duration_minutes) : null,
+            settlement_kind: pc.settlement_kind,
             tenant_id: tenantId,
           }))
         );
@@ -819,6 +828,7 @@ export function ServicesList() {
                         <th className="p-3 text-left font-medium text-sm">Nome</th>
                         <th className="p-3 text-center font-medium text-sm w-24">Comissão</th>
                         <th className="p-3 text-center font-medium text-sm w-24">Comissão Assistente</th>
+                        <th className="p-3 text-center font-medium text-sm w-40">Liquidação</th>
                         <th className="p-3 text-center font-medium text-sm w-24">Tempo</th>
                       </tr>
                     </thead>
@@ -841,6 +851,26 @@ export function ServicesList() {
                               <span className={pc.enabled ? 'font-medium' : 'text-muted-foreground'}>
                                 {professional.name}
                               </span>
+                            </td>
+                            <td className="p-3">
+                              <Select
+                                value={pc.settlement_kind}
+                                onValueChange={(value) =>
+                                  updateProfessionalCommission(pc.professional_id, 'settlement_kind', value)
+                                }
+                                disabled={!pc.enabled}
+                              >
+                                <SelectTrigger className="h-8 w-[150px] mx-auto">
+                                  <SelectValue />
+                                </SelectTrigger>
+                                <SelectContent>
+                                  {COMMISSION_SETTLEMENT_OPTIONS.map((option) => (
+                                    <SelectItem key={option.value} value={option.value}>
+                                      {option.label}
+                                    </SelectItem>
+                                  ))}
+                                </SelectContent>
+                              </Select>
                             </td>
                             <td className="p-3">
                               <div className="flex items-center justify-center gap-1">
