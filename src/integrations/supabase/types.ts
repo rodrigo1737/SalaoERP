@@ -1403,6 +1403,7 @@ export type Database = {
         | "manage_cash_flow"
         | "view_financial_history"
         | "reverse_financial_entries"
+        | "view_all_schedule"
       service_price_type: "fixed" | "variable" | "starting_at"
       tenant_status: "active" | "readonly" | "blocked"
     }
@@ -1544,6 +1545,7 @@ export const Constants = {
         "manage_cash_flow",
         "view_financial_history",
         "reverse_financial_entries",
+        "view_all_schedule",
       ],
       service_price_type: ["fixed", "variable", "starting_at"],
       tenant_status: ["active", "readonly", "blocked"],

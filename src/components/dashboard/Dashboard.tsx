@@ -86,7 +86,12 @@ const endOfDay = (date: Date) => {
 
 export function Dashboard({ onNavigate }: DashboardProps) {
   const { professionals, currentCashSession, pendingCashSession, transactions } = useData();
-  const { user, currentTenant, tenantId, userRole, hasPermission } = useAuth();
+  const { user, currentTenant, tenantId, userRole, hasPermission, currentProfessional } = useAuth();
+  // Profissional sem permissão de ver todas as agendas só vê os próprios
+  // próximos atendimentos no dashboard.
+  const restrictUpcomingToOwn = userRole !== 'admin'
+    && !hasPermission('view_all_schedule')
+    && !!currentProfessional;
   const isCleaningSegment = isCleaningControlTenant(currentTenant);
   const canManageCashFlow = userRole === 'admin' || hasPermission('manage_cash_flow');
   const canViewFinancialArea = canManageCashFlow
@@ -295,25 +300,29 @@ export function Dashboard({ onNavigate }: DashboardProps) {
               .eq('type', 'income')
               .gte('created_at', monthStart.toISOString())
               .lte('created_at', todayEnd.toISOString()),
-            supabase
-              .from('appointments')
-              .select(`
-                id,
-                start_time,
-                end_time,
-                status,
-                client_id,
-                client:clients(name),
-                service:services(name),
-                professional:professionals(nickname)
-              `)
-              .eq('tenant_id', tenantId)
-              .is('deleted_at', null)
-              .neq('status', 'cancelled')
-              .gte('start_time', now.toISOString())
-              .lte('start_time', tomorrowEnd.toISOString())
-              .order('start_time', { ascending: true })
-              .limit(4),
+            (() => {
+              let upcomingQuery = supabase
+                .from('appointments')
+                .select(`
+                  id,
+                  start_time,
+                  end_time,
+                  status,
+                  client_id,
+                  client:clients(name),
+                  service:services(name),
+                  professional:professionals(nickname)
+                `)
+                .eq('tenant_id', tenantId)
+                .is('deleted_at', null)
+                .neq('status', 'cancelled')
+                .gte('start_time', now.toISOString())
+                .lte('start_time', tomorrowEnd.toISOString());
+              if (restrictUpcomingToOwn && currentProfessional) {
+                upcomingQuery = upcomingQuery.eq('professional_id', currentProfessional.id);
+              }
+              return upcomingQuery.order('start_time', { ascending: true }).limit(4);
+            })(),
             supabase
               .from('appointments')
               .select('client_id')
@@ -374,7 +383,7 @@ export function Dashboard({ onNavigate }: DashboardProps) {
     return () => {
       cancelled = true;
     };
-  }, [isCleaningSegment, tenantId]);
+  }, [isCleaningSegment, tenantId, restrictUpcomingToOwn, currentProfessional]);
 
   const displayStats = isCleaningSegment
     ? dashboardStats

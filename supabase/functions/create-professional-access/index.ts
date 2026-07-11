@@ -4,6 +4,7 @@ import { getPasswordErrors } from "../_shared/password.ts";
 
 const allowedPermissions = new Set([
   "view_schedule",
+  "view_all_schedule",
   "edit_schedule",
   "view_clients",
   "close_bill",

@@ -159,6 +159,14 @@ export function Schedule() {
   const isAdmin = userRole === 'admin';
   const canViewSchedule = isAdmin || hasPermission('view_schedule') || hasPermission('edit_schedule');
   const canEditSchedule = isAdmin || hasPermission('edit_schedule');
+  // Escopo da agenda: sem 'view_all_schedule' (e não-admin), o usuário só
+  // enxerga a própria agenda. Fecha o vazamento de ver a agenda de todos.
+  const canViewAllSchedules = isAdmin || hasPermission('view_all_schedule');
+  const [scheduleScope, setScheduleScope] = useState<'own' | 'all'>('own');
+  const effectiveScope: 'own' | 'all' = !canViewAllSchedules
+    ? 'own'
+    : (currentProfessional ? scheduleScope : 'all');
+  const restrictToOwnProfessional = effectiveScope === 'own' && !!currentProfessional;
   const canCloseBill = isAdmin || hasPermission('close_bill') || hasPermission('manage_cash_flow');
   const canRefundBill = isAdmin || hasPermission('refund_bill') || hasPermission('reverse_financial_entries');
 
@@ -252,13 +260,13 @@ export function Schedule() {
     [scheduleAppointmentsRaw, clientsById, professionalsById, servicesById],
   );
 
-  const baseVisibleProfessionals = isAdmin
+  const baseVisibleProfessionals = canViewAllSchedules && effectiveScope === 'all'
     ? scheduleProfessionals
     : currentProfessional
+      // Restrito à própria agenda (profissional sem permissão de ver todas).
       ? scheduleProfessionals.filter(p => p.id === currentProfessional.id)
-      : canViewSchedule
-        ? scheduleProfessionals
-        : [];
+      // Não-admin sem vínculo e sem permissão de ver todas: nada a exibir.
+      : [];
   const filteredVisibleProfessionals = selectedProfessionalIds.length > 0
     ? baseVisibleProfessionals.filter(p => selectedProfessionalIds.includes(p.id))
     : baseVisibleProfessionals;
@@ -292,14 +300,21 @@ export function Schedule() {
       const weekStart = startOfWeekMonday(referenceDate);
       const weekEnd = endOfWeekExclusive(referenceDate);
 
-      const { data, error } = await supabase
+      let query = supabase
         .from('appointments')
         .select('*')
         .eq('tenant_id', tenantId)
         .is('deleted_at', null)
         .gte('start_time', weekStart.toISOString())
-        .lt('start_time', weekEnd.toISOString())
-        .order('start_time', { ascending: true });
+        .lt('start_time', weekEnd.toISOString());
+
+      // Restringe na origem: profissional sem permissão de ver todas só carrega
+      // os próprios agendamentos (não recebe dados de outros no cliente).
+      if (restrictToOwnProfessional && currentProfessional) {
+        query = query.eq('professional_id', currentProfessional.id);
+      }
+
+      const { data, error } = await query.order('start_time', { ascending: true });
 
       if (error) throw error;
       setScheduleAppointmentsRaw((data as Appointment[]) ?? []);
@@ -313,7 +328,7 @@ export function Schedule() {
     } finally {
       setScheduleLoading(false);
     }
-  }, [currentDate, isCleaningTenant, tenantId, toast]);
+  }, [currentDate, isCleaningTenant, tenantId, toast, restrictToOwnProfessional, currentProfessional]);
 
   useEffect(() => {
     if (!authLoading && isCleaningTenant) {
@@ -1281,6 +1296,34 @@ export function Schedule() {
         </div>
 
         <div className="min-w-0 space-y-4">
+          {canViewAllSchedules && currentProfessional && (
+            <div className="flex items-center gap-2">
+              <span className="text-xs text-muted-foreground">Agenda:</span>
+              <div className="inline-flex rounded-lg border border-border p-0.5">
+                <button
+                  type="button"
+                  onClick={() => setScheduleScope('own')}
+                  className={cn(
+                    'px-3 py-1 text-xs font-medium rounded-md transition-colors',
+                    scheduleScope === 'own' ? 'bg-primary text-primary-foreground' : 'text-muted-foreground hover:text-foreground',
+                  )}
+                >
+                  Minha agenda
+                </button>
+                <button
+                  type="button"
+                  onClick={() => setScheduleScope('all')}
+                  className={cn(
+                    'px-3 py-1 text-xs font-medium rounded-md transition-colors',
+                    scheduleScope === 'all' ? 'bg-primary text-primary-foreground' : 'text-muted-foreground hover:text-foreground',
+                  )}
+                >
+                  Todos
+                </button>
+              </div>
+            </div>
+          )}
+
           <div className="flex flex-col gap-3 lg:flex-row lg:items-center lg:justify-between">
             <div className="flex items-center gap-2">
               <Button variant="outline" size="sm" onClick={goToToday}>Hoje</Button>

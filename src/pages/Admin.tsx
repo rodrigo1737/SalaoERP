@@ -20,6 +20,7 @@ type AccessRole = 'none' | 'owner' | 'admin' | 'professional' | 'staff';
 type AccessPresetId = 'reception' | 'professional' | 'financial' | 'custom';
 type PermissionId =
   | 'view_schedule'
+  | 'view_all_schedule'
   | 'edit_schedule'
   | 'view_clients'
   | 'close_bill'
@@ -49,6 +50,7 @@ interface InternalAccessRow {
 
 const PERMISSIONS: { id: PermissionId; label: string }[] = [
   { id: 'view_schedule', label: 'Visualizar Agenda' },
+  { id: 'view_all_schedule', label: 'Visualizar Agenda de Todos' },
   { id: 'edit_schedule', label: 'Alterar Agendamentos' },
   { id: 'view_clients', label: 'Visualizar Clientes' },
   { id: 'close_bill', label: 'Receber e Encerrar Comanda' },
@@ -63,8 +65,8 @@ const ACCESS_PROFILES: { id: AccessPresetId; label: string; description: string;
   {
     id: 'reception',
     label: 'Recepção',
-    description: 'Agenda, clientes, comandas e operação diária do caixa.',
-    permissions: ['view_schedule', 'edit_schedule', 'view_clients', 'close_bill', 'manage_cash_flow'],
+    description: 'Agenda completa, clientes, comandas e operação diária do caixa.',
+    permissions: ['view_schedule', 'view_all_schedule', 'edit_schedule', 'view_clients', 'close_bill', 'manage_cash_flow'],
   },
   {
     id: 'professional',
@@ -76,7 +78,7 @@ const ACCESS_PROFILES: { id: AccessPresetId; label: string; description: string;
     id: 'financial',
     label: 'Financeiro',
     description: 'Histórico financeiro, vales, sangrias, estornos e regularizações retroativas.',
-    permissions: ['view_clients', 'refund_bill', 'view_commissions', 'manage_cash_flow', 'view_financial_history', 'reverse_financial_entries'],
+    permissions: ['view_clients', 'view_all_schedule', 'refund_bill', 'view_commissions', 'manage_cash_flow', 'view_financial_history', 'reverse_financial_entries'],
   },
   {
     id: 'custom',
