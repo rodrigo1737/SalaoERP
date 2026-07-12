@@ -10,6 +10,7 @@ import { ProfessionalsList } from '@/components/professionals/ProfessionalsList'
 import { ServicesList } from '@/components/services/ServicesList';
 import { ServiceCommissionMatrix } from '@/components/services/ServiceCommissionMatrix';
 import { CommissionReprocessing } from '@/components/commissions/CommissionReprocessing';
+import { ProfessionalStatement } from '@/components/commissions/ProfessionalStatement';
 import { ProductsList } from '@/components/products/ProductsList';
 import { AestheticsModule } from '@/components/aesthetics/AestheticsModule';
 import { CleaningModule } from '@/components/cleaning/CleaningModule';
@@ -33,10 +34,10 @@ import { Loader2 } from 'lucide-react';
 
 // Páginas válidas por perfil
 const ADMIN_PAGES = ['dashboard', 'agenda', 'clients', 'professionals', 'services', 'commission-matrix', 'products', 'aesthetics',
-  'cleaning', 'suppliers', 'purchase', 'stock-movements', 'commissions', 'commission-reprocessing', 'reports', 'cashier', 'financial-management', 'settings'];
-const PROFESSIONAL_PAGES = ['agenda', 'cleaning', 'commissions', 'settings'];
+  'cleaning', 'suppliers', 'purchase', 'stock-movements', 'commissions', 'commission-reprocessing', 'professional-statement', 'reports', 'cashier', 'financial-management', 'settings'];
+const PROFESSIONAL_PAGES = ['agenda', 'cleaning', 'commissions', 'professional-statement', 'settings'];
 const SUPER_ADMIN_PAGES = ['super-dashboard', 'tenants'];
-const CLEANING_BLOCKED_PAGES = ['agenda', 'services', 'commission-matrix', 'products', 'suppliers', 'purchase', 'stock-movements', 'commissions', 'commission-reprocessing', 'cashier', 'financial-management'];
+const CLEANING_BLOCKED_PAGES = ['agenda', 'services', 'commission-matrix', 'products', 'suppliers', 'purchase', 'stock-movements', 'commissions', 'commission-reprocessing', 'professional-statement', 'cashier', 'financial-management'];
 
 const Index = () => {
   const { page } = useParams<{ page?: string }>();
@@ -139,6 +140,7 @@ const Index = () => {
       case 'stock-movements':  return <StockMovements />;
       case 'commissions':      return <Commissions />;
       case 'commission-reprocessing': return <CommissionReprocessing />;
+      case 'professional-statement': return <ProfessionalStatement />;
       case 'reports':          return <Reports />;
       case 'cashier':          return <Cashier />;
       case 'financial-management': return <CashHistory />;

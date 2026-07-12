@@ -26,7 +26,8 @@ import {
   PackagePlus,
   Sparkles,
   Percent,
-  RefreshCw
+  RefreshCw,
+  Wallet
 } from 'lucide-react';
 import { cn } from '@/lib/utils';
 import { Button } from '@/components/ui/button';
@@ -75,6 +76,7 @@ const salonMenuItems: MenuItem[] = [
   { id: 'reports', label: 'Relatórios', icon: BarChart3, adminOnly: true },
   { id: 'commissions', label: 'Comissões', icon: DollarSign, adminOnly: false, permission: 'view_commissions' },
   { id: 'commission-reprocessing', label: 'Reprocessar Comissões', icon: RefreshCw, adminOnly: true, permission: 'reverse_financial_entries' },
+  { id: 'professional-statement', label: 'Extrato do Profissional', icon: Wallet, adminOnly: false, permission: 'view_commissions' },
 ];
 
 // Super Admin specific menu items
@@ -91,7 +93,7 @@ export function Sidebar({ currentPage, onNavigate }: SidebarProps) {
   const { user, userRole, isOwner, isSuperAdmin, currentTenant, signOut, hasPermission } = useAuth();
   const { settings: tenantSettings } = useTenantSettings();
   const isCleaningTenant = isCleaningControlTenant(currentTenant);
-  const cleaningHiddenItems = ['agenda', 'services', 'commission-matrix', 'products', 'stock', 'cashier', 'financial-management', 'commissions', 'commission-reprocessing'];
+  const cleaningHiddenItems = ['agenda', 'services', 'commission-matrix', 'products', 'stock', 'cashier', 'financial-management', 'commissions', 'commission-reprocessing', 'professional-statement'];
 
   const handleLogout = async () => {
     await signOut();
