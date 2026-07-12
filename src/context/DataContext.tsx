@@ -206,6 +206,7 @@ export interface CommissionReprocessPreviewItem {
   nextRate: number | null;
   nextValue: number | null;
   difference: number;
+  alreadyPaid: boolean;
   status: 'ok' | 'no_rule' | 'no_service';
 }
 
@@ -281,10 +282,10 @@ interface DataContextType {
   payAllCommissions: (professionalId: string, paymentMethod: 'cash' | 'pix' | 'transfer') => Promise<void>;
   addVoucher: (professionalId: string, amount: number, description?: string) => Promise<void>;
   reprocessPendingCommissions: (
-    filters: { dateFrom: string; dateTo: string; professionalId?: string | null }
+    filters: { dateFrom: string; dateTo: string; professionalId?: string | null; includePaid?: boolean }
   ) => Promise<CommissionReprocessResult | null>;
   previewReprocessPendingCommissions: (
-    filters: { dateFrom: string; dateTo: string; professionalId?: string | null }
+    filters: { dateFrom: string; dateTo: string; professionalId?: string | null; includePaid?: boolean }
   ) => Promise<CommissionReprocessPreview | null>;
 }
 
@@ -2020,7 +2021,7 @@ export const DataProvider: React.FC<{ children: ReactNode }> = ({ children }) =>
   // Simulação: calcula o recálculo SEM gravar, para a tela mostrar diferença
   // e sinalizar riscos antes de aplicar.
   const previewReprocessPendingCommissions = async (
-    filters: { dateFrom: string; dateTo: string; professionalId?: string | null }
+    filters: { dateFrom: string; dateTo: string; professionalId?: string | null; includePaid?: boolean }
   ): Promise<CommissionReprocessPreview | null> => {
     if (!guardFinancialPermission(canViewFinancialHistory || canPerformAdvancedFinancialOps, 'Sem permissão para simular reprocessamento.')) return null;
     if (!tenantId) return null;
@@ -2029,7 +2030,7 @@ export const DataProvider: React.FC<{ children: ReactNode }> = ({ children }) =>
       .from('commissions')
       .select('*')
       .eq('tenant_id', tenantId)
-      .eq('status', 'pending')
+      .in('status', filters.includePaid ? ['pending', 'paid'] : ['pending'])
       .eq('type', 'service')
       .gte('created_at', filters.dateFrom)
       .lte('created_at', filters.dateTo)
@@ -2057,10 +2058,12 @@ export const DataProvider: React.FC<{ children: ReactNode }> = ({ children }) =>
       const currentValue = Number(commission.commission_value) || 0;
       totalCurrent += currentValue;
 
+      const alreadyPaid = commission.status === 'paid';
+
       if (!commission.service_id || !commission.professional_id) {
         skippedCount += 1;
         totalNext += currentValue;
-        items.push({ commissionId: commission.id, professionalName, serviceName, baseValue: Number(commission.base_value) || 0, currentRate: Number(commission.commission_rate) || 0, currentValue, nextRate: null, nextValue: null, difference: 0, status: 'no_service' });
+        items.push({ commissionId: commission.id, professionalName, serviceName, baseValue: Number(commission.base_value) || 0, currentRate: Number(commission.commission_rate) || 0, currentValue, nextRate: null, nextValue: null, difference: 0, alreadyPaid, status: 'no_service' });
         continue;
       }
 
@@ -2068,7 +2071,7 @@ export const DataProvider: React.FC<{ children: ReactNode }> = ({ children }) =>
       if (!mapping) {
         skippedCount += 1;
         totalNext += currentValue;
-        items.push({ commissionId: commission.id, professionalName, serviceName, baseValue: Number(commission.base_value) || 0, currentRate: Number(commission.commission_rate) || 0, currentValue, nextRate: null, nextValue: null, difference: 0, status: 'no_rule' });
+        items.push({ commissionId: commission.id, professionalName, serviceName, baseValue: Number(commission.base_value) || 0, currentRate: Number(commission.commission_rate) || 0, currentValue, nextRate: null, nextValue: null, difference: 0, alreadyPaid, status: 'no_rule' });
         continue;
       }
 
@@ -2077,7 +2080,7 @@ export const DataProvider: React.FC<{ children: ReactNode }> = ({ children }) =>
       totalNext += nextValue;
       const difference = nextValue - currentValue;
       if (Math.abs(difference) > 0.009) affectedCount += 1;
-      items.push({ commissionId: commission.id, professionalName, serviceName, baseValue: Number(commission.base_value) || 0, currentRate: Number(commission.commission_rate) || 0, currentValue, nextRate, nextValue, difference, status: 'ok' });
+      items.push({ commissionId: commission.id, professionalName, serviceName, baseValue: Number(commission.base_value) || 0, currentRate: Number(commission.commission_rate) || 0, currentValue, nextRate, nextValue, difference, alreadyPaid, status: 'ok' });
     }
 
     return {
@@ -2091,7 +2094,7 @@ export const DataProvider: React.FC<{ children: ReactNode }> = ({ children }) =>
   };
 
   const reprocessPendingCommissions = async (
-    filters: { dateFrom: string; dateTo: string; professionalId?: string | null }
+    filters: { dateFrom: string; dateTo: string; professionalId?: string | null; includePaid?: boolean }
   ): Promise<CommissionReprocessResult | null> => {
     if (!guardModify()) return null;
     if (!guardFinancialPermission(canPerformAdvancedFinancialOps, 'Somente usuários financeiros podem reprocessar comissões.')) return null;
@@ -2101,7 +2104,7 @@ export const DataProvider: React.FC<{ children: ReactNode }> = ({ children }) =>
       .from('commissions')
       .select('*')
       .eq('tenant_id', tenantId)
-      .eq('status', 'pending')
+      .in('status', filters.includePaid ? ['pending', 'paid'] : ['pending'])
       .eq('type', 'service')
       .gte('created_at', filters.dateFrom)
       .lte('created_at', filters.dateTo)
@@ -2118,6 +2121,12 @@ export const DataProvider: React.FC<{ children: ReactNode }> = ({ children }) =>
       toast.error('Não foi possível carregar as comissões para reprocessamento.');
       return null;
     }
+
+    // Ajuste de comissões já pagas exige caixa aberto para lançar a diferença.
+    const adjustmentSession = filters.includePaid
+      ? getCashOperationTargetSession({ allowPendingSession: true, requireActiveCash: false })
+      : null;
+    const adjustmentTimestamp = getSessionMovementTimestamp(adjustmentSession);
 
     const rows = (data as Commission[]) ?? [];
     let recalculatedCount = 0;
@@ -2140,6 +2149,39 @@ export const DataProvider: React.FC<{ children: ReactNode }> = ({ children }) =>
       const settlementKind = normalizeCommissionSettlementKind(mapping.settlement_kind);
       const professional = professionals.find((item) => item.id === commission.professional_id);
       const service = services.find((item) => item.id === commission.service_id);
+      const isPaid = commission.status === 'paid';
+      const delta = nextValue - Number(commission.commission_value);
+
+      // Comissão paga: lança no caixa apenas a diferença (ajuste) antes de
+      // atualizar o valor. Sem caixa aberto, não altera para não descasar.
+      if (isPaid && Math.abs(delta) > 0.009) {
+        if (!adjustmentSession) {
+          skippedItems.push(`${commission.professional_name_snapshot ?? 'Profissional'} / ${commission.service_name_snapshot ?? 'Serviço'} paga: abra o caixa para lançar o ajuste`);
+          continue;
+        }
+        // payable: delta>0 → saída (paga mais); delta<0 → entrada (estorno).
+        // receivable: delta>0 → entrada (recebe mais); delta<0 → saída.
+        const baseIsExpense = settlementKind !== 'transfer_receivable';
+        const movementType = (delta > 0) === baseIsExpense ? 'expense' : 'income';
+        const { error: adjError } = await supabase.from('transactions').insert({
+          cash_session_id: adjustmentSession.id,
+          type: movementType,
+          category: settlementKind === 'transfer_receivable' ? 'Ajuste de Repasse' : 'Ajuste de Comissão',
+          description: `Ajuste (reprocessamento) - ${commission.professional_name_snapshot ?? professional?.nickname ?? 'Profissional'} / ${commission.service_name_snapshot ?? service?.name ?? 'Serviço'}`,
+          amount: Math.abs(delta),
+          payment_method: commission.payment_method ?? 'other',
+          reference_id: commission.id,
+          reference_type: 'commission',
+          created_by: user?.id,
+          tenant_id: tenantId,
+          ...(adjustmentTimestamp ? { created_at: adjustmentTimestamp } : {}),
+        });
+        if (adjError) {
+          console.error('Erro ao lançar ajuste de comissão:', adjError);
+          skippedItems.push(`${commission.professional_name_snapshot ?? 'Profissional'} / ${commission.service_name_snapshot ?? 'Serviço'} com erro no ajuste de caixa`);
+          continue;
+        }
+      }
 
       const { error: updateError } = await supabase
         .from('commissions')
@@ -2151,6 +2193,8 @@ export const DataProvider: React.FC<{ children: ReactNode }> = ({ children }) =>
           service_name_snapshot: service?.name ?? commission.service_name_snapshot ?? 'Serviço',
           rule_source_id: mapping.id,
           calculation_source: 'reprocess',
+          // Paga mantém-se paga e totalmente liquidada no novo valor.
+          ...(isPaid ? { settled_amount: nextValue } : {}),
         })
         .eq('id', commission.id)
         .eq('tenant_id', tenantId);
@@ -2169,7 +2213,7 @@ export const DataProvider: React.FC<{ children: ReactNode }> = ({ children }) =>
       professional_id: filters.professionalId ?? null,
       date_from: filters.dateFrom,
       date_to: filters.dateTo,
-      mode: 'pending_only',
+      mode: filters.includePaid ? 'pending_and_paid' : 'pending_only',
       recalculated_count: recalculatedCount,
       skipped_count: skippedItems.length,
       summary: { skipped_items: skippedItems },

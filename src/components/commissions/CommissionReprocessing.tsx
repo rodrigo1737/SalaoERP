@@ -38,6 +38,7 @@ export function CommissionReprocessing() {
   const [dateFrom, setDateFrom] = useState(firstDayOfMonth());
   const [dateTo, setDateTo] = useState(today());
   const [professionalId, setProfessionalId] = useState<string>('all');
+  const [includePaid, setIncludePaid] = useState(false);
   const [preview, setPreview] = useState<CommissionReprocessPreview | null>(null);
   const [simulating, setSimulating] = useState(false);
   const [applying, setApplying] = useState(false);
@@ -51,6 +52,7 @@ export function CommissionReprocessing() {
     dateFrom: new Date(`${dateFrom}T00:00:00`).toISOString(),
     dateTo: new Date(`${dateTo}T23:59:59`).toISOString(),
     professionalId: professionalId === 'all' ? null : professionalId,
+    includePaid,
   });
 
   const handleSimulate = async () => {
@@ -126,9 +128,20 @@ export function CommissionReprocessing() {
                 Simular
               </Button>
             </div>
-            <p className="text-xs text-muted-foreground mt-3">
-              Esta rotina afeta apenas comissões <strong>pendentes</strong> (não pagas) e não mexe no caixa. Comissões já pagas não são alteradas.
-            </p>
+            <label className="mt-3 flex items-start gap-2 cursor-pointer">
+              <input
+                type="checkbox"
+                className="mt-0.5 h-4 w-4 accent-primary"
+                checked={includePaid}
+                onChange={(e) => { setIncludePaid(e.target.checked); setPreview(null); }}
+              />
+              <span className="text-sm">
+                <span className="font-medium">Incluir comissões já pagas</span>
+                <span className="block text-xs text-muted-foreground">
+                  As pagas geram um <strong>ajuste da diferença no caixa</strong> (requer caixa aberto). Sem marcar, só recalcula pendentes.
+                </span>
+              </span>
+            </label>
           </Card>
 
           {preview && (
@@ -186,7 +199,10 @@ export function CommissionReprocessing() {
                       <tbody>
                         {preview.items.map((item) => (
                           <tr key={item.commissionId} className="border-b last:border-0 hover:bg-muted/20">
-                            <td className="p-2">{item.professionalName}</td>
+                            <td className="p-2">
+                              {item.professionalName}
+                              {item.alreadyPaid && <span className="ml-2 text-[10px] rounded bg-success-soft text-success px-1.5 py-0.5">Paga → ajuste</span>}
+                            </td>
                             <td className="p-2">{item.serviceName}</td>
                             <td className="p-2 text-right">{formatCurrency(item.baseValue)}</td>
                             <td className="p-2 text-right">{item.currentRate}% • {formatCurrency(item.currentValue)}</td>
