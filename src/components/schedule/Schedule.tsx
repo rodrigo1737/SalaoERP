@@ -40,7 +40,7 @@ import { Combobox } from '@/components/ui/combobox';
 import { Checkbox } from '@/components/ui/checkbox';
 import { Textarea } from '@/components/ui/textarea';
 import { useToast } from '@/hooks/use-toast';
-import { useData, Appointment, ServiceProfessional } from '@/context/DataContext';
+import { useData, Appointment, ServiceProfessional, BillPaymentLine, BillPaymentMethod } from '@/context/DataContext';
 import { useStock } from '@/context/StockContext';
 import { useAuth } from '@/contexts/AuthContext';
 import { useTenantSettings } from '@/contexts/TenantSettingsContext';
@@ -98,19 +98,6 @@ const getTimeFromISO = (isoString: string) => {
   return `${date.getHours().toString().padStart(2, '0')}:${date.getMinutes().toString().padStart(2, '0')}`;
 };
 
-// Pendências de comandas anteriores ficam marcadas nas observações do
-// agendamento como "[PENDENTE: R$valor]" (convenção do fechamento pendente).
-const PENDING_TAG_REGEX = /\[PENDENTE: R\$\s*([\d]+(?:[.,]\d{1,2})?)\]/g;
-
-const sumPendingTags = (notes?: string | null) => {
-  if (!notes) return 0;
-  let total = 0;
-  for (const match of notes.matchAll(PENDING_TAG_REGEX)) {
-    total += parseFloat(match[1].replace(',', '.')) || 0;
-  }
-  return total;
-};
-
 const isSameCalendarDay = (first: Date, second: Date) => {
   return first.getFullYear() === second.getFullYear()
     && first.getMonth() === second.getMonth()
@@ -140,7 +127,7 @@ const normalizeText = (value?: string | null) => {
 };
 
 export function Schedule() {
-  const { clients, professionals, services, products, appointments, loading, addClient, addService, addAppointment, updateAppointment, deleteAppointment, refundAppointment, ensureCashSessionState, completeAppointment, fetchAppointmentServices, saveAppointmentServices } = useData();
+  const { clients, professionals, services, products, appointments, loading, addClient, addService, addAppointment, updateAppointment, deleteAppointment, refundAppointment, ensureCashSessionState, completeAppointment, fetchAppointmentServices, saveAppointmentServices, fetchClientBalances, registerBillPayments } = useData();
   const { settings: tenantSettings } = useTenantSettings();
   const navigate = useNavigate();
 
@@ -189,6 +176,11 @@ export function Schedule() {
   const [extraSameDayAppointments, setExtraSameDayAppointments] = useState<Appointment[]>([]);
   const [includedExtraIds, setIncludedExtraIds] = useState<string[]>([]);
   const [clientPendingTotal, setClientPendingTotal] = useState(0);
+  const [clientCreditTotal, setClientCreditTotal] = useState(0);
+  const [splitPayment, setSplitPayment] = useState(false);
+  const [paymentLines, setPaymentLines] = useState<Array<{ method: BillPaymentMethod; amount: string }>>([]);
+  const [creditDepositAmount, setCreditDepositAmount] = useState('');
+  const [creditDepositMethod, setCreditDepositMethod] = useState<'cash' | 'pix' | 'credit_card' | 'debit_card'>('cash');
   const [generateCommissionOnPending, setGenerateCommissionOnPending] = useState(true);
   const [detailServiceLines, setDetailServiceLines] = useState<Array<{ service_id: string; professional_id: string; start_time?: string | null; end_time?: string | null; value: number }>>([]);
   const [billServiceLines, setBillServiceLines] = useState<Array<{ service_id: string; professional_id: string; value: number }>>([]);
@@ -774,16 +766,20 @@ export function Schedule() {
     setExtraSameDayAppointments(extras);
     setIncludedExtraIds(extras.map((appointment) => appointment.id));
 
-    // Pendências de comandas anteriores do cliente (todas as datas).
-    const pendingTotal = selectedAppointment?.client_id
-      ? appointments
-          .filter((appointment) =>
-            appointment.client_id === selectedAppointment.client_id
-            && appointment.id !== selectedAppointment.id)
-          .reduce((sum, appointment) => sum + sumPendingTags(appointment.notes), 0)
-      : 0;
-    setClientPendingTotal(pendingTotal);
+    // Saldos do cliente (razão): pendências em aberto e crédito disponível.
+    if (selectedAppointment?.client_id) {
+      const balances = await fetchClientBalances(selectedAppointment.client_id);
+      setClientPendingTotal(balances.pendingTotal);
+      setClientCreditTotal(balances.creditTotal);
+    } else {
+      setClientPendingTotal(0);
+      setClientCreditTotal(0);
+    }
     setGenerateCommissionOnPending(true);
+    setSplitPayment(false);
+    setPaymentLines([]);
+    setCreditDepositAmount('');
+    setCreditDepositMethod('cash');
 
     // Linhas de serviço da comanda: as passadas pela tela de detalhe (ao vivo),
     // senão as persistidas, senão o serviço único do agendamento.
@@ -931,7 +927,8 @@ export function Schedule() {
   };
 
   const handleCloseBill = async () => {
-    if (!selectedAppointment || !selectedPaymentMethod || isSubmittingBill) return;
+    if (!selectedAppointment || isSubmittingBill) return;
+    if (!splitPayment && !selectedPaymentMethod) return;
 
     const cashState = await ensureCashSessionState();
 
@@ -977,22 +974,6 @@ export function Schedule() {
       const extrasTotal = includedExtras.reduce((sum, appointment) => sum + (appointment.total_value || 0), 0);
       const totalValue = mainTotal + extrasTotal;
 
-      let notes = selectedAppointment.notes || '';
-      if (billItems.length > 0) {
-        const itemsDesc = billItems.map(item =>
-          `${item.name} (${item.quantity}x R$${item.unitPrice.toFixed(2)})`
-        ).join(', ');
-        notes = `${notes} [Adicionais: ${itemsDesc}]`.trim();
-      }
-      if (selectedPaymentMethod === 'pending') {
-        notes = `${notes} [PENDENTE: R$${mainTotal.toFixed(2)}]`.trim();
-      }
-
-      await updateAppointment(selectedAppointment.id, {
-        total_value: mainTotal,
-        notes,
-      });
-
       const paymentMethodMap: Record<string, string> = {
         pix: 'pix',
         credit: 'credit_card',
@@ -1001,17 +982,95 @@ export function Schedule() {
         pending: 'other'
       };
 
-      const skipCommission = selectedPaymentMethod === 'pending' && !generateCommissionOnPending;
+      // Linhas de pagamento: no modo dividido vêm da UI; no simples é uma
+      // única linha com o total.
+      const singleMethodToLine: Record<string, BillPaymentMethod> = {
+        cash: 'cash', pix: 'pix', credit: 'credit_card', debit: 'debit_card', pending: 'pending',
+      };
+      const resolvedLines: BillPaymentLine[] = splitPayment
+        ? paymentLines
+            .map((line) => ({ method: line.method, amount: parseFloat(line.amount) || 0 }))
+            .filter((line) => line.amount > 0.009)
+        : [{ method: singleMethodToLine[selectedPaymentMethod], amount: totalValue }];
 
-      const transactionId = await completeAppointment(selectedAppointment.id, paymentMethodMap[selectedPaymentMethod], {
+      const linesSum = resolvedLines.reduce((s, line) => s + line.amount, 0);
+      if (splitPayment && Math.abs(linesSum - totalValue) > 0.01) {
+        toast({
+          variant: 'destructive',
+          title: 'Valores não conferem',
+          description: `As formas de pagamento somam R$ ${linesSum.toFixed(2)}, mas o total da comanda é R$ ${totalValue.toFixed(2)}.`,
+        });
+        return;
+      }
+
+      const pendingAmount = resolvedLines.filter((line) => line.method === 'pending').reduce((s, line) => s + line.amount, 0);
+      const creditUseAmount = resolvedLines.filter((line) => line.method === 'client_credit').reduce((s, line) => s + line.amount, 0);
+      if ((pendingAmount > 0.009 || creditUseAmount > 0.009) && !selectedAppointment.client_id) {
+        toast({ variant: 'destructive', title: 'Comanda sem cliente', description: 'Pendência e crédito exigem cliente identificado na comanda.' });
+        return;
+      }
+      if (creditUseAmount > clientCreditTotal + 0.009) {
+        toast({ variant: 'destructive', title: 'Crédito insuficiente', description: `O cliente possui R$ ${clientCreditTotal.toFixed(2)} de crédito.` });
+        return;
+      }
+
+      const parsedCreditDeposit = parseFloat(creditDepositAmount) || 0;
+      const creditDeposit = splitPayment && parsedCreditDeposit > 0.009
+        ? { method: creditDepositMethod, amount: parsedCreditDeposit }
+        : null;
+
+      // Comanda 100% de repasse: o dinheiro não passa pelo salão — mantém o
+      // fluxo legado (sem lançamentos de pagamento no caixa do salão).
+      const settlementForLine = (line: { service_id: string; professional_id: string }) =>
+        serviceProfessionalLinks.find((link) => link.service_id === line.service_id && link.professional_id === line.professional_id)?.settlement_kind
+          ?? (professionalsById.get(line.professional_id)?.settlement_type === 'transfer' ? 'transfer_receivable' : 'commission_payable');
+      const fullyTransfer = commissionLines.length > 0
+        && commissionLines.every((line) => settlementForLine(line) === 'transfer_receivable');
+
+      let notes = selectedAppointment.notes || '';
+      if (billItems.length > 0) {
+        const itemsDesc = billItems.map(item =>
+          `${item.name} (${item.quantity}x R$${item.unitPrice.toFixed(2)})`
+        ).join(', ');
+        notes = `${notes} [Adicionais: ${itemsDesc}]`.trim();
+      }
+
+      await updateAppointment(selectedAppointment.id, {
         total_value: mainTotal,
         notes,
-      }, { skipCommission, commissionLines: commissionLines.length > 0 ? commissionLines : undefined });
+      });
 
+      // Registra os pagamentos (transações por método, pendência no razão,
+      // consumo de crédito e depósito) antes de finalizar os atendimentos.
+      if (!fullyTransfer) {
+        const paymentsOk = await registerBillPayments({
+          appointmentId: selectedAppointment.id,
+          clientId: selectedAppointment.client_id ?? null,
+          clientName: selectedAppointment.client?.name,
+          lines: resolvedLines,
+          creditDeposit,
+        });
+        if (!paymentsOk) return;
+      }
+
+      const skipCommission = pendingAmount > 0.009 && !generateCommissionOnPending;
+
+      const moneyLines = resolvedLines.filter((line) => line.method !== 'pending' && line.method !== 'client_credit');
+      const primaryMethod = splitPayment
+        ? (moneyLines.sort((a, b) => b.amount - a.amount)[0]?.method ?? 'other')
+        : paymentMethodMap[selectedPaymentMethod];
+
+      const transactionId = await completeAppointment(selectedAppointment.id, primaryMethod, {
+        total_value: mainTotal,
+        notes,
+      }, { skipCommission, commissionLines: commissionLines.length > 0 ? commissionLines : undefined, skipTransaction: !fullyTransfer });
+
+      // Com skipTransaction (pagamento dividido) o dinheiro já entrou via
+      // registerBillPayments — a ausência de transactionId não é falha.
       const mainIsTransfer = selectedAppointment.professional_id
         ? professionalsById.get(selectedAppointment.professional_id)?.settlement_type === 'transfer'
         : false;
-      if (!transactionId && !mainIsTransfer && selectedAppointment.status !== 'completed') {
+      if (fullyTransfer && !transactionId && !mainIsTransfer && selectedAppointment.status !== 'completed') {
         toast({
           variant: "destructive",
           title: "Falha ao fechar comanda",
@@ -1020,30 +1079,16 @@ export function Schedule() {
         return;
       }
 
-      // Fecha os agendamentos incluídos: cada um gera sua própria transação e
-      // comissão para o profissional correspondente.
+      // Fecha os agendamentos incluídos: comissão por profissional; o dinheiro
+      // da comanda unificada já foi lançado pelas linhas de pagamento.
       for (const extra of includedExtras) {
         try {
-          const extraOverrides = selectedPaymentMethod === 'pending'
-            ? { notes: `${extra.notes || ''} [PENDENTE: R$${(extra.total_value || 0).toFixed(2)}]`.trim() }
-            : undefined;
-          const extraTransactionId = await completeAppointment(
+          await completeAppointment(
             extra.id,
-            paymentMethodMap[selectedPaymentMethod],
-            extraOverrides,
-            { skipCommission },
+            primaryMethod,
+            undefined,
+            { skipCommission, skipTransaction: !fullyTransfer },
           );
-          const extraIsTransfer = extra.professional_id
-            ? professionalsById.get(extra.professional_id)?.settlement_type === 'transfer'
-            : false;
-          if (!extraTransactionId && !extraIsTransfer && extra.status !== 'completed') {
-            toast({
-              variant: "destructive",
-              title: "Comanda fechada com alerta",
-              description: `Não foi possível confirmar o pagamento do agendamento de ${extra.service?.name ?? 'serviço'} (${extra.professional?.nickname ?? 'profissional'}).`
-            });
-            continue;
-          }
           if (extra.service_id) {
             try {
               await registerServiceConsumption(extra.service_id, extra.id);
@@ -1098,10 +1143,13 @@ export function Schedule() {
         cash: 'Dinheiro',
         pending: 'Pendente'
       };
+      const paymentSummary = splitPayment
+        ? 'Pagamento dividido'
+        : paymentLabels[selectedPaymentMethod];
 
       toast({
         title: "Comanda fechada",
-        description: `R$ ${totalValue.toFixed(2)} - ${paymentLabels[selectedPaymentMethod]}${includedExtras.length > 0 ? ` (${includedExtras.length + 1} agendamentos)` : ''}${billItems.length > 0 ? ` (+${billItems.length} item(s))` : ''}`
+        description: `R$ ${totalValue.toFixed(2)} - ${paymentSummary}${pendingAmount > 0.009 ? ` (R$ ${pendingAmount.toFixed(2)} pendente)` : ''}${includedExtras.length > 0 ? ` (${includedExtras.length + 1} agendamentos)` : ''}${billItems.length > 0 ? ` (+${billItems.length} item(s))` : ''}`
       });
 
       setIsClosingBill(false);
@@ -1110,6 +1158,9 @@ export function Schedule() {
       setBillItems([]);
       setExtraSameDayAppointments([]);
       setIncludedExtraIds([]);
+      setSplitPayment(false);
+      setPaymentLines([]);
+      setCreditDepositAmount('');
     } catch (error) {
       console.error('Error closing bill:', error);
       toast({
@@ -1758,6 +1809,17 @@ export function Schedule() {
               </div>
             )}
 
+            {clientCreditTotal > 0 && (
+              <div className="rounded-lg border border-success/40 bg-success-soft/40 p-3 text-sm">
+                <p className="font-medium text-success">
+                  Cliente possui crédito disponível: R$ {clientCreditTotal.toFixed(2)}
+                </p>
+                <p className="text-xs text-muted-foreground">
+                  Use "Dividir pagamento / usar crédito" para abater este valor na comanda.
+                </p>
+              </div>
+            )}
+
             {/* Bill Items Editor */}
             <BillItemsEditor
               items={billItems}
@@ -1832,88 +1894,193 @@ export function Schedule() {
               </div>
             )}
 
-            <div className="space-y-2">
-              <Label>Forma de Pagamento</Label>
-              <div className="grid grid-cols-3 gap-3">
-                <Button
-                  type="button"
-                  variant={selectedPaymentMethod === 'cash' ? 'default' : 'outline'}
-                  className="h-16 flex-col gap-1"
-                  disabled={isSubmittingBill}
-                  onClick={() => setSelectedPaymentMethod('cash')}
-                >
-                  <Banknote className="w-5 h-5" />
-                  <span className="text-xs">Dinheiro</span>
-                </Button>
-                <Button
-                  type="button"
-                  variant={selectedPaymentMethod === 'pix' ? 'default' : 'outline'}
-                  className="h-16 flex-col gap-1"
-                  disabled={isSubmittingBill}
-                  onClick={() => setSelectedPaymentMethod('pix')}
-                >
-                  <QrCode className="w-5 h-5" />
-                  <span className="text-xs">PIX</span>
-                </Button>
-                <Button
-                  type="button"
-                  variant={selectedPaymentMethod === 'credit' ? 'default' : 'outline'}
-                  className="h-16 flex-col gap-1"
-                  disabled={isSubmittingBill}
-                  onClick={() => setSelectedPaymentMethod('credit')}
-                >
-                  <CreditCard className="w-5 h-5" />
-                  <span className="text-xs">Crédito</span>
-                </Button>
-                <Button
-                  type="button"
-                  variant={selectedPaymentMethod === 'debit' ? 'default' : 'outline'}
-                  className="h-16 flex-col gap-1"
-                  disabled={isSubmittingBill}
-                  onClick={() => setSelectedPaymentMethod('debit')}
-                >
-                  <Wallet className="w-5 h-5" />
-                  <span className="text-xs">Débito</span>
-                </Button>
-                <Button
-                  type="button"
-                  variant={selectedPaymentMethod === 'pending' ? 'destructive' : 'outline'}
-                  className="h-16 flex-col gap-1 col-span-2"
-                  disabled={isSubmittingBill}
-                  onClick={() => setSelectedPaymentMethod('pending')}
-                >
-                  <AlertCircle className="w-5 h-5" />
-                  <span className="text-xs">Pendente</span>
-                </Button>
-              </div>
-              {selectedPaymentMethod === 'pending' && (
-                <div className="mt-2 space-y-2">
-                  <p className="text-xs text-warning text-center">
-                    O valor será acumulado como pendente para este cliente
-                  </p>
-                  <label className="flex items-center gap-2 rounded-lg border border-border bg-secondary/30 px-3 py-2 cursor-pointer">
-                    <Checkbox
-                      checked={generateCommissionOnPending}
-                      disabled={isSubmittingBill}
-                      onCheckedChange={(checked) => setGenerateCommissionOnPending(Boolean(checked))}
-                    />
-                    <div className="text-sm">
-                      <p className="font-medium">Gerar comissão do profissional mesmo com pendência</p>
-                      <p className="text-xs text-muted-foreground">
-                        Desmarque para não gerar a comissão agora — ela não será criada para esta comanda.
-                      </p>
-                    </div>
-                  </label>
-                </div>
-              )}
-            </div>
+            {(() => {
+              const billTotal = (parseFloat(editValue) || selectedAppointment?.total_value || 0)
+                + billItems.reduce((sum, item) => sum + item.total, 0)
+                + extraSameDayAppointments
+                  .filter((extra) => includedExtraIds.includes(extra.id))
+                  .reduce((sum, extra) => sum + (extra.total_value || 0), 0);
+              const allocated = paymentLines.reduce((sum, line) => sum + (parseFloat(line.amount) || 0), 0);
+              const remaining = billTotal - allocated;
+              const hasPendingLine = paymentLines.some((line) => line.method === 'pending' && (parseFloat(line.amount) || 0) > 0.009);
+              const splitMethodOptions: Array<{ value: BillPaymentMethod; label: string; disabled?: boolean }> = [
+                { value: 'cash', label: 'Dinheiro' },
+                { value: 'pix', label: 'PIX' },
+                { value: 'credit_card', label: 'Cartão Crédito' },
+                { value: 'debit_card', label: 'Cartão Débito' },
+                { value: 'client_credit', label: `Crédito do cliente (R$ ${clientCreditTotal.toFixed(2)})`, disabled: clientCreditTotal <= 0.009 },
+                { value: 'pending', label: 'Pendente (fica devendo)' },
+              ];
+              const splitValid = paymentLines.some((line) => (parseFloat(line.amount) || 0) > 0.009)
+                && Math.abs(remaining) <= 0.01;
 
-            <div className="flex justify-end gap-2 pt-2">
-              <Button variant="outline" onClick={() => setIsClosingBill(false)} disabled={isSubmittingBill}>Cancelar</Button>
-              <Button onClick={handleCloseBill} disabled={!selectedPaymentMethod || isSubmittingBill}>
-                {isSubmittingBill ? 'Confirmando...' : 'Confirmar Pagamento'}
-              </Button>
-            </div>
+              return (
+                <>
+                  <div className="space-y-2">
+                    <div className="flex items-center justify-between">
+                      <Label>Forma de Pagamento</Label>
+                      <Button
+                        type="button"
+                        variant="ghost"
+                        size="sm"
+                        className="h-7 text-xs"
+                        disabled={isSubmittingBill}
+                        onClick={() => {
+                          const next = !splitPayment;
+                          setSplitPayment(next);
+                          setSelectedPaymentMethod('');
+                          setPaymentLines(next ? [{ method: 'cash', amount: billTotal.toFixed(2) }] : []);
+                        }}
+                      >
+                        {splitPayment ? 'Voltar ao pagamento simples' : 'Dividir pagamento / usar crédito'}
+                      </Button>
+                    </div>
+
+                    {!splitPayment ? (
+                      <div className="grid grid-cols-3 gap-3">
+                        <Button type="button" variant={selectedPaymentMethod === 'cash' ? 'default' : 'outline'} className="h-16 flex-col gap-1" disabled={isSubmittingBill} onClick={() => setSelectedPaymentMethod('cash')}>
+                          <Banknote className="w-5 h-5" />
+                          <span className="text-xs">Dinheiro</span>
+                        </Button>
+                        <Button type="button" variant={selectedPaymentMethod === 'pix' ? 'default' : 'outline'} className="h-16 flex-col gap-1" disabled={isSubmittingBill} onClick={() => setSelectedPaymentMethod('pix')}>
+                          <QrCode className="w-5 h-5" />
+                          <span className="text-xs">PIX</span>
+                        </Button>
+                        <Button type="button" variant={selectedPaymentMethod === 'credit' ? 'default' : 'outline'} className="h-16 flex-col gap-1" disabled={isSubmittingBill} onClick={() => setSelectedPaymentMethod('credit')}>
+                          <CreditCard className="w-5 h-5" />
+                          <span className="text-xs">Crédito</span>
+                        </Button>
+                        <Button type="button" variant={selectedPaymentMethod === 'debit' ? 'default' : 'outline'} className="h-16 flex-col gap-1" disabled={isSubmittingBill} onClick={() => setSelectedPaymentMethod('debit')}>
+                          <Wallet className="w-5 h-5" />
+                          <span className="text-xs">Débito</span>
+                        </Button>
+                        <Button type="button" variant={selectedPaymentMethod === 'pending' ? 'destructive' : 'outline'} className="h-16 flex-col gap-1 col-span-2" disabled={isSubmittingBill} onClick={() => setSelectedPaymentMethod('pending')}>
+                          <AlertCircle className="w-5 h-5" />
+                          <span className="text-xs">Pendente</span>
+                        </Button>
+                      </div>
+                    ) : (
+                      <div className="space-y-2 rounded-lg border border-border p-3">
+                        {paymentLines.map((line, index) => (
+                          <div key={index} className="flex items-center gap-2">
+                            <Select
+                              value={line.method}
+                              onValueChange={(value) => setPaymentLines((previous) => previous.map((item, itemIndex) =>
+                                itemIndex === index ? { ...item, method: value as BillPaymentMethod } : item))}
+                            >
+                              <SelectTrigger className="flex-1"><SelectValue /></SelectTrigger>
+                              <SelectContent>
+                                {splitMethodOptions.map((option) => (
+                                  <SelectItem key={option.value} value={option.value} disabled={option.disabled}>
+                                    {option.label}
+                                  </SelectItem>
+                                ))}
+                              </SelectContent>
+                            </Select>
+                            <Input
+                              type="number"
+                              min="0"
+                              step="0.01"
+                              className="w-28"
+                              value={line.amount}
+                              onChange={(event) => setPaymentLines((previous) => previous.map((item, itemIndex) =>
+                                itemIndex === index ? { ...item, amount: event.target.value } : item))}
+                            />
+                            <Button
+                              type="button"
+                              variant="ghost"
+                              size="sm"
+                              className="h-8 w-8 p-0 text-destructive"
+                              disabled={paymentLines.length <= 1}
+                              onClick={() => setPaymentLines((previous) => previous.filter((_, itemIndex) => itemIndex !== index))}
+                            >
+                              <X className="w-4 h-4" />
+                            </Button>
+                          </div>
+                        ))}
+
+                        <Button
+                          type="button"
+                          variant="outline"
+                          size="sm"
+                          onClick={() => setPaymentLines((previous) => [
+                            ...previous,
+                            { method: 'pix', amount: remaining > 0.009 ? remaining.toFixed(2) : '' },
+                          ])}
+                        >
+                          <Plus className="w-3 h-3 mr-1" />Adicionar forma
+                        </Button>
+
+                        <div className="flex justify-between border-t pt-2 text-sm">
+                          <span>Total: <strong>R$ {billTotal.toFixed(2)}</strong> • Alocado: <strong>R$ {allocated.toFixed(2)}</strong></span>
+                          <span className={Math.abs(remaining) <= 0.01 ? 'text-success font-medium' : 'text-destructive font-medium'}>
+                            {Math.abs(remaining) <= 0.01 ? 'Valores conferem' : `Faltam R$ ${remaining.toFixed(2)}`}
+                          </span>
+                        </div>
+
+                        <div className="border-t pt-2 space-y-1">
+                          <Label className="text-xs">Cliente deixou crédito adicional (opcional)</Label>
+                          <div className="flex items-center gap-2">
+                            <Input
+                              type="number"
+                              min="0"
+                              step="0.01"
+                              placeholder="0,00"
+                              className="w-28"
+                              value={creditDepositAmount}
+                              onChange={(event) => setCreditDepositAmount(event.target.value)}
+                            />
+                            <Select value={creditDepositMethod} onValueChange={(value) => setCreditDepositMethod(value as 'cash' | 'pix' | 'credit_card' | 'debit_card')}>
+                              <SelectTrigger className="flex-1"><SelectValue /></SelectTrigger>
+                              <SelectContent>
+                                <SelectItem value="cash">Dinheiro</SelectItem>
+                                <SelectItem value="pix">PIX</SelectItem>
+                                <SelectItem value="credit_card">Cartão Crédito</SelectItem>
+                                <SelectItem value="debit_card">Cartão Débito</SelectItem>
+                              </SelectContent>
+                            </Select>
+                          </div>
+                          <p className="text-[11px] text-muted-foreground">
+                            Valor pago além da comanda que fica como crédito para o cliente usar depois.
+                          </p>
+                        </div>
+                      </div>
+                    )}
+
+                    {((!splitPayment && selectedPaymentMethod === 'pending') || (splitPayment && hasPendingLine)) && (
+                      <div className="mt-2 space-y-2">
+                        <p className="text-xs text-warning text-center">
+                          O valor pendente ficará registrado como dívida do cliente
+                        </p>
+                        <label className="flex items-center gap-2 rounded-lg border border-border bg-secondary/30 px-3 py-2 cursor-pointer">
+                          <Checkbox
+                            checked={generateCommissionOnPending}
+                            disabled={isSubmittingBill}
+                            onCheckedChange={(checked) => setGenerateCommissionOnPending(Boolean(checked))}
+                          />
+                          <div className="text-sm">
+                            <p className="font-medium">Gerar comissão do profissional mesmo com pendência</p>
+                            <p className="text-xs text-muted-foreground">
+                              Desmarque para não gerar a comissão agora — ela não será criada para esta comanda.
+                            </p>
+                          </div>
+                        </label>
+                      </div>
+                    )}
+                  </div>
+
+                  <div className="flex justify-end gap-2 pt-2">
+                    <Button variant="outline" onClick={() => setIsClosingBill(false)} disabled={isSubmittingBill}>Cancelar</Button>
+                    <Button
+                      onClick={handleCloseBill}
+                      disabled={isSubmittingBill || (splitPayment ? !splitValid : !selectedPaymentMethod)}
+                    >
+                      {isSubmittingBill ? 'Confirmando...' : 'Confirmar Pagamento'}
+                    </Button>
+                  </div>
+                </>
+              );
+            })()}
           </div>
         </DialogContent>
       </Dialog>

@@ -132,6 +132,35 @@ export interface AppointmentServiceRow extends AppointmentServiceLine {
   created_at: string;
 }
 
+// Razão do cliente: dívidas (pendências) e créditos com baixa parcial.
+export interface ClientLedgerEntry {
+  id: string;
+  tenant_id: string;
+  client_id: string;
+  appointment_id?: string | null;
+  transaction_id?: string | null;
+  entry_type: 'debt' | 'credit';
+  amount: number;
+  settled_amount: number;
+  status: 'open' | 'settled';
+  description?: string | null;
+  created_at: string;
+  settled_at?: string | null;
+}
+
+export interface ClientBalances {
+  pendingTotal: number;
+  creditTotal: number;
+  entries: ClientLedgerEntry[];
+}
+
+// Linha de pagamento no fechamento da comanda (pagamento dividido).
+export type BillPaymentMethod = 'cash' | 'pix' | 'credit_card' | 'debit_card' | 'client_credit' | 'pending';
+export interface BillPaymentLine {
+  method: BillPaymentMethod;
+  amount: number;
+}
+
 export interface CashSession {
   id: string;
   opened_at: string;
@@ -264,10 +293,18 @@ interface DataContextType {
     id: string,
     paymentMethod: string,
     overrides?: Partial<Appointment>,
-    options?: { skipCommission?: boolean; commissionLines?: AppointmentServiceLine[] },
+    options?: { skipCommission?: boolean; commissionLines?: AppointmentServiceLine[]; skipTransaction?: boolean },
   ) => Promise<string | null>;
   fetchAppointmentServices: (appointmentId: string) => Promise<AppointmentServiceRow[]>;
   saveAppointmentServices: (appointmentId: string, lines: AppointmentServiceLine[]) => Promise<void>;
+  fetchClientBalances: (clientId: string) => Promise<ClientBalances>;
+  registerBillPayments: (params: {
+    appointmentId: string;
+    clientId?: string | null;
+    clientName?: string;
+    lines: BillPaymentLine[];
+    creditDeposit?: { method: 'cash' | 'pix' | 'credit_card' | 'debit_card'; amount: number } | null;
+  }) => Promise<boolean>;
   // Cash
   openCashSession: (openingBalance: number) => Promise<CashSession | null>;
   closeCashSession: (
@@ -1339,12 +1376,195 @@ export const DataProvider: React.FC<{ children: ReactNode }> = ({ children }) =>
     }
   };
 
+  // ── CLIENT LEDGER (pendências e créditos do cliente) ────────────────────
+  const fetchClientBalances = async (clientId: string): Promise<ClientBalances> => {
+    const empty: ClientBalances = { pendingTotal: 0, creditTotal: 0, entries: [] };
+    if (!tenantId || !clientId) return empty;
+    const { data, error } = await supabase
+      .from('client_ledger_entries')
+      .select('*')
+      .eq('tenant_id', tenantId)
+      .eq('client_id', clientId)
+      .order('created_at', { ascending: true });
+    if (error) {
+      console.error('Erro ao carregar saldos do cliente:', error);
+      return empty;
+    }
+    const entries = (data as ClientLedgerEntry[]) ?? [];
+    const openRemaining = (entry: ClientLedgerEntry) =>
+      Math.max(0, Number(entry.amount) - Number(entry.settled_amount ?? 0));
+    return {
+      pendingTotal: entries.filter((e) => e.entry_type === 'debt' && e.status === 'open').reduce((s, e) => s + openRemaining(e), 0),
+      creditTotal: entries.filter((e) => e.entry_type === 'credit' && e.status === 'open').reduce((s, e) => s + openRemaining(e), 0),
+      entries,
+    };
+  };
+
+  // Consome créditos abertos do cliente (FIFO) até o valor pedido.
+  const consumeClientCredit = async (clientId: string, amount: number): Promise<boolean> => {
+    const balances = await fetchClientBalances(clientId);
+    if (balances.creditTotal + 0.009 < amount) {
+      toast.error('Crédito do cliente insuficiente para o valor informado.');
+      return false;
+    }
+    let remaining = amount;
+    for (const entry of balances.entries) {
+      if (remaining <= 0.009) break;
+      if (entry.entry_type !== 'credit' || entry.status !== 'open') continue;
+      const available = Math.max(0, Number(entry.amount) - Number(entry.settled_amount ?? 0));
+      if (available <= 0.009) continue;
+      const take = Math.min(available, remaining);
+      const newSettled = Number(entry.settled_amount ?? 0) + take;
+      const fully = newSettled >= Number(entry.amount) - 0.009;
+      const { error } = await supabase
+        .from('client_ledger_entries')
+        .update({
+          settled_amount: newSettled,
+          status: fully ? 'settled' : 'open',
+          settled_at: fully ? new Date().toISOString() : null,
+        })
+        .eq('id', entry.id)
+        .eq('tenant_id', tenantId);
+      if (error) {
+        console.error('Erro ao consumir crédito do cliente:', error);
+        return false;
+      }
+      remaining -= take;
+    }
+    return remaining <= 0.009;
+  };
+
+  // Registra os pagamentos (divididos) de uma comanda: transações no caixa
+  // para os métodos reais, dívida no razão para a parcela pendente, consumo de
+  // crédito para a parcela paga com saldo, e depósito de crédito opcional.
+  const registerBillPayments = async (params: {
+    appointmentId: string;
+    clientId?: string | null;
+    clientName?: string;
+    lines: BillPaymentLine[];
+    creditDeposit?: { method: 'cash' | 'pix' | 'credit_card' | 'debit_card'; amount: number } | null;
+  }): Promise<boolean> => {
+    if (!tenantId) return false;
+    const billingSession = currentCashSession ?? (isAdminUser ? pendingCashSession : null);
+    const movementTimestamp = getSessionMovementTimestamp(billingSession);
+    const clientLabel = params.clientName ?? 'Cliente';
+
+    const moneyLines = params.lines.filter((line) =>
+      line.amount > 0.009 && (line.method === 'cash' || line.method === 'pix' || line.method === 'credit_card' || line.method === 'debit_card'));
+    const creditUse = params.lines.filter((line) => line.method === 'client_credit' && line.amount > 0.009)
+      .reduce((s, line) => s + line.amount, 0);
+    const pendingAmount = params.lines.filter((line) => line.method === 'pending' && line.amount > 0.009)
+      .reduce((s, line) => s + line.amount, 0);
+
+    if ((moneyLines.length > 0 || params.creditDeposit) && !billingSession) {
+      toast.error('Abra o caixa antes de receber pagamentos.');
+      return false;
+    }
+
+    // 1) Consumo de crédito primeiro (valida saldo antes de mexer no caixa).
+    if (creditUse > 0.009) {
+      if (!params.clientId) {
+        toast.error('Comanda sem cliente não pode usar crédito.');
+        return false;
+      }
+      const ok = await consumeClientCredit(params.clientId, creditUse);
+      if (!ok) return false;
+    }
+
+    // 2) Transações de caixa por método real.
+    for (const line of moneyLines) {
+      const { error } = await supabase.from('transactions').insert({
+        cash_session_id: billingSession!.id,
+        type: 'income',
+        category: 'service',
+        description: `Comanda - ${clientLabel}`,
+        amount: line.amount,
+        payment_method: line.method,
+        reference_id: params.appointmentId,
+        reference_type: 'appointment',
+        created_by: user?.id,
+        tenant_id: tenantId,
+        ...(movementTimestamp ? { created_at: movementTimestamp } : {}),
+      });
+      if (error) {
+        console.error('Erro ao registrar pagamento da comanda:', error);
+        toast.error('Erro ao registrar um dos pagamentos no caixa.');
+        return false;
+      }
+    }
+
+    // 3) Parcela pendente vira dívida no razão do cliente.
+    if (pendingAmount > 0.009) {
+      if (!params.clientId) {
+        toast.error('Comanda sem cliente não pode ficar pendente.');
+        return false;
+      }
+      const { error } = await supabase.from('client_ledger_entries').insert({
+        tenant_id: tenantId,
+        client_id: params.clientId,
+        appointment_id: params.appointmentId,
+        entry_type: 'debt',
+        amount: pendingAmount,
+        description: 'Pendência de comanda',
+        created_by: user?.id ?? null,
+      });
+      if (error) {
+        console.error('Erro ao registrar pendência do cliente:', error);
+        toast.error('Erro ao registrar a pendência do cliente.');
+        return false;
+      }
+    }
+
+    // 4) Depósito de crédito (cliente deixou valor além da comanda).
+    if (params.creditDeposit && params.creditDeposit.amount > 0.009) {
+      if (!params.clientId) {
+        toast.error('Comanda sem cliente não pode receber crédito.');
+        return false;
+      }
+      const { data: depositTx, error: depositError } = await supabase.from('transactions').insert({
+        cash_session_id: billingSession!.id,
+        type: 'income',
+        category: 'Crédito de Cliente',
+        description: `Crédito deixado por ${clientLabel}`,
+        amount: params.creditDeposit.amount,
+        payment_method: params.creditDeposit.method,
+        reference_id: params.appointmentId,
+        reference_type: 'client_credit',
+        created_by: user?.id,
+        tenant_id: tenantId,
+        ...(movementTimestamp ? { created_at: movementTimestamp } : {}),
+      }).select().single();
+      if (depositError) {
+        console.error('Erro ao registrar crédito do cliente:', depositError);
+        toast.error('Erro ao registrar o crédito do cliente no caixa.');
+        return false;
+      }
+      const { error: ledgerError } = await supabase.from('client_ledger_entries').insert({
+        tenant_id: tenantId,
+        client_id: params.clientId,
+        appointment_id: params.appointmentId,
+        transaction_id: depositTx?.id ?? null,
+        entry_type: 'credit',
+        amount: params.creditDeposit.amount,
+        description: 'Crédito deixado na comanda',
+        created_by: user?.id ?? null,
+      });
+      if (ledgerError) {
+        console.error('Erro ao registrar crédito no razão:', ledgerError);
+        toast.error('O valor entrou no caixa, mas houve erro ao registrar o crédito. Verifique manualmente.');
+        return false;
+      }
+    }
+
+    return true;
+  };
+
   // ITEM 3: completeAppointment com tratamento de erros e rollback parcial
   const completeAppointment = async (
     id: string,
     paymentMethod: string,
     overrides?: Partial<Appointment>,
-    options?: { skipCommission?: boolean; commissionLines?: AppointmentServiceLine[] },
+    options?: { skipCommission?: boolean; commissionLines?: AppointmentServiceLine[]; skipTransaction?: boolean },
   ) => {
     if (!guardModify()) return null;
     if (!guardFinancialPermission(canCloseBill, 'Você não tem permissão para receber e encerrar comandas.')) return null;
@@ -1449,7 +1669,9 @@ export const DataProvider: React.FC<{ children: ReactNode }> = ({ children }) =>
     const allTransferSettlement = billSettlementKinds.length > 0 && billSettlementKinds.every((kind) => kind === 'transfer_receivable');
     const movementTimestamp = getSessionMovementTimestamp(billingSession);
 
-    if (billingSession && !transactionId && !allTransferSettlement) {
+    // skipTransaction: os pagamentos foram lançados por fora (pagamento
+    // dividido via registerBillPayments) — não duplica a entrada no caixa.
+    if (billingSession && !transactionId && !allTransferSettlement && !options?.skipTransaction) {
       const { data: txData, error: txError } = await supabase
         .from('transactions')
         .insert({
@@ -2241,6 +2463,7 @@ export const DataProvider: React.FC<{ children: ReactNode }> = ({ children }) =>
       addProduct, updateProduct, deleteProduct, updateProductStock,
       addAppointment, updateAppointment, deleteAppointment, refundAppointment, completeAppointment,
       fetchAppointmentServices, saveAppointmentServices,
+      fetchClientBalances, registerBillPayments,
       openCashSession, closeCashSession, addTransaction, reverseTransaction,
       payCommission, payAllCommissions, addVoucher, reprocessPendingCommissions, previewReprocessPendingCommissions,
     }}>

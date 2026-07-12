@@ -120,8 +120,24 @@ export function ClientHistoryDialog({
   const [appointments, setAppointments] = useState<AppointmentItem[]>([]);
   const [appointmentsLoaded, setAppointmentsLoaded] = useState(false);
   
-  // Credits
-  const [creditBalance] = useState(0);
+  // Créditos e pendências do razão do cliente
+  const [ledgerEntries, setLedgerEntries] = useState<Array<{
+    id: string;
+    entry_type: 'debt' | 'credit';
+    amount: number;
+    settled_amount: number;
+    status: 'open' | 'settled';
+    description: string | null;
+    created_at: string;
+  }>>([]);
+  const openRemaining = (entry: { amount: number; settled_amount: number }) =>
+    Math.max(0, Number(entry.amount) - Number(entry.settled_amount ?? 0));
+  const creditBalance = ledgerEntries
+    .filter((entry) => entry.entry_type === 'credit' && entry.status === 'open')
+    .reduce((sum, entry) => sum + openRemaining(entry), 0);
+  const pendingBalance = ledgerEntries
+    .filter((entry) => entry.entry_type === 'debt' && entry.status === 'open')
+    .reduce((sum, entry) => sum + openRemaining(entry), 0);
 
   const fetchClientData = useCallback(async () => {
     if (!clientId || !tenantId) return;
@@ -191,6 +207,20 @@ export function ClientHistoryDialog({
       fetchClientData();
     }
   }, [open, clientId, tenantId, fetchClientData]);
+
+  useEffect(() => {
+    const fetchLedger = async () => {
+      if (!open || !clientId || !tenantId) return;
+      const { data, error } = await supabase
+        .from('client_ledger_entries')
+        .select('id, entry_type, amount, settled_amount, status, description, created_at')
+        .eq('tenant_id', tenantId)
+        .eq('client_id', clientId)
+        .order('created_at', { ascending: false });
+      if (!error) setLedgerEntries((data as typeof ledgerEntries) ?? []);
+    };
+    void fetchLedger();
+  }, [open, clientId, tenantId]);
 
   useEffect(() => {
     if (client) {
@@ -545,12 +575,7 @@ export function ClientHistoryDialog({
 
               {/* Créditos Tab */}
               <TabsContent value="creditos" className="flex-1 overflow-auto p-6 mt-0">
-                {/* Info Banner */}
-                <div className="bg-amber-50 border border-amber-200 rounded-lg p-3 mb-4 text-sm text-amber-800">
-                  <p>Abaixo estão listados os créditos e dívidas do cliente.</p>
-                </div>
-
-                {/* Credit Balance and Actions */}
+                {/* Saldos */}
                 <div className="flex flex-wrap items-center gap-4 mb-6">
                   <div className="bg-green-50 border border-green-200 rounded-lg px-4 py-3 flex items-center gap-3">
                     <span className="text-green-700 font-medium">Crédito Disponível</span>
@@ -559,24 +584,63 @@ export function ClientHistoryDialog({
                       <span className="font-bold text-lg">{creditBalance.toFixed(2)}</span>
                     </div>
                   </div>
-                  
-                  <div className="flex gap-2">
-                    <Button variant="default" className="bg-blue-600 hover:bg-blue-700">
-                      <ArrowDown className="w-4 h-4 mr-1" />
-                      Adicionar Dívida
-                    </Button>
-                    <Button variant="default" className="bg-teal-500 hover:bg-teal-600">
-                      <ArrowUp className="w-4 h-4 mr-1" />
-                      Adicionar Crédito
-                    </Button>
+                  <div className="bg-amber-50 border border-amber-200 rounded-lg px-4 py-3 flex items-center gap-3">
+                    <span className="text-amber-700 font-medium">Pendências em Aberto</span>
+                    <div className="flex items-center bg-white border rounded px-3 py-1">
+                      <span className="text-sm text-muted-foreground mr-1">R$</span>
+                      <span className="font-bold text-lg">{pendingBalance.toFixed(2)}</span>
+                    </div>
                   </div>
                 </div>
 
-                {/* Empty State */}
-                <div className="border rounded-lg p-8 text-center bg-amber-50/50">
-                  <CreditCard className="w-12 h-12 mx-auto mb-2 opacity-50 text-amber-600" />
-                  <p className="text-amber-700">Nenhum histórico de movimentação para este cliente.</p>
-                </div>
+                {/* Movimentações do razão */}
+                {ledgerEntries.length === 0 ? (
+                  <div className="border rounded-lg p-8 text-center bg-muted/30">
+                    <CreditCard className="w-12 h-12 mx-auto mb-2 opacity-50 text-muted-foreground" />
+                    <p className="text-muted-foreground">Nenhum crédito ou pendência registrado para este cliente.</p>
+                  </div>
+                ) : (
+                  <div className="border rounded-lg overflow-hidden">
+                    <Table>
+                      <TableHeader>
+                        <TableRow>
+                          <TableHead>Data</TableHead>
+                          <TableHead>Tipo</TableHead>
+                          <TableHead>Descrição</TableHead>
+                          <TableHead className="text-right">Valor</TableHead>
+                          <TableHead className="text-right">Em aberto</TableHead>
+                          <TableHead className="text-center">Status</TableHead>
+                        </TableRow>
+                      </TableHeader>
+                      <TableBody>
+                        {ledgerEntries.map((entry) => (
+                          <TableRow key={entry.id}>
+                            <TableCell>{format(new Date(entry.created_at), 'dd/MM/yyyy', { locale: ptBR })}</TableCell>
+                            <TableCell>
+                              <Badge className={`${entry.entry_type === 'credit' ? 'bg-green-600' : 'bg-amber-600'} text-white text-xs`}>
+                                {entry.entry_type === 'credit' ? (
+                                  <><ArrowUp className="w-3 h-3 mr-1" />Crédito</>
+                                ) : (
+                                  <><ArrowDown className="w-3 h-3 mr-1" />Pendência</>
+                                )}
+                              </Badge>
+                            </TableCell>
+                            <TableCell className="max-w-[220px] truncate">{entry.description || '-'}</TableCell>
+                            <TableCell className="text-right">R$ {Number(entry.amount).toFixed(2)}</TableCell>
+                            <TableCell className="text-right font-medium">
+                              R$ {openRemaining(entry).toFixed(2)}
+                            </TableCell>
+                            <TableCell className="text-center">
+                              <Badge variant={entry.status === 'open' ? 'destructive' : 'success'} className="text-xs">
+                                {entry.status === 'open' ? 'Em aberto' : 'Liquidado'}
+                              </Badge>
+                            </TableCell>
+                          </TableRow>
+                        ))}
+                      </TableBody>
+                    </Table>
+                  </div>
+                )}
               </TabsContent>
             </>
           )}

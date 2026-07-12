@@ -258,6 +258,62 @@ export type Database = {
           },
         ]
       }
+      client_ledger_entries: {
+        Row: {
+          amount: number
+          appointment_id: string | null
+          client_id: string
+          created_at: string
+          created_by: string | null
+          description: string | null
+          entry_type: string
+          id: string
+          settled_amount: number
+          settled_at: string | null
+          status: string
+          tenant_id: string
+          transaction_id: string | null
+        }
+        Insert: {
+          amount: number
+          appointment_id?: string | null
+          client_id: string
+          created_at?: string
+          created_by?: string | null
+          description?: string | null
+          entry_type: string
+          id?: string
+          settled_amount?: number
+          settled_at?: string | null
+          status?: string
+          tenant_id: string
+          transaction_id?: string | null
+        }
+        Update: {
+          amount?: number
+          appointment_id?: string | null
+          client_id?: string
+          created_at?: string
+          created_by?: string | null
+          description?: string | null
+          entry_type?: string
+          id?: string
+          settled_amount?: number
+          settled_at?: string | null
+          status?: string
+          tenant_id?: string
+          transaction_id?: string | null
+        }
+        Relationships: [
+          {
+            foreignKeyName: "client_ledger_entries_client_id_fkey"
+            columns: ["client_id"]
+            isOneToOne: false
+            referencedRelation: "clients"
+            referencedColumns: ["id"]
+          },
+        ]
+      }
       client_preferred_services: {
         Row: {
           client_account_id: string
