@@ -42,6 +42,7 @@ import {
 } from '@/components/ui/dialog';
 import { RadioGroup, RadioGroupItem } from '@/components/ui/radio-group';
 import { Label } from '@/components/ui/label';
+import { Input } from '@/components/ui/input';
 import { useToast } from '@/hooks/use-toast';
 import { useData } from '@/context/DataContext';
 import { useAuth } from '@/contexts/AuthContext';
@@ -91,6 +92,7 @@ export function Commissions() {
   const [isSubmitting, setIsSubmitting] = useState(false);
   const [isRefreshing, setIsRefreshing] = useState(false);
   const [selectedPaymentMethod, setSelectedPaymentMethod] = useState<PaymentMethod>('pix');
+  const [settleAmount, setSettleAmount] = useState<string>('');
   const [paymentDialog, setPaymentDialog] = useState<PaymentDialogState>({
     isOpen: false,
     type: 'single',
@@ -205,14 +207,16 @@ export function Commissions() {
       commission.settlement_kind,
       professional?.settlement_type,
     );
+    const remaining = Math.max(0, Math.abs(Number(commission.commission_value)) - Math.abs(Number(commission.settled_amount ?? 0)));
     setPaymentDialog({
       isOpen: true,
       type: 'single',
       commissionId,
       professionalName: professional?.nickname || 'Profissional',
-      amount: Number(commission.commission_value),
+      amount: remaining,
       isTransfer: settlementKind === 'transfer_receivable',
     });
+    setSettleAmount(remaining.toFixed(2));
     setSelectedPaymentMethod('pix');
   };
 
@@ -274,11 +278,11 @@ export function Commissions() {
     setIsSubmitting(true);
     try {
       if (paymentDialog.type === 'single' && paymentDialog.commissionId) {
-        await payCommission(paymentDialog.commissionId, selectedPaymentMethod);
-        toast({
-          title: paymentDialog.isTransfer ? "Repasse recebido" : "Comissão paga",
-          description: paymentDialog.isTransfer ? "Recebimento registrado no fluxo de caixa" : "Pagamento registrado no fluxo de caixa",
-        });
+        const parsedAmount = parseFloat(settleAmount);
+        const full = paymentDialog.amount ?? 0;
+        // Valor informado (parcial) ou o saldo cheio; o contexto limita ao saldo.
+        const amount = Number.isFinite(parsedAmount) && parsedAmount > 0 ? parsedAmount : full;
+        await payCommission(paymentDialog.commissionId, selectedPaymentMethod, amount);
       } else if (paymentDialog.type === 'all' && paymentDialog.professionalId) {
         await payAllCommissions(paymentDialog.professionalId, selectedPaymentMethod);
         toast({
@@ -702,9 +706,28 @@ export function Commissions() {
 
           <div className="py-4 space-y-4">
             <div className="p-4 rounded-lg bg-primary/10 border border-primary/20">
-              <p className="text-sm text-muted-foreground">Valor total</p>
+              <p className="text-sm text-muted-foreground">{paymentDialog.type === 'single' ? 'Saldo a liquidar' : 'Valor total'}</p>
               <p className="text-2xl font-bold text-primary">{formatCurrency(paymentDialog.amount || 0)}</p>
             </div>
+
+            {paymentDialog.type === 'single' && (
+              <div className="space-y-2">
+                <Label className="text-sm font-medium">
+                  Valor a {paymentDialog.isTransfer ? 'receber' : 'pagar'} agora
+                </Label>
+                <Input
+                  type="number"
+                  min="0"
+                  step="0.01"
+                  max={paymentDialog.amount || undefined}
+                  value={settleAmount}
+                  onChange={(e) => setSettleAmount(e.target.value)}
+                />
+                <p className="text-xs text-muted-foreground">
+                  Informe um valor menor que o saldo para uma liquidação parcial. O restante fica pendente.
+                </p>
+              </div>
+            )}
 
             <div className="space-y-3">
               <Label className="text-sm font-medium">Forma de Pagamento</Label>

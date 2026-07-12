@@ -184,6 +184,7 @@ export interface Commission {
   rule_source_id?: string | null;
   calculation_source?: 'service_mapping' | 'manual_mapping' | 'reprocess' | 'legacy' | 'voucher';
   status: 'pending' | 'paid';
+  settled_amount?: number;
   paid_at?: string;
   created_at: string;
   professional?: Professional;
@@ -276,7 +277,7 @@ interface DataContextType {
   addTransaction: (transaction: Omit<Transaction, 'id' | 'created_at'>) => Promise<Transaction | null>;
   reverseTransaction: (transactionId: string, reason?: string) => Promise<boolean>;
   // Commissions
-  payCommission: (id: string, paymentMethod: 'cash' | 'pix' | 'transfer') => Promise<void>;
+  payCommission: (id: string, paymentMethod: 'cash' | 'pix' | 'transfer', amount?: number) => Promise<void>;
   payAllCommissions: (professionalId: string, paymentMethod: 'cash' | 'pix' | 'transfer') => Promise<void>;
   addVoucher: (professionalId: string, amount: number, description?: string) => Promise<void>;
   reprocessPendingCommissions: (
@@ -1799,7 +1800,7 @@ export const DataProvider: React.FC<{ children: ReactNode }> = ({ children }) =>
   };
 
   // ── COMMISSION ACTIONS ──────────────────────────────────────────────────
-  const payCommission = async (id: string, paymentMethod: 'cash' | 'pix' | 'transfer') => {
+  const payCommission = async (id: string, paymentMethod: 'cash' | 'pix' | 'transfer', amount?: number) => {
     if (!guardModify()) return;
     if (!guardFinancialPermission(canPerformAdvancedFinancialOps, 'Somente usuários financeiros podem pagar comissões.')) return;
     const targetSession = getCashOperationTargetSession({
@@ -1817,6 +1818,17 @@ export const DataProvider: React.FC<{ children: ReactNode }> = ({ children }) =>
       commission.settlement_kind,
       professional?.settlement_type,
     );
+
+    // Liquidação parcial: paga apenas o valor informado (limitado ao saldo).
+    const totalValue = Math.abs(Number(commission.commission_value));
+    const alreadySettled = Math.abs(Number(commission.settled_amount ?? 0));
+    const remaining = Math.max(0, totalValue - alreadySettled);
+    if (remaining <= 0.009) { toast.info('Esta comissão já está totalmente liquidada.'); return; }
+    const payAmount = amount && amount > 0 ? Math.min(amount, remaining) : remaining;
+    const newSettled = alreadySettled + payAmount;
+    const fullySettled = newSettled >= totalValue - 0.009;
+    const isPartial = !fullySettled;
+
     const methodLabel = paymentMethod === 'cash' ? 'Dinheiro' : paymentMethod === 'pix' ? 'PIX' : 'Transferência';
     const movementTimestamp = getSessionMovementTimestamp(targetSession);
     const paidAt = movementTimestamp ?? new Date().toISOString();
@@ -1826,8 +1838,8 @@ export const DataProvider: React.FC<{ children: ReactNode }> = ({ children }) =>
         cash_session_id: targetSession.id,
         type: getSettlementDirection(settlementKind),
         category: getSettlementTransactionCategory(settlementKind),
-        description: `${settlementKind === 'transfer_receivable' ? 'Repasse' : 'Comissão'} - ${commission.professional_name_snapshot ?? professional?.nickname ?? 'Profissional'} (${methodLabel})`,
-        amount: Math.abs(Number(commission.commission_value)),
+        description: `${settlementKind === 'transfer_receivable' ? 'Repasse' : 'Comissão'}${isPartial ? ' (parcial)' : ''} - ${commission.professional_name_snapshot ?? professional?.nickname ?? 'Profissional'} (${methodLabel})`,
+        amount: payAmount,
         payment_method: paymentMethod === 'transfer' ? 'other' : paymentMethod,
         reference_id: id,
         reference_type: 'commission',
@@ -1838,9 +1850,21 @@ export const DataProvider: React.FC<{ children: ReactNode }> = ({ children }) =>
       .select()
       .single();
     if (txError) { toast.error(settlementKind === 'transfer_receivable' ? 'Erro ao registrar recebimento no caixa.' : 'Erro ao registrar pagamento no caixa.'); return; }
+
+    await supabase.from('commission_settlements').insert({
+      tenant_id: tenantId,
+      commission_id: id,
+      amount: payAmount,
+      payment_method: paymentMethod,
+      transaction_id: txData?.id,
+      settlement_kind: settlementKind,
+      created_by: user?.id ?? null,
+    });
+
     await supabase.from('commissions').update({
-      status: 'paid',
-      paid_at: paidAt,
+      status: fullySettled ? 'paid' : 'pending',
+      settled_amount: newSettled,
+      paid_at: fullySettled ? paidAt : null,
       transaction_id: txData?.id,
       payment_method: paymentMethod,
     })
@@ -1848,13 +1872,18 @@ export const DataProvider: React.FC<{ children: ReactNode }> = ({ children }) =>
       .eq('tenant_id', tenantId);
     setCommissions(prev => prev.map(c => c.id === id ? {
       ...c,
-      status: 'paid',
-      paid_at: paidAt,
+      status: fullySettled ? 'paid' : 'pending',
+      settled_amount: newSettled,
+      paid_at: fullySettled ? paidAt : undefined,
       transaction_id: txData?.id,
       payment_method: paymentMethod,
     } : c));
     setTransactions(prev => [txData as Transaction, ...prev]);
-    toast.success(settlementKind === 'transfer_receivable' ? 'Repasse recebido!' : 'Comissão paga!');
+    if (isPartial) {
+      toast.success(`Liquidação parcial registrada. Saldo restante: ${new Intl.NumberFormat('pt-BR', { style: 'currency', currency: 'BRL' }).format(totalValue - newSettled)}.`);
+    } else {
+      toast.success(settlementKind === 'transfer_receivable' ? 'Repasse recebido!' : 'Comissão paga!');
+    }
   };
 
   // ITEM 1: corrigido — inclui .neq('type', 'voucher') no UPDATE do banco
@@ -1873,7 +1902,12 @@ export const DataProvider: React.FC<{ children: ReactNode }> = ({ children }) =>
       c => c.professional_id === professionalId && c.status === 'pending' && c.type !== 'voucher'
     );
     if (pendingCommissions.length === 0) { toast.info('Nenhuma comissão pendente para pagar.'); return; }
-    const totalAmount = pendingCommissions.reduce((s, c) => s + Math.abs(Number(c.commission_value)), 0);
+    // Saldo de cada comissão (desconta liquidações parciais já feitas) para não
+    // cobrar em dobro no pagamento em lote.
+    const totalAmount = pendingCommissions.reduce(
+      (s, c) => s + Math.max(0, Math.abs(Number(c.commission_value)) - Math.abs(Number(c.settled_amount ?? 0))),
+      0,
+    );
     const professional = professionals.find(p => p.id === professionalId);
     const settlementKind = normalizeCommissionSettlementKind(
       pendingCommissions[0]?.settlement_kind,

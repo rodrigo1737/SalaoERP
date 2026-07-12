@@ -344,6 +344,50 @@ export type Database = {
           },
         ]
       }
+      commission_settlements: {
+        Row: {
+          amount: number
+          commission_id: string
+          created_at: string
+          created_by: string | null
+          id: string
+          payment_method: string | null
+          settlement_kind: string
+          tenant_id: string
+          transaction_id: string | null
+        }
+        Insert: {
+          amount: number
+          commission_id: string
+          created_at?: string
+          created_by?: string | null
+          id?: string
+          payment_method?: string | null
+          settlement_kind?: string
+          tenant_id: string
+          transaction_id?: string | null
+        }
+        Update: {
+          amount?: number
+          commission_id?: string
+          created_at?: string
+          created_by?: string | null
+          id?: string
+          payment_method?: string | null
+          settlement_kind?: string
+          tenant_id?: string
+          transaction_id?: string | null
+        }
+        Relationships: [
+          {
+            foreignKeyName: "commission_settlements_commission_id_fkey"
+            columns: ["commission_id"]
+            isOneToOne: false
+            referencedRelation: "commissions"
+            referencedColumns: ["id"]
+          },
+        ]
+      }
       commissions: {
         Row: {
           appointment_id: string | null
@@ -354,6 +398,7 @@ export type Database = {
           created_at: string
           id: string
           paid_at: string | null
+          settled_amount: number
           payment_method: string | null
           professional_id: string
           professional_name_snapshot: string | null
@@ -375,6 +420,7 @@ export type Database = {
           created_at?: string
           id?: string
           paid_at?: string | null
+          settled_amount?: number
           payment_method?: string | null
           professional_id: string
           professional_name_snapshot?: string | null
@@ -394,6 +440,7 @@ export type Database = {
           commission_rate?: number
           commission_value?: number
           created_at?: string
+          settled_amount?: number
           id?: string
           paid_at?: string | null
           payment_method?: string | null
