@@ -569,10 +569,12 @@ const Admin: React.FC = () => {
     if (!tenantId || !row.userId) return;
     if (!confirm(`Promover ${row.name} a administrador? Ele passará a ter acesso administrativo total.`)) return;
     try {
-      const { data, error } = await supabase.functions.invoke('manage-tenant-access', {
-        body: { action: 'promote_admin', tenantId, userId: row.userId },
+      const { error } = await supabase.rpc('set_tenant_admin_role', {
+        _tenant_id: tenantId,
+        _target_user_id: row.userId,
+        _make_admin: true,
       });
-      if (error || data?.error) throw new Error(await getSupabaseErrorMessage(error, data, 'Não foi possível promover'));
+      if (error) throw error;
       toast({ title: 'Promovido a administrador', description: `${row.name} agora é administrador.` });
       await fetchInternalUsers();
     } catch (error: any) {
@@ -588,10 +590,12 @@ const Admin: React.FC = () => {
     }
     if (!confirm(`Rebaixar ${row.name}? Ele deixará de ser administrador (mantém o vínculo profissional/interno, se houver).`)) return;
     try {
-      const { data, error } = await supabase.functions.invoke('manage-tenant-access', {
-        body: { action: 'demote_admin', tenantId, userId: row.userId },
+      const { error } = await supabase.rpc('set_tenant_admin_role', {
+        _tenant_id: tenantId,
+        _target_user_id: row.userId,
+        _make_admin: false,
       });
-      if (error || data?.error) throw new Error(await getSupabaseErrorMessage(error, data, 'Não foi possível rebaixar'));
+      if (error) throw error;
       toast({ title: 'Administrador rebaixado', description: `${row.name} não é mais administrador.` });
       await fetchInternalUsers();
     } catch (error: any) {
@@ -600,22 +604,19 @@ const Admin: React.FC = () => {
   };
 
   const handleResetPassword = async (row: InternalAccessRow) => {
-    if (!tenantId || !row.userId) return;
-    const newPassword = prompt(`Nova senha para ${row.name}:\n${getPasswordRequirementsMessage()}`);
-    if (!newPassword) return;
-    const validation = validatePassword(newPassword);
-    if (!validation.valid) {
-      toast({ variant: 'destructive', title: 'Senha inválida', description: validation.errors.join(', ') });
+    if (!row.email) {
+      toast({ variant: 'destructive', title: 'Sem e-mail', description: 'Este acesso não tem e-mail cadastrado para envio do link.' });
       return;
     }
+    if (!confirm(`Enviar link de redefinição de senha para ${row.email}?`)) return;
     try {
-      const { data, error } = await supabase.functions.invoke('manage-tenant-access', {
-        body: { action: 'reset_password', tenantId, userId: row.userId, newPassword },
+      const { error } = await supabase.auth.resetPasswordForEmail(row.email, {
+        redirectTo: `${window.location.origin}/auth`,
       });
-      if (error || data?.error) throw new Error(await getSupabaseErrorMessage(error, data, 'Não foi possível resetar a senha'));
-      toast({ title: 'Senha atualizada', description: `A senha de ${row.name} foi redefinida.` });
+      if (error) throw error;
+      toast({ title: 'Link enviado', description: `Um link de redefinição foi enviado para ${row.email}.` });
     } catch (error: any) {
-      toast({ variant: 'destructive', title: 'Erro', description: error.message || 'Não foi possível resetar a senha.' });
+      toast({ variant: 'destructive', title: 'Erro', description: error.message || 'Não foi possível enviar o link.' });
     }
   };
 
@@ -945,7 +946,7 @@ const Admin: React.FC = () => {
                                   variant="ghost"
                                   size="icon"
                                   onClick={() => handleResetPassword(row)}
-                                  title="Resetar senha"
+                                  title="Enviar link de redefinição de senha"
                                 >
                                   <KeyRound className="h-4 w-4" />
                                 </Button>
@@ -966,7 +967,7 @@ const Admin: React.FC = () => {
                                   variant="ghost"
                                   size="icon"
                                   onClick={() => handleResetPassword(row)}
-                                  title="Resetar senha"
+                                  title="Enviar link de redefinição de senha"
                                 >
                                   <KeyRound className="h-4 w-4" />
                                 </Button>
