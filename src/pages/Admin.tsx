@@ -865,11 +865,35 @@ const Admin: React.FC = () => {
                   </TableRow>
                 </TableHeader>
                 <TableBody>
-                  {internalUsers.map((row) => {
+                  {(() => {
+                    const groupOrder: Record<string, number> = { admins: 0, professionals: 1, staff: 2 };
+                    const groupLabel: Record<string, string> = {
+                      admins: 'Owners e Administradores',
+                      professionals: 'Profissionais',
+                      staff: 'Equipe interna',
+                    };
+                    const groupOf = (r: InternalAccessRow) =>
+                      (r.role === 'owner' || r.role === 'admin' || r.isOwner)
+                        ? 'admins'
+                        : (r.professionalId ? 'professionals' : 'staff');
+                    const ordered = [...internalUsers].sort((a, b) => groupOrder[groupOf(a)] - groupOrder[groupOf(b)]);
+                    let lastGroup = '';
+                    return ordered.map((row) => {
                     const isProtected = row.role === 'owner' || row.role === 'admin' || row.isOwner;
                     const canManage = row.hasAccess && !isProtected && !!row.userId;
+                    const group = groupOf(row);
+                    const showHeader = group !== lastGroup;
+                    lastGroup = group;
                     return (
-                      <TableRow key={row.rowId}>
+                      <React.Fragment key={row.rowId}>
+                        {showHeader && (
+                          <TableRow className="bg-muted/30 hover:bg-muted/30">
+                            <TableCell colSpan={7} className="py-2 text-xs font-semibold uppercase tracking-wide text-muted-foreground">
+                              {groupLabel[group]}
+                            </TableCell>
+                          </TableRow>
+                        )}
+                      <TableRow>
                         <TableCell className="font-medium">
                           {row.name}
                           <p className="text-xs font-normal text-muted-foreground">
@@ -993,8 +1017,10 @@ const Admin: React.FC = () => {
                           </div>
                         </TableCell>
                       </TableRow>
+                      </React.Fragment>
                     );
-                  })}
+                    });
+                  })()}
                 </TableBody>
               </Table>
             )}
