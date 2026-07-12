@@ -1,6 +1,6 @@
 import React, { useCallback, useEffect, useState } from 'react';
 import { useNavigate } from 'react-router-dom';
-import { ArrowLeft, Edit, Loader2, Shield, Trash2, UserPlus } from 'lucide-react';
+import { ArrowLeft, Edit, Loader2, Shield, ShieldPlus, ShieldMinus, KeyRound, Trash2, UserPlus } from 'lucide-react';
 import { useAuth } from '@/contexts/AuthContext';
 import { supabase } from '@/integrations/supabase/client';
 import { Button } from '@/components/ui/button';
@@ -122,7 +122,7 @@ const roleBadgeClasses: Record<AccessRole, string> = {
 
 const Admin: React.FC = () => {
   const navigate = useNavigate();
-  const { userRole, tenantId, loading: authLoading } = useAuth();
+  const { userRole, tenantId, user, loading: authLoading } = useAuth();
   const { toast } = useToast();
 
   const [internalUsers, setInternalUsers] = useState<InternalAccessRow[]>([]);
@@ -565,6 +565,60 @@ const Admin: React.FC = () => {
     }
   };
 
+  const handlePromoteToAdmin = async (row: InternalAccessRow) => {
+    if (!tenantId || !row.userId) return;
+    if (!confirm(`Promover ${row.name} a administrador? Ele passará a ter acesso administrativo total.`)) return;
+    try {
+      const { data, error } = await supabase.functions.invoke('manage-tenant-access', {
+        body: { action: 'promote_admin', tenantId, userId: row.userId },
+      });
+      if (error || data?.error) throw new Error(await getSupabaseErrorMessage(error, data, 'Não foi possível promover'));
+      toast({ title: 'Promovido a administrador', description: `${row.name} agora é administrador.` });
+      await fetchInternalUsers();
+    } catch (error: any) {
+      toast({ variant: 'destructive', title: 'Erro', description: error.message || 'Não foi possível promover.' });
+    }
+  };
+
+  const handleDemoteAdmin = async (row: InternalAccessRow) => {
+    if (!tenantId || !row.userId) return;
+    if (row.userId === user?.id) {
+      toast({ variant: 'destructive', title: 'Operação bloqueada', description: 'Você não pode rebaixar a si mesmo.' });
+      return;
+    }
+    if (!confirm(`Rebaixar ${row.name}? Ele deixará de ser administrador (mantém o vínculo profissional/interno, se houver).`)) return;
+    try {
+      const { data, error } = await supabase.functions.invoke('manage-tenant-access', {
+        body: { action: 'demote_admin', tenantId, userId: row.userId },
+      });
+      if (error || data?.error) throw new Error(await getSupabaseErrorMessage(error, data, 'Não foi possível rebaixar'));
+      toast({ title: 'Administrador rebaixado', description: `${row.name} não é mais administrador.` });
+      await fetchInternalUsers();
+    } catch (error: any) {
+      toast({ variant: 'destructive', title: 'Erro', description: error.message || 'Não foi possível rebaixar.' });
+    }
+  };
+
+  const handleResetPassword = async (row: InternalAccessRow) => {
+    if (!tenantId || !row.userId) return;
+    const newPassword = prompt(`Nova senha para ${row.name}:\n${getPasswordRequirementsMessage()}`);
+    if (!newPassword) return;
+    const validation = validatePassword(newPassword);
+    if (!validation.valid) {
+      toast({ variant: 'destructive', title: 'Senha inválida', description: validation.errors.join(', ') });
+      return;
+    }
+    try {
+      const { data, error } = await supabase.functions.invoke('manage-tenant-access', {
+        body: { action: 'reset_password', tenantId, userId: row.userId, newPassword },
+      });
+      if (error || data?.error) throw new Error(await getSupabaseErrorMessage(error, data, 'Não foi possível resetar a senha'));
+      toast({ title: 'Senha atualizada', description: `A senha de ${row.name} foi redefinida.` });
+    } catch (error: any) {
+      toast({ variant: 'destructive', title: 'Erro', description: error.message || 'Não foi possível resetar a senha.' });
+    }
+  };
+
   if (authLoading || loading) {
     return (
       <div className="min-h-screen flex items-center justify-center bg-background">
@@ -881,6 +935,23 @@ const Admin: React.FC = () => {
                                 <Button
                                   variant="ghost"
                                   size="icon"
+                                  className="text-primary hover:text-primary"
+                                  onClick={() => handlePromoteToAdmin(row)}
+                                  title="Promover a administrador"
+                                >
+                                  <ShieldPlus className="h-4 w-4" />
+                                </Button>
+                                <Button
+                                  variant="ghost"
+                                  size="icon"
+                                  onClick={() => handleResetPassword(row)}
+                                  title="Resetar senha"
+                                >
+                                  <KeyRound className="h-4 w-4" />
+                                </Button>
+                                <Button
+                                  variant="ghost"
+                                  size="icon"
                                   className="text-destructive hover:text-destructive"
                                   onClick={() => handleDeleteAccess(row)}
                                   title="Remover acesso"
@@ -888,12 +959,33 @@ const Admin: React.FC = () => {
                                   <Trash2 className="h-4 w-4" />
                                 </Button>
                               </>
+                            ) : row.role === 'admin' && !row.isOwner && row.userId ? (
+                              // Administrador (não-owner): pode ser rebaixado ou ter a senha resetada.
+                              <>
+                                <Button
+                                  variant="ghost"
+                                  size="icon"
+                                  onClick={() => handleResetPassword(row)}
+                                  title="Resetar senha"
+                                >
+                                  <KeyRound className="h-4 w-4" />
+                                </Button>
+                                <Button
+                                  variant="ghost"
+                                  size="icon"
+                                  className="text-destructive hover:text-destructive"
+                                  onClick={() => handleDemoteAdmin(row)}
+                                  title="Rebaixar administrador"
+                                >
+                                  <ShieldMinus className="h-4 w-4" />
+                                </Button>
+                              </>
                             ) : row.role === 'none' && row.professionalId ? (
                               <Button variant="outline" size="sm" onClick={() => openCreateForProfessional(row)}>
                                 Criar acesso
                               </Button>
-                            ) : isProtected ? (
-                              <span className="text-xs text-muted-foreground">Protegido</span>
+                            ) : row.isOwner || row.role === 'owner' ? (
+                              <span className="text-xs text-muted-foreground">Owner protegido</span>
                             ) : (
                               <span className="text-xs text-muted-foreground">-</span>
                             )}
