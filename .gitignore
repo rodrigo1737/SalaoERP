@@ -6,7 +6,8 @@ coverage/
 .DS_Store
 *.log
 
-# Local environment variants stay out of Git.
+# Environment files stay out of Git — see .env.example for the required keys.
+.env
 .env.local
 .env.*.local
 
@@ -17,3 +18,11 @@ coverage/
 # OS / temp
 tmp/
 temp/
+
+# Tool-generated caches/state (Supabase CLI link state, sandbox runtime home)
+supabase/.temp/
+.codex-tmp-home/
+
+# Files unrelated to this project (moved out; ignored as a safety net)
+*.pine
+NLT_Proposta_*.pdf
