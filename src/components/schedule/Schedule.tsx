@@ -1781,9 +1781,12 @@ export function Schedule() {
         onOpenCloseBill={handleOpenCloseBill}
         onRefund={async () => {
           if (!selectedAppointment) return;
-          await refundAppointment(selectedAppointment.id);
+          const success = await refundAppointment(selectedAppointment.id);
           await fetchScheduleAppointments(currentDate);
-          setIsAppointmentDetailOpen(false);
+          // Só fecha o diálogo se o estorno realmente aconteceu — antes
+          // fechava mesmo em caso de erro/permissão negada, dando a
+          // impressão de que o botão "não fazia nada".
+          if (success) setIsAppointmentDetailOpen(false);
         }}
         onDelete={async () => {
           if (!selectedAppointment) return;

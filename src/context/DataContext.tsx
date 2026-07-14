@@ -288,7 +288,7 @@ interface DataContextType {
   addAppointment: (appointment: Omit<Appointment, 'id' | 'created_at'>) => Promise<Appointment | null>;
   updateAppointment: (id: string, data: Partial<Appointment>) => Promise<void>;
   deleteAppointment: (id: string) => Promise<void>;
-  refundAppointment: (id: string) => Promise<void>;
+  refundAppointment: (id: string) => Promise<boolean>;
   completeAppointment: (
     id: string,
     paymentMethod: string,
@@ -1263,11 +1263,11 @@ export const DataProvider: React.FC<{ children: ReactNode }> = ({ children }) =>
   };
 
   // ITEM 2: cria transação de estorno em vez de deletar
-  const refundAppointment = async (id: string) => {
-    if (!guardModify()) return;
-    if (!guardFinancialPermission(canRefundBills, 'Você não tem permissão para estornar comandas.')) return;
+  const refundAppointment = async (id: string): Promise<boolean> => {
+    if (!guardModify()) return false;
+    if (!guardFinancialPermission(canRefundBills, 'Você não tem permissão para estornar comandas.')) return false;
     const appointment = appointments.find(a => a.id === id);
-    if (!appointment) return;
+    if (!appointment) return false;
 
     const activeSession = getCashOperationTargetSession({
       allowPendingSession: false,
@@ -1276,7 +1276,7 @@ export const DataProvider: React.FC<{ children: ReactNode }> = ({ children }) =>
 
     if (!activeSession) {
       toast.error('Abra o caixa antes de estornar e reabrir uma comanda.');
-      return;
+      return false;
     }
 
     const { data: refundRows, error: reopenError } = await supabase
@@ -1288,30 +1288,46 @@ export const DataProvider: React.FC<{ children: ReactNode }> = ({ children }) =>
       .select('id');
 
     if (reopenError) {
-      toast.error('Erro ao reabrir a comanda.');
-      return;
+      console.error('Erro ao reabrir a comanda:', reopenError);
+      toast.error(reopenError.message || 'Erro ao reabrir a comanda.');
+      return false;
     }
 
     const wasReopenedNow = (refundRows?.length ?? 0) > 0;
 
     if (!wasReopenedNow) {
-      const { data: persistedAppointment } = await supabase
+      const { data: persistedAppointment, error: statusCheckError } = await supabase
         .from('appointments')
         .select('status')
         .eq('id', id)
         .eq('tenant_id', tenantId)
         .maybeSingle();
 
-      if (persistedAppointment?.status !== 'completed') {
+      // Se a comanda não é mais visível (RLS bloqueou a leitura, por exemplo)
+      // não dá para presumir "já está aberta" — isso escondia bloqueios de
+      // permissão atrás de uma mensagem que não refletia a causa real.
+      if (statusCheckError || !persistedAppointment) {
+        console.error('Erro ao verificar status da comanda antes do estorno:', statusCheckError);
+        toast.error('Não foi possível confirmar o estorno. Verifique suas permissões e tente novamente.');
+        return false;
+      }
+      if (persistedAppointment.status !== 'completed') {
         toast.warning('A comanda já está aberta ou não pode ser estornada neste status.');
-        return;
+        return false;
       }
     }
 
-    await supabase.from('commissions')
+    const { error: deleteCommissionError } = await supabase.from('commissions')
       .delete()
       .eq('appointment_id', id)
       .eq('tenant_id', tenantId);
+
+    if (deleteCommissionError) {
+      console.error('Erro ao remover comissão da comanda estornada:', deleteCommissionError);
+      toast.error('Comanda reaberta, mas houve erro ao remover a comissão vinculada. Verifique manualmente.');
+      // Segue mesmo assim: o agendamento já foi reaberto no banco; abortar
+      // aqui deixaria a UI dessincronizada do que realmente está salvo.
+    }
 
     const { data: activePaymentTx } = await supabase
       .from('transactions')
@@ -1353,9 +1369,14 @@ export const DataProvider: React.FC<{ children: ReactNode }> = ({ children }) =>
 
     // Otimista: evita recarregar todo o histórico financeiro do tenant.
     setAppointments(prev => prev.map(a => a.id === id ? { ...a, status: 'in_progress' } : a));
-    setCommissions(prev => prev.filter(c => c.appointment_id !== id));
+    if (!deleteCommissionError) {
+      setCommissions(prev => prev.filter(c => c.appointment_id !== id));
+    }
     if (insertedRefundTx) setTransactions(prev => [insertedRefundTx as Transaction, ...prev]);
-    toast.success('Pagamento estornado e comanda reaberta com sucesso.');
+    if (!deleteCommissionError) {
+      toast.success('Pagamento estornado e comanda reaberta com sucesso.');
+    }
+    return true;
   };
 
   // ── APPOINTMENT SERVICES (múltiplos serviços por agendamento) ────────────
