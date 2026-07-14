@@ -434,6 +434,9 @@ export const DataProvider: React.FC<{ children: ReactNode }> = ({ children }) =>
   const [transactionsLoading, setTransactionsLoading] = useState(true);
   const realtimeChannelRef = useRef<ReturnType<typeof supabase.channel> | null>(null);
   const fetchRequestRef = useRef(0);
+  type RefreshEntity = 'clients'|'professionals'|'services'|'products'|'appointments'|'cash'|'transactions'|'commissions';
+  const pendingRealtimeEntitiesRef = useRef<Set<RefreshEntity>>(new Set());
+  const realtimeDebounceTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
   const lastLoadedTenantRef = useRef<string | null>(null);
   const isCleaningTenant = isCleaningControlTenant(currentTenant);
   const isAdminUser = userRole === 'admin';
@@ -783,6 +786,21 @@ export const DataProvider: React.FC<{ children: ReactNode }> = ({ children }) =>
   };
 
   // ITEM 18: Supabase Realtime — re-sincroniza entidades alteradas por outros usuários
+  // Agrupa eventos do Realtime que chegam em rajada (ex.: fechar uma comanda
+  // muda transactions + commissions quase ao mesmo tempo) numa única recarga,
+  // em vez de uma recarga completa do histórico por evento — isso era a causa
+  // da lentidão após salvar comanda, lançar saída/vale ou reprocessar comissão.
+  const scheduleRealtimeRefresh = (entities: RefreshEntity[]) => {
+    entities.forEach((entity) => pendingRealtimeEntitiesRef.current.add(entity));
+    if (realtimeDebounceTimerRef.current) clearTimeout(realtimeDebounceTimerRef.current);
+    realtimeDebounceTimerRef.current = setTimeout(() => {
+      const pending = Array.from(pendingRealtimeEntitiesRef.current);
+      pendingRealtimeEntitiesRef.current.clear();
+      realtimeDebounceTimerRef.current = null;
+      if (pending.length > 0) refreshData(pending);
+    }, 600);
+  };
+
   const setupRealtime = () => {
     if (realtimeChannelRef.current) {
       supabase.removeChannel(realtimeChannelRef.current);
@@ -791,20 +809,20 @@ export const DataProvider: React.FC<{ children: ReactNode }> = ({ children }) =>
     let channel = supabase
       .channel(channelName)
       .on('postgres_changes', { event: '*', schema: 'public', table: 'clients', filter: `tenant_id=eq.${tenantId}` },
-        () => refreshData(['clients']))
+        () => scheduleRealtimeRefresh(['clients']))
       .on('postgres_changes', { event: '*', schema: 'public', table: 'cash_sessions', filter: `tenant_id=eq.${tenantId}` },
-        () => refreshData(['cash']))
+        () => scheduleRealtimeRefresh(['cash']))
       .on('postgres_changes', { event: '*', schema: 'public', table: 'transactions', filter: `tenant_id=eq.${tenantId}` },
-        () => refreshData(isCleaningTenant ? ['transactions'] : ['transactions', 'cash']));
+        () => scheduleRealtimeRefresh(isCleaningTenant ? ['transactions'] : ['transactions', 'cash']));
 
     if (!isCleaningTenant) {
       channel = channel
         .on('postgres_changes', { event: '*', schema: 'public', table: 'products', filter: `tenant_id=eq.${tenantId}` },
-          () => refreshData(['products']))
+          () => scheduleRealtimeRefresh(['products']))
         .on('postgres_changes', { event: '*', schema: 'public', table: 'appointments', filter: `tenant_id=eq.${tenantId}` },
-          () => refreshData(['appointments']))
+          () => scheduleRealtimeRefresh(['appointments']))
         .on('postgres_changes', { event: '*', schema: 'public', table: 'commissions', filter: `tenant_id=eq.${tenantId}` },
-          () => refreshData(['commissions']));
+          () => scheduleRealtimeRefresh(['commissions']));
     }
 
     let hasSubscribed = false;
@@ -840,6 +858,11 @@ export const DataProvider: React.FC<{ children: ReactNode }> = ({ children }) =>
     if (user && tenantId) setupRealtime();
     return () => {
       if (realtimeChannelRef.current) supabase.removeChannel(realtimeChannelRef.current);
+      if (realtimeDebounceTimerRef.current) {
+        clearTimeout(realtimeDebounceTimerRef.current);
+        realtimeDebounceTimerRef.current = null;
+      }
+      pendingRealtimeEntitiesRef.current.clear();
     };
   }, [
     user,
@@ -1308,10 +1331,12 @@ export const DataProvider: React.FC<{ children: ReactNode }> = ({ children }) =>
         .update({ reference_type: 'appointment_refunded' })
         .eq('tenant_id', tenantId)
         .eq('id', activePaymentTx.id);
+      setTransactions(prev => prev.map(t => t.id === activePaymentTx.id ? { ...t, reference_type: 'appointment_refunded' } : t));
     }
 
+    let insertedRefundTx: Transaction | undefined;
     if (wasReopenedNow && appointment.total_value) {
-      await supabase.from('transactions').insert({
+      const { data: refundTx, error: refundTxError } = await supabase.from('transactions').insert({
         cash_session_id: activeSession.id,
         type: 'expense',
         category: 'Estorno',
@@ -1322,11 +1347,14 @@ export const DataProvider: React.FC<{ children: ReactNode }> = ({ children }) =>
         reference_type: 'refund',
         created_by: user?.id,
         tenant_id: tenantId,
-      });
+      }).select().single();
+      if (!refundTxError) insertedRefundTx = refundTx as Transaction;
     }
 
+    // Otimista: evita recarregar todo o histórico financeiro do tenant.
     setAppointments(prev => prev.map(a => a.id === id ? { ...a, status: 'in_progress' } : a));
-    await refreshData(['transactions', 'commissions']);
+    setCommissions(prev => prev.filter(c => c.appointment_id !== id));
+    if (insertedRefundTx) setTransactions(prev => [insertedRefundTx as Transaction, ...prev]);
     toast.success('Pagamento estornado e comanda reaberta com sucesso.');
   };
 
@@ -1473,7 +1501,7 @@ export const DataProvider: React.FC<{ children: ReactNode }> = ({ children }) =>
 
     // 2) Transações de caixa por método real.
     for (const line of moneyLines) {
-      const { error } = await supabase.from('transactions').insert({
+      const { data: lineTx, error } = await supabase.from('transactions').insert({
         cash_session_id: billingSession!.id,
         type: 'income',
         category: 'service',
@@ -1485,12 +1513,14 @@ export const DataProvider: React.FC<{ children: ReactNode }> = ({ children }) =>
         created_by: user?.id,
         tenant_id: tenantId,
         ...(movementTimestamp ? { created_at: movementTimestamp } : {}),
-      });
+      }).select().single();
       if (error) {
         console.error('Erro ao registrar pagamento da comanda:', error);
         toast.error('Erro ao registrar um dos pagamentos no caixa.');
         return false;
       }
+      // Otimista: evita depender do Realtime/recarga completa para aparecer.
+      if (lineTx) setTransactions(prev => [lineTx as Transaction, ...prev]);
     }
 
     // 3) Parcela pendente vira dívida no razão do cliente.
@@ -1539,6 +1569,7 @@ export const DataProvider: React.FC<{ children: ReactNode }> = ({ children }) =>
         toast.error('Erro ao registrar o crédito do cliente no caixa.');
         return false;
       }
+      if (depositTx) setTransactions(prev => [depositTx as Transaction, ...prev]);
       const { error: ledgerError } = await supabase.from('client_ledger_entries').insert({
         tenant_id: tenantId,
         client_id: params.clientId,
@@ -1671,6 +1702,7 @@ export const DataProvider: React.FC<{ children: ReactNode }> = ({ children }) =>
 
     // skipTransaction: os pagamentos foram lançados por fora (pagamento
     // dividido via registerBillPayments) — não duplica a entrada no caixa.
+    let insertedTransaction: Transaction | undefined;
     if (billingSession && !transactionId && !allTransferSettlement && !options?.skipTransaction) {
       const { data: txData, error: txError } = await supabase
         .from('transactions')
@@ -1694,9 +1726,12 @@ export const DataProvider: React.FC<{ children: ReactNode }> = ({ children }) =>
         toast.warning('Atendimento finalizado, mas houve erro ao registrar no caixa. Verifique manualmente.');
       } else {
         transactionId = txData?.id;
+        insertedTransaction = txData as Transaction;
       }
     }
 
+    // Insere e já devolve a linha (evita recarregar todo o histórico depois).
+    const insertedCommissionRows: Commission[] = [];
     if (commissionLines.length > 0 && !existingCommission?.id && !options?.skipCommission) {
       for (const line of commissionLines) {
         if (!line.professional_id || !line.service_id || !line.value) continue;
@@ -1706,7 +1741,7 @@ export const DataProvider: React.FC<{ children: ReactNode }> = ({ children }) =>
         const commissionValue = (line.value * commissionRate) / 100;
         const service = services.find((item) => item.id === line.service_id);
         const professional = professionals.find((item) => item.id === line.professional_id);
-        const { error: commError } = await supabase.from('commissions').insert({
+        const { data: commissionRow, error: commError } = await supabase.from('commissions').insert({
           professional_id: line.professional_id,
           appointment_id: id,
           service_id: line.service_id,
@@ -1723,15 +1758,24 @@ export const DataProvider: React.FC<{ children: ReactNode }> = ({ children }) =>
           status: 'pending',
           tenant_id: tenantId,
           ...(movementTimestamp ? { created_at: movementTimestamp } : {}),
-        });
+        }).select().single();
 
         if (commError) {
           toast.warning('Atendimento finalizado, mas houve erro ao registrar comissão. Verifique manualmente.');
+        } else if (commissionRow) {
+          insertedCommissionRows.push({ ...(commissionRow as Commission), professional });
         }
       }
     }
 
-    await refreshData(['transactions', 'commissions']);
+    // Atualização otimista local: evita recarregar todo o histórico
+    // financeiro do tenant a cada comanda fechada (ficava lento com o tempo).
+    if (insertedTransaction) {
+      setTransactions(prev => [insertedTransaction as Transaction, ...prev]);
+    }
+    if (insertedCommissionRows.length > 0) {
+      setCommissions(prev => [...insertedCommissionRows, ...prev]);
+    }
     if (wasCompletedNow) {
       toast.success('Atendimento finalizado!');
     }
@@ -2219,7 +2263,7 @@ export const DataProvider: React.FC<{ children: ReactNode }> = ({ children }) =>
       .select()
       .single();
     if (txError) { toast.error('Erro ao registrar vale.'); return; }
-    const { error: commError } = await supabase.from('commissions').insert({
+    const { data: commissionRow, error: commError } = await supabase.from('commissions').insert({
       professional_id: professionalId,
       transaction_id: txData?.id,
       type: 'voucher',
@@ -2234,9 +2278,11 @@ export const DataProvider: React.FC<{ children: ReactNode }> = ({ children }) =>
       paid_at: movementTimestamp ?? new Date().toISOString(),
       tenant_id: tenantId,
       ...(movementTimestamp ? { created_at: movementTimestamp } : {}),
-    });
+    }).select().single();
     if (commError) { toast.error('Erro ao registrar vale nas comissões.'); return; }
-    await refreshData(['transactions', 'commissions']);
+    // Otimista: evita recarregar todo o histórico financeiro do tenant.
+    setTransactions(prev => [txData as Transaction, ...prev]);
+    if (commissionRow) setCommissions(prev => [{ ...(commissionRow as Commission), professional }, ...prev]);
     toast.success('Vale registrado!');
   };
 
@@ -2353,6 +2399,10 @@ export const DataProvider: React.FC<{ children: ReactNode }> = ({ children }) =>
     const rows = (data as Commission[]) ?? [];
     let recalculatedCount = 0;
     const skippedItems: string[] = [];
+    // Acumula as mudanças para aplicar localmente no final, em vez de
+    // recarregar todo o histórico financeiro do tenant (fica lento com escala).
+    const commissionPatches = new Map<string, Partial<Commission>>();
+    const insertedAdjustmentTransactions: Transaction[] = [];
 
     for (const commission of rows) {
       if (!commission.service_id || !commission.professional_id) {
@@ -2385,7 +2435,7 @@ export const DataProvider: React.FC<{ children: ReactNode }> = ({ children }) =>
         // receivable: delta>0 → entrada (recebe mais); delta<0 → saída.
         const baseIsExpense = settlementKind !== 'transfer_receivable';
         const movementType = (delta > 0) === baseIsExpense ? 'expense' : 'income';
-        const { error: adjError } = await supabase.from('transactions').insert({
+        const { data: adjTx, error: adjError } = await supabase.from('transactions').insert({
           cash_session_id: adjustmentSession.id,
           type: movementType,
           category: settlementKind === 'transfer_receivable' ? 'Ajuste de Repasse' : 'Ajuste de Comissão',
@@ -2397,27 +2447,30 @@ export const DataProvider: React.FC<{ children: ReactNode }> = ({ children }) =>
           created_by: user?.id,
           tenant_id: tenantId,
           ...(adjustmentTimestamp ? { created_at: adjustmentTimestamp } : {}),
-        });
+        }).select().single();
         if (adjError) {
           console.error('Erro ao lançar ajuste de comissão:', adjError);
           skippedItems.push(`${commission.professional_name_snapshot ?? 'Profissional'} / ${commission.service_name_snapshot ?? 'Serviço'} com erro no ajuste de caixa`);
           continue;
         }
+        if (adjTx) insertedAdjustmentTransactions.push(adjTx as Transaction);
       }
+
+      const patch: Partial<Commission> = {
+        commission_rate: nextRate,
+        commission_value: nextValue,
+        settlement_kind: settlementKind,
+        professional_name_snapshot: professional?.nickname ?? professional?.name ?? commission.professional_name_snapshot ?? 'Profissional',
+        service_name_snapshot: service?.name ?? commission.service_name_snapshot ?? 'Serviço',
+        rule_source_id: mapping.id,
+        calculation_source: 'reprocess',
+        // Paga mantém-se paga e totalmente liquidada no novo valor.
+        ...(isPaid ? { settled_amount: nextValue } : {}),
+      };
 
       const { error: updateError } = await supabase
         .from('commissions')
-        .update({
-          commission_rate: nextRate,
-          commission_value: nextValue,
-          settlement_kind: settlementKind,
-          professional_name_snapshot: professional?.nickname ?? professional?.name ?? commission.professional_name_snapshot ?? 'Profissional',
-          service_name_snapshot: service?.name ?? commission.service_name_snapshot ?? 'Serviço',
-          rule_source_id: mapping.id,
-          calculation_source: 'reprocess',
-          // Paga mantém-se paga e totalmente liquidada no novo valor.
-          ...(isPaid ? { settled_amount: nextValue } : {}),
-        })
+        .update(patch)
         .eq('id', commission.id)
         .eq('tenant_id', tenantId);
 
@@ -2427,6 +2480,7 @@ export const DataProvider: React.FC<{ children: ReactNode }> = ({ children }) =>
         continue;
       }
 
+      commissionPatches.set(commission.id, patch);
       recalculatedCount += 1;
     }
 
@@ -2442,7 +2496,17 @@ export const DataProvider: React.FC<{ children: ReactNode }> = ({ children }) =>
       created_by: user?.id ?? null,
     });
 
-    await refreshData(['commissions', 'transactions']);
+    // Otimista: aplica só as linhas que de fato mudaram, em vez de recarregar
+    // todo o histórico financeiro do tenant.
+    if (commissionPatches.size > 0) {
+      setCommissions(prev => prev.map(c => {
+        const patch = commissionPatches.get(c.id);
+        return patch ? { ...c, ...patch } : c;
+      }));
+    }
+    if (insertedAdjustmentTransactions.length > 0) {
+      setTransactions(prev => [...insertedAdjustmentTransactions, ...prev]);
+    }
 
     return {
       recalculatedCount,
