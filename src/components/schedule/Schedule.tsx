@@ -885,9 +885,15 @@ export function Schedule() {
       };
     });
 
+    // upsert (não insert): o vínculo pode já existir no banco mesmo aparecendo
+    // como "faltando" aqui — esta lista é carregada uma única vez ao abrir a
+    // Agenda e não é atualizada quando outra tela (Habilitações e Comissões)
+    // ou outro fechamento de comanda cria o vínculo nesse meio-tempo. Um
+    // insert puro batia na constraint UNIQUE(service_id, professional_id) e
+    // travava o fechamento da comanda com um erro genérico.
     const { data, error } = await supabase
       .from('service_professionals')
-      .insert(payload)
+      .upsert(payload, { onConflict: 'service_id,professional_id' })
       .select('id, service_id, professional_id, commission_rate, assistant_commission_rate, settlement_kind, duration_minutes, tenant_id, created_at, updated_at');
 
     if (error) {
@@ -895,7 +901,7 @@ export function Schedule() {
       toast({
         variant: 'destructive',
         title: 'Não foi possível salvar a regra de comissão',
-        description: 'Revise os percentuais e tente novamente.',
+        description: error.message || 'Revise os percentuais e tente novamente.',
       });
       return false;
     }
