@@ -1,7 +1,8 @@
 import { useState, useEffect, useCallback, useMemo } from 'react';
 import { motion } from 'framer-motion';
-import { 
-  DollarSign, 
+import * as XLSX from 'xlsx';
+import {
+  DollarSign,
   Check,
   Clock,
   User,
@@ -11,7 +12,10 @@ import {
   CreditCard,
   Building2,
   RefreshCw,
-  CalendarIcon
+  CalendarIcon,
+  FileSpreadsheet,
+  FileText,
+  Eye,
 } from 'lucide-react';
 import { startOfDay, endOfDay, startOfMonth, isWithinInterval, format } from 'date-fns';
 import { ptBR } from 'date-fns/locale';
@@ -44,7 +48,7 @@ import { RadioGroup, RadioGroupItem } from '@/components/ui/radio-group';
 import { Label } from '@/components/ui/label';
 import { Input } from '@/components/ui/input';
 import { useToast } from '@/hooks/use-toast';
-import { useData } from '@/context/DataContext';
+import { useData, type AppointmentServiceRow } from '@/context/DataContext';
 import { useAuth } from '@/contexts/AuthContext';
 import {
   getSettlementActionLabel,
@@ -82,7 +86,17 @@ function getCommissionPaymentMethod(method?: string | null) {
 }
 
 export function Commissions() {
-  const { professionals, commissions, payCommission, payAllCommissions, refreshData, reprocessPendingCommissions } = useData();
+  const {
+    professionals,
+    commissions,
+    appointments,
+    services,
+    payCommission,
+    payAllCommissions,
+    refreshData,
+    reprocessPendingCommissions,
+    fetchAppointmentServices,
+  } = useData();
   const { userRole, currentProfessional, hasPermission } = useAuth();
   const { toast } = useToast();
   const [professionalFilter, setProfessionalFilter] = useState<string>('all');
@@ -97,6 +111,11 @@ export function Commissions() {
     isOpen: false,
     type: 'single',
   });
+  const [viewDialog, setViewDialog] = useState<{ isOpen: boolean; commission?: typeof commissions[number] }>({
+    isOpen: false,
+  });
+  const [viewServiceRows, setViewServiceRows] = useState<AppointmentServiceRow[]>([]);
+  const [isLoadingView, setIsLoadingView] = useState(false);
 
   // Date range for filtering
   const dateRange = useMemo(() => {
@@ -159,6 +178,21 @@ export function Commissions() {
     [professionals],
   );
 
+  const appointmentsById = useMemo(
+    () => new Map(appointments.map((appointment) => [appointment.id, appointment])),
+    [appointments],
+  );
+
+  const servicesById = useMemo(
+    () => new Map(services.map((service) => [service.id, service])),
+    [services],
+  );
+
+  const getClientName = useCallback((commission: typeof commissions[number]) => {
+    const appointment = commission.appointment_id ? appointmentsById.get(commission.appointment_id) : undefined;
+    return appointment?.client?.name ?? '-';
+  }, [appointmentsById]);
+
   // Renderização incremental: listas grandes travavam a página.
   const [visibleCount, setVisibleCount] = useState(50);
   useEffect(() => {
@@ -181,7 +215,9 @@ export function Commissions() {
   // vale ainda não abatido). totalVouchers é só informativo (todo vale já
   // emitido no período, pago ou não), não é subtraído de novo em "total"
   // para não contar o vale pendente duas vezes.
-  const commissionsByProfessional = visibleProfessionals.map(prof => {
+  const commissionsByProfessional = visibleProfessionals
+    .filter(prof => professionalFilter === 'all' || prof.id === professionalFilter)
+    .map(prof => {
     const profCommissions = periodFilteredCommissions.filter(c => c.professional_id === prof.id);
     const pending = profCommissions.filter(c => c.status === 'pending');
     const totalPending = pending.reduce((sum, c) => sum + Number(c.commission_value), 0);
@@ -254,6 +290,49 @@ export function Commissions() {
       isTransfer: settlementKind === 'transfer_receivable',
     });
     setSelectedPaymentMethod('pix');
+  };
+
+  const openViewCommission = async (commission: typeof commissions[number]) => {
+    setViewDialog({ isOpen: true, commission });
+    setViewServiceRows([]);
+    if (!commission.appointment_id) return;
+    setIsLoadingView(true);
+    try {
+      const rows = await fetchAppointmentServices(commission.appointment_id);
+      setViewServiceRows(rows);
+    } finally {
+      setIsLoadingView(false);
+    }
+  };
+
+  const buildExportRows = () => filteredCommissions.map((c) => ({
+    Data: formatDate(c.created_at),
+    Profissional: c.professional?.nickname ?? c.professional_name_snapshot ?? '-',
+    Cliente: getClientName(c),
+    'Serviço': c.type === 'voucher' ? 'Vale' : (c.service_name_snapshot ?? '-'),
+    'Valor Cobrado': c.type === 'voucher' ? 0 : Number(c.base_value ?? 0),
+    'Valor Comissão': Number(c.commission_value),
+    Status: c.status === 'paid' ? 'Pago' : 'Pendente',
+  }));
+
+  const handleExportExcel = () => {
+    const rows = buildExportRows();
+    if (rows.length === 0) {
+      toast({ title: 'Nada para exportar', description: 'Não há comissões no filtro atual.' });
+      return;
+    }
+    const worksheet = XLSX.utils.json_to_sheet(rows);
+    const workbook = XLSX.utils.book_new();
+    XLSX.utils.book_append_sheet(workbook, worksheet, 'Comissões');
+    XLSX.writeFile(workbook, `comissoes_${format(new Date(), 'yyyy-MM-dd_HHmm')}.xlsx`);
+  };
+
+  const handleExportPdf = () => {
+    if (filteredCommissions.length === 0) {
+      toast({ title: 'Nada para exportar', description: 'Não há comissões no filtro atual.' });
+      return;
+    }
+    window.print();
   };
 
   const handleReprocessPending = async () => {
@@ -337,7 +416,8 @@ export function Commissions() {
   );
 
   return (
-    <div className="p-6 lg:p-8 space-y-6">
+    <>
+    <div className="p-6 lg:p-8 space-y-6 print:hidden">
       {/* Header */}
       <div className="flex flex-col sm:flex-row sm:items-center sm:justify-between gap-4">
         <div>
@@ -371,6 +451,102 @@ export function Commissions() {
           )}
         </div>
       </div>
+
+      {/* Filters */}
+      <Card className="p-4 border-0 shadow-md">
+        <div className="flex items-center gap-2 mb-3">
+          <Filter className="w-4 h-4 text-muted-foreground" />
+          <h2 className="text-sm font-medium text-muted-foreground">Filtros</h2>
+        </div>
+        <div className="flex flex-col sm:flex-row flex-wrap gap-4">
+          {/* Date From Filter */}
+          <div className="flex items-center gap-2">
+            <Label className="text-sm text-muted-foreground whitespace-nowrap">De:</Label>
+            <Popover>
+              <PopoverTrigger asChild>
+                <Button
+                  variant="outline"
+                  className={cn(
+                    "w-[140px] justify-start text-left font-normal",
+                    !startDate && "text-muted-foreground"
+                  )}
+                >
+                  <CalendarIcon className="mr-2 h-4 w-4" />
+                  {startDate ? format(startDate, "dd/MM/yyyy", { locale: ptBR }) : "Selecione"}
+                </Button>
+              </PopoverTrigger>
+              <PopoverContent className="w-auto p-0" align="start">
+                <Calendar
+                  mode="single"
+                  selected={startDate}
+                  onSelect={setStartDate}
+                  initialFocus
+                  className={cn("p-3 pointer-events-auto")}
+                  locale={ptBR}
+                />
+              </PopoverContent>
+            </Popover>
+          </div>
+
+          {/* Date To Filter */}
+          <div className="flex items-center gap-2">
+            <Label className="text-sm text-muted-foreground whitespace-nowrap">Até:</Label>
+            <Popover>
+              <PopoverTrigger asChild>
+                <Button
+                  variant="outline"
+                  className={cn(
+                    "w-[140px] justify-start text-left font-normal",
+                    !endDate && "text-muted-foreground"
+                  )}
+                >
+                  <CalendarIcon className="mr-2 h-4 w-4" />
+                  {endDate ? format(endDate, "dd/MM/yyyy", { locale: ptBR }) : "Selecione"}
+                </Button>
+              </PopoverTrigger>
+              <PopoverContent className="w-auto p-0" align="start">
+                <Calendar
+                  mode="single"
+                  selected={endDate}
+                  onSelect={setEndDate}
+                  initialFocus
+                  className={cn("p-3 pointer-events-auto")}
+                  locale={ptBR}
+                />
+              </PopoverContent>
+            </Popover>
+          </div>
+
+          {isAdmin && (
+            <Select value={professionalFilter} onValueChange={setProfessionalFilter}>
+              <SelectTrigger className="w-full sm:w-[200px]">
+                <User className="w-4 h-4 mr-2" />
+                <SelectValue placeholder="Profissional" />
+              </SelectTrigger>
+              <SelectContent>
+                <SelectItem value="all">Todos</SelectItem>
+                {visibleProfessionals.map(prof => (
+                  <SelectItem key={prof.id} value={prof.id}>
+                    {prof.nickname}
+                  </SelectItem>
+                ))}
+              </SelectContent>
+            </Select>
+          )}
+
+          <Select value={statusFilter} onValueChange={setStatusFilter}>
+            <SelectTrigger className="w-full sm:w-[200px]">
+              <Filter className="w-4 h-4 mr-2" />
+              <SelectValue placeholder="Status" />
+            </SelectTrigger>
+            <SelectContent>
+              <SelectItem value="all">Todos</SelectItem>
+              <SelectItem value="pending">Pendente</SelectItem>
+              <SelectItem value="paid">Pago</SelectItem>
+            </SelectContent>
+          </Select>
+        </div>
+      </Card>
 
       {/* Summary Cards */}
       <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 gap-4">
@@ -469,104 +645,26 @@ export function Commissions() {
         </Card>
       )}
 
-      {/* Filters */}
+      {/* Commission List */}
       {visibleCommissions.length > 0 && (
         <>
-          <div className="flex flex-col sm:flex-row flex-wrap gap-4">
-            {/* Date From Filter */}
-            <div className="flex items-center gap-2">
-              <Label className="text-sm text-muted-foreground whitespace-nowrap">De:</Label>
-              <Popover>
-                <PopoverTrigger asChild>
-                  <Button
-                    variant="outline"
-                    className={cn(
-                      "w-[140px] justify-start text-left font-normal",
-                      !startDate && "text-muted-foreground"
-                    )}
-                  >
-                    <CalendarIcon className="mr-2 h-4 w-4" />
-                    {startDate ? format(startDate, "dd/MM/yyyy", { locale: ptBR }) : "Selecione"}
-                  </Button>
-                </PopoverTrigger>
-                <PopoverContent className="w-auto p-0" align="start">
-                  <Calendar
-                    mode="single"
-                    selected={startDate}
-                    onSelect={setStartDate}
-                    initialFocus
-                    className={cn("p-3 pointer-events-auto")}
-                    locale={ptBR}
-                  />
-                </PopoverContent>
-              </Popover>
-            </div>
-
-            {/* Date To Filter */}
-            <div className="flex items-center gap-2">
-              <Label className="text-sm text-muted-foreground whitespace-nowrap">Até:</Label>
-              <Popover>
-                <PopoverTrigger asChild>
-                  <Button
-                    variant="outline"
-                    className={cn(
-                      "w-[140px] justify-start text-left font-normal",
-                      !endDate && "text-muted-foreground"
-                    )}
-                  >
-                    <CalendarIcon className="mr-2 h-4 w-4" />
-                    {endDate ? format(endDate, "dd/MM/yyyy", { locale: ptBR }) : "Selecione"}
-                  </Button>
-                </PopoverTrigger>
-                <PopoverContent className="w-auto p-0" align="start">
-                  <Calendar
-                    mode="single"
-                    selected={endDate}
-                    onSelect={setEndDate}
-                    initialFocus
-                    className={cn("p-3 pointer-events-auto")}
-                    locale={ptBR}
-                  />
-                </PopoverContent>
-              </Popover>
-            </div>
-
-            {isAdmin && (
-              <Select value={professionalFilter} onValueChange={setProfessionalFilter}>
-                <SelectTrigger className="w-full sm:w-[200px]">
-                  <User className="w-4 h-4 mr-2" />
-                  <SelectValue placeholder="Profissional" />
-                </SelectTrigger>
-                <SelectContent>
-                  <SelectItem value="all">Todos</SelectItem>
-                  {visibleProfessionals.map(prof => (
-                    <SelectItem key={prof.id} value={prof.id}>
-                      {prof.nickname}
-                    </SelectItem>
-                  ))}
-                </SelectContent>
-              </Select>
-            )}
-
-            <Select value={statusFilter} onValueChange={setStatusFilter}>
-              <SelectTrigger className="w-full sm:w-[200px]">
-                <Filter className="w-4 h-4 mr-2" />
-                <SelectValue placeholder="Status" />
-              </SelectTrigger>
-              <SelectContent>
-                <SelectItem value="all">Todos</SelectItem>
-                <SelectItem value="pending">Pendente</SelectItem>
-                <SelectItem value="paid">Pago</SelectItem>
-              </SelectContent>
-            </Select>
-          </div>
-
-          {/* Commission List */}
           <Card className="p-6 border-0 shadow-lg">
-            <h2 className="text-lg font-display font-semibold text-foreground mb-4">
-              Histórico de Comissões
-            </h2>
-            
+            <div className="flex flex-col sm:flex-row sm:items-center sm:justify-between gap-3 mb-4">
+              <h2 className="text-lg font-display font-semibold text-foreground">
+                Histórico de Comissões
+              </h2>
+              <div className="flex items-center gap-2">
+                <Button variant="outline" size="sm" onClick={handleExportExcel}>
+                  <FileSpreadsheet className="w-4 h-4 mr-2" />
+                  Excel
+                </Button>
+                <Button variant="outline" size="sm" onClick={handleExportPdf}>
+                  <FileText className="w-4 h-4 mr-2" />
+                  PDF
+                </Button>
+              </div>
+            </div>
+
             <div className="space-y-3">
               {visibleFilteredCommissions.map((commission, index) => {
                 const settlementKind = getCommissionSettlementKind(commission);
@@ -597,15 +695,18 @@ export function Commissions() {
                     <div>
                       <p className="font-medium text-foreground">
                         {commission.professional?.nickname}
+                        {commission.type !== 'voucher' && getClientName(commission) !== '-' && (
+                          <span className="font-normal text-muted-foreground"> • {getClientName(commission)}</span>
+                        )}
                       </p>
                       <div className="flex items-center gap-2 text-sm text-muted-foreground">
                         <span>{formatDate(commission.created_at)}</span>
                         <span>•</span>
                         <span>
-                          {commission.type === 'voucher' 
-                            ? 'Vale' 
-                            : commission.type === 'service' 
-                              ? 'Serviço' 
+                          {commission.type === 'voucher'
+                            ? 'Vale'
+                            : commission.type === 'service'
+                              ? 'Serviço'
                               : 'Produto'}
                         </span>
                         {commission.type !== 'voucher' && (
@@ -682,6 +783,17 @@ export function Commissions() {
                       <Badge variant="success">
                         {getSettlementPaidLabel(settlementKind)}
                       </Badge>
+                    )}
+
+                    {commission.appointment_id && (
+                      <Button
+                        size="sm"
+                        variant="ghost"
+                        title="Ver comanda"
+                        onClick={() => openViewCommission(commission)}
+                      >
+                        <Eye className="w-4 h-4" />
+                      </Button>
                     )}
                   </div>
                 </motion.div>
@@ -801,8 +913,8 @@ export function Commissions() {
           </div>
 
           <DialogFooter className="gap-2 sm:gap-0">
-            <Button 
-              variant="outline" 
+            <Button
+              variant="outline"
               onClick={() => setPaymentDialog({ isOpen: false, type: 'single' })}
               disabled={isSubmitting}
             >
@@ -814,6 +926,118 @@ export function Commissions() {
           </DialogFooter>
         </DialogContent>
       </Dialog>
+
+      {/* View Comanda Dialog (somente leitura) */}
+      <Dialog open={viewDialog.isOpen} onOpenChange={(open) => !open && setViewDialog({ isOpen: false })}>
+        <DialogContent className="sm:max-w-lg">
+          <DialogHeader>
+            <DialogTitle>Comanda</DialogTitle>
+            <DialogDescription>Visualização somente leitura</DialogDescription>
+          </DialogHeader>
+          {(() => {
+            const commission = viewDialog.commission;
+            if (!commission) return null;
+            const appointment = commission.appointment_id ? appointmentsById.get(commission.appointment_id) : undefined;
+            if (!appointment) {
+              return (
+                <p className="text-sm text-muted-foreground py-4">
+                  Não há comanda associada a este lançamento.
+                </p>
+              );
+            }
+            return (
+              <div className="space-y-4 py-2">
+                <div className="grid grid-cols-2 gap-3 text-sm">
+                  <div>
+                    <p className="text-muted-foreground">Cliente</p>
+                    <p className="font-medium">{appointment.client?.name ?? '-'}</p>
+                  </div>
+                  <div>
+                    <p className="text-muted-foreground">Data</p>
+                    <p className="font-medium">{new Date(appointment.start_time).toLocaleString('pt-BR')}</p>
+                  </div>
+                  <div>
+                    <p className="text-muted-foreground">Status</p>
+                    <p className="font-medium capitalize">{appointment.status.replace('_', ' ')}</p>
+                  </div>
+                  <div>
+                    <p className="text-muted-foreground">Total</p>
+                    <p className="font-medium">{formatCurrency(Number(appointment.total_value ?? 0))}</p>
+                  </div>
+                </div>
+                <div>
+                  <p className="text-sm font-medium mb-2">Serviços</p>
+                  {isLoadingView ? (
+                    <p className="text-sm text-muted-foreground">Carregando...</p>
+                  ) : (
+                    <div className="space-y-2">
+                      {viewServiceRows.length > 0 ? (
+                        viewServiceRows.map((row) => {
+                          const service = servicesById.get(row.service_id);
+                          const prof = professionalsById.get(row.professional_id);
+                          return (
+                            <div key={row.id} className="flex items-center justify-between p-2 rounded-lg bg-secondary/30 text-sm">
+                              <span>{service?.name ?? 'Serviço'} — {prof?.nickname ?? ''}</span>
+                              <span className="font-medium">{formatCurrency(Number(row.value))}</span>
+                            </div>
+                          );
+                        })
+                      ) : (
+                        <div className="flex items-center justify-between p-2 rounded-lg bg-secondary/30 text-sm">
+                          <span>{commission.service_name_snapshot ?? appointment.service?.name ?? 'Serviço'} — {appointment.professional?.nickname ?? ''}</span>
+                          <span className="font-medium">{formatCurrency(Number(appointment.total_value ?? commission.base_value ?? 0))}</span>
+                        </div>
+                      )}
+                    </div>
+                  )}
+                </div>
+              </div>
+            );
+          })()}
+          <DialogFooter>
+            <Button variant="outline" onClick={() => setViewDialog({ isOpen: false })}>
+              Fechar
+            </Button>
+          </DialogFooter>
+        </DialogContent>
+      </Dialog>
     </div>
+
+    {/* Relatório imprimível (PDF via impressão do navegador) */}
+    <div className="hidden print:block p-8 text-black bg-white">
+      <h1 className="text-2xl font-bold mb-1">Relatório de Comissões</h1>
+      <p className="text-sm mb-4">
+        Período: {startDate ? format(startDate, 'dd/MM/yyyy', { locale: ptBR }) : '-'} a {endDate ? format(endDate, 'dd/MM/yyyy', { locale: ptBR }) : '-'}
+        {professionalFilter !== 'all' && ` • Profissional: ${professionalsById.get(professionalFilter)?.nickname ?? ''}`}
+        {statusFilter !== 'all' && ` • Status: ${statusFilter === 'paid' ? 'Pago' : 'Pendente'}`}
+      </p>
+      <table className="w-full text-sm border-collapse">
+        <thead>
+          <tr className="border-b border-black">
+            <th className="text-left py-1 pr-2">Data</th>
+            <th className="text-left py-1 pr-2">Profissional</th>
+            <th className="text-left py-1 pr-2">Cliente</th>
+            <th className="text-left py-1 pr-2">Serviço</th>
+            <th className="text-right py-1 pr-2">Valor Cobrado</th>
+            <th className="text-right py-1 pr-2">Valor Comissão</th>
+            <th className="text-left py-1">Status</th>
+          </tr>
+        </thead>
+        <tbody>
+          {filteredCommissions.map((c) => (
+            <tr key={c.id} className="border-b border-gray-300">
+              <td className="py-1 pr-2">{formatDate(c.created_at)}</td>
+              <td className="py-1 pr-2">{c.professional?.nickname ?? c.professional_name_snapshot ?? '-'}</td>
+              <td className="py-1 pr-2">{getClientName(c)}</td>
+              <td className="py-1 pr-2">{c.type === 'voucher' ? 'Vale' : (c.service_name_snapshot ?? '-')}</td>
+              <td className="py-1 pr-2 text-right">{c.type === 'voucher' ? '-' : formatCurrency(Number(c.base_value ?? 0))}</td>
+              <td className="py-1 pr-2 text-right">{formatCurrency(Number(c.commission_value))}</td>
+              <td className="py-1">{c.status === 'paid' ? 'Pago' : 'Pendente'}</td>
+            </tr>
+          ))}
+        </tbody>
+      </table>
+    </div>
+    </>
   );
 }
