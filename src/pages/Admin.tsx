@@ -1,5 +1,5 @@
-import React, { useCallback, useEffect, useState } from 'react';
-import { useNavigate } from 'react-router-dom';
+import React, { useCallback, useEffect, useMemo, useState } from 'react';
+import { useNavigate, useSearchParams } from 'react-router-dom';
 import { ArrowLeft, Edit, Loader2, Shield, ShieldPlus, ShieldMinus, KeyRound, Trash2, UserPlus } from 'lucide-react';
 import { useAuth } from '@/contexts/AuthContext';
 import { supabase } from '@/integrations/supabase/client';
@@ -11,10 +11,12 @@ import { Input } from '@/components/ui/input';
 import { Label } from '@/components/ui/label';
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from '@/components/ui/select';
 import { Table, TableBody, TableCell, TableHead, TableHeader, TableRow } from '@/components/ui/table';
+import { Tabs, TabsContent, TabsList, TabsTrigger } from '@/components/ui/tabs';
 import { useToast } from '@/hooks/use-toast';
 import { validatePassword, getPasswordRequirementsMessage } from '@/lib/passwordValidation';
 import { getSupabaseErrorMessage } from '@/lib/supabaseErrors';
 import { CleaningStaffPermissions } from '@/components/cleaning/CleaningStaffPermissions';
+import { ServiceCommissionMatrix } from '@/components/services/ServiceCommissionMatrix';
 
 type AccessRole = 'none' | 'owner' | 'admin' | 'professional' | 'staff';
 type AccessPresetId = 'reception' | 'professional' | 'financial' | 'custom';
@@ -30,6 +32,7 @@ type PermissionId =
   | 'view_financial_history'
   | 'reverse_financial_entries';
 type NewAccessType = 'professional' | 'staff';
+type AdminTabId = 'accesses' | 'service-rules';
 
 interface InternalAccessRow {
   rowId: string;
@@ -120,8 +123,13 @@ const roleBadgeClasses: Record<AccessRole, string> = {
   staff: 'bg-amber-100 text-amber-700',
 };
 
+const isAdminTab = (value: string | null): value is AdminTabId => (
+  value === 'accesses' || value === 'service-rules'
+);
+
 const Admin: React.FC = () => {
   const navigate = useNavigate();
+  const [searchParams, setSearchParams] = useSearchParams();
   const { userRole, tenantId, user, loading: authLoading } = useAuth();
   const { toast } = useToast();
 
@@ -140,6 +148,16 @@ const Admin: React.FC = () => {
     profilePreset: 'professional' as AccessPresetId,
     permissions: getPresetPermissions('professional'),
   });
+  const currentTab = useMemo<AdminTabId>(() => (
+    isAdminTab(searchParams.get('tab')) ? searchParams.get('tab') as AdminTabId : 'accesses'
+  ), [searchParams]);
+
+  const handleTabChange = (value: string) => {
+    if (!isAdminTab(value)) return;
+    const nextParams = new URLSearchParams(searchParams);
+    nextParams.set('tab', value);
+    setSearchParams(nextParams, { replace: true });
+  };
 
   useEffect(() => {
     if (!authLoading && userRole !== 'admin') {
@@ -834,130 +852,137 @@ const Admin: React.FC = () => {
           </Dialog>
         </div>
 
-        <Card>
-          <CardHeader>
-            <CardTitle className="flex items-center gap-2">
-              <Shield className="h-5 w-5 text-primary" />
-              Usuários internos
-            </CardTitle>
-            <CardDescription>
-              Owners ficam protegidos. Profissionais enxergam apenas a própria agenda e as próprias comissões. Recepção pode operar sem vínculo com profissional.
-            </CardDescription>
-          </CardHeader>
-          <CardContent>
-            {internalUsers.length === 0 ? (
-              <div className="text-center py-12 text-muted-foreground">
-                <UserPlus className="h-12 w-12 mx-auto mb-4 opacity-50" />
-                <p>Nenhum usuário interno encontrado.</p>
-                <p className="text-sm">Cadastre profissionais ou crie um acesso interno para recepção/financeiro.</p>
-              </div>
-            ) : (
-              <Table>
-                <TableHeader>
-                  <TableRow>
-                    <TableHead>Nome</TableHead>
-                    <TableHead>Tipo</TableHead>
-                    <TableHead>Vínculo</TableHead>
-                    <TableHead>Email</TableHead>
-                    <TableHead>Status</TableHead>
-                    <TableHead>Permissões</TableHead>
-                    <TableHead className="text-right">Ações</TableHead>
-                  </TableRow>
-                </TableHeader>
-                <TableBody>
-                  {(() => {
-                    const groupOrder: Record<string, number> = { admins: 0, professionals: 1, staff: 2 };
-                    const groupLabel: Record<string, string> = {
-                      admins: 'Owners e Administradores',
-                      professionals: 'Profissionais',
-                      staff: 'Equipe interna',
-                    };
-                    const groupOf = (r: InternalAccessRow) =>
-                      (r.role === 'owner' || r.role === 'admin' || r.isOwner)
-                        ? 'admins'
-                        : (r.professionalId ? 'professionals' : 'staff');
-                    const ordered = [...internalUsers].sort((a, b) => groupOrder[groupOf(a)] - groupOrder[groupOf(b)]);
-                    let lastGroup = '';
-                    return ordered.map((row) => {
-                    const isProtected = row.role === 'owner' || row.role === 'admin' || row.isOwner;
-                    const canManage = row.hasAccess && !isProtected && !!row.userId;
-                    const group = groupOf(row);
-                    const showHeader = group !== lastGroup;
-                    lastGroup = group;
-                    return (
-                      <React.Fragment key={row.rowId}>
-                        {showHeader && (
-                          <TableRow className="bg-muted/30 hover:bg-muted/30">
-                            <TableCell colSpan={7} className="py-2 text-xs font-semibold uppercase tracking-wide text-muted-foreground">
-                              {groupLabel[group]}
-                            </TableCell>
-                          </TableRow>
-                        )}
+        <Tabs value={currentTab} onValueChange={handleTabChange} className="space-y-6">
+          <TabsList className="h-auto w-full justify-start overflow-x-auto rounded-xl border border-border bg-card p-1">
+            <TabsTrigger value="accesses">Equipe e Acessos</TabsTrigger>
+            <TabsTrigger value="service-rules">Serviços x Profissionais x Comissão</TabsTrigger>
+          </TabsList>
+
+          <TabsContent value="accesses" className="mt-0">
+            <Card>
+              <CardHeader>
+                <CardTitle className="flex items-center gap-2">
+                  <Shield className="h-5 w-5 text-primary" />
+                  Usuários internos
+                </CardTitle>
+                <CardDescription>
+                  Owners ficam protegidos. Profissionais enxergam apenas a própria agenda e as próprias comissões. Recepção pode operar sem vínculo com profissional.
+                </CardDescription>
+              </CardHeader>
+              <CardContent>
+                {internalUsers.length === 0 ? (
+                  <div className="text-center py-12 text-muted-foreground">
+                    <UserPlus className="h-12 w-12 mx-auto mb-4 opacity-50" />
+                    <p>Nenhum usuário interno encontrado.</p>
+                    <p className="text-sm">Cadastre profissionais ou crie um acesso interno para recepção/financeiro.</p>
+                  </div>
+                ) : (
+                  <Table>
+                    <TableHeader>
                       <TableRow>
-                        <TableCell className="font-medium">
-                          {row.name}
-                          <p className="text-xs font-normal text-muted-foreground">
-                            {row.nickname || row.fullName || '-'}
-                          </p>
-                        </TableCell>
-                        <TableCell>
-                          <span className={`inline-flex items-center rounded-full px-2 py-0.5 text-xs ${roleBadgeClasses[row.role]}`}>
-                            {roleLabels[row.role]}
-                          </span>
-                        </TableCell>
-                        <TableCell>
-                          {row.professionalId
-                            ? `${row.professionalType === 'owner' ? 'Profissional proprietário' : 'Profissional operacional'}`
-                            : 'Sem vínculo com profissional'}
-                        </TableCell>
-                        <TableCell>{row.email || '-'}</TableCell>
-                        <TableCell>
-                          {row.hasAccess ? (
-                            <span className="inline-flex items-center rounded-full bg-primary/10 px-2 py-0.5 text-xs text-primary">
-                              Com acesso
-                            </span>
-                          ) : (
-                            <span className="inline-flex items-center rounded-full bg-muted px-2 py-0.5 text-xs text-muted-foreground">
-                              Sem acesso
-                            </span>
-                          )}
-                        </TableCell>
-                        <TableCell>
-                          <div className="flex flex-wrap gap-1">
-                            {!row.hasAccess ? (
-                              <span className="text-sm text-muted-foreground">-</span>
-                            ) : row.role === 'owner' || row.role === 'admin' ? (
-                              <span className="text-sm text-muted-foreground">Acesso administrativo total</span>
-                            ) : row.permissions.length === 0 ? (
-                              <span className="text-sm text-muted-foreground">Nenhuma</span>
-                            ) : (
-                              row.permissions.map((permission) => (
-                                <span
-                                  key={`${row.rowId}-${permission}`}
-                                  className="inline-flex items-center rounded-full bg-primary/10 px-2 py-0.5 text-xs text-primary"
-                                >
-                                  {PERMISSIONS.find((item) => item.id === permission)?.label || permission}
-                                </span>
-                              ))
-                            )}
-                          </div>
-                        </TableCell>
-                        <TableCell className="text-right">
-                          <div className="flex justify-end gap-2">
-                            {canManage ? (
-                              <>
-                                <Button
-                                  variant="ghost"
-                                  size="icon"
-                                  onClick={() => {
-                                    setSelectedAccess(row);
-                                    setIsEditDialogOpen(true);
-                                  }}
-                                  title="Editar permissões"
-                                >
-                                  <Edit className="h-4 w-4" />
-                                </Button>
-                                <Button
+                        <TableHead>Nome</TableHead>
+                        <TableHead>Tipo</TableHead>
+                        <TableHead>Vínculo</TableHead>
+                        <TableHead>Email</TableHead>
+                        <TableHead>Status</TableHead>
+                        <TableHead>Permissões</TableHead>
+                        <TableHead className="text-right">Ações</TableHead>
+                      </TableRow>
+                    </TableHeader>
+                    <TableBody>
+                      {(() => {
+                        const groupOrder: Record<string, number> = { admins: 0, professionals: 1, staff: 2 };
+                        const groupLabel: Record<string, string> = {
+                          admins: 'Owners e Administradores',
+                          professionals: 'Profissionais',
+                          staff: 'Equipe interna',
+                        };
+                        const groupOf = (r: InternalAccessRow) =>
+                          (r.role === 'owner' || r.role === 'admin' || r.isOwner)
+                            ? 'admins'
+                            : (r.professionalId ? 'professionals' : 'staff');
+                        const ordered = [...internalUsers].sort((a, b) => groupOrder[groupOf(a)] - groupOrder[groupOf(b)]);
+                        let lastGroup = '';
+                        return ordered.map((row) => {
+                          const isProtected = row.role === 'owner' || row.role === 'admin' || row.isOwner;
+                          const canManage = row.hasAccess && !isProtected && !!row.userId;
+                          const group = groupOf(row);
+                          const showHeader = group !== lastGroup;
+                          lastGroup = group;
+                          return (
+                            <React.Fragment key={row.rowId}>
+                              {showHeader && (
+                                <TableRow className="bg-muted/30 hover:bg-muted/30">
+                                  <TableCell colSpan={7} className="py-2 text-xs font-semibold uppercase tracking-wide text-muted-foreground">
+                                    {groupLabel[group]}
+                                  </TableCell>
+                                </TableRow>
+                              )}
+                              <TableRow>
+                                <TableCell className="font-medium">
+                                  {row.name}
+                                  <p className="text-xs font-normal text-muted-foreground">
+                                    {row.nickname || row.fullName || '-'}
+                                  </p>
+                                </TableCell>
+                                <TableCell>
+                                  <span className={`inline-flex items-center rounded-full px-2 py-0.5 text-xs ${roleBadgeClasses[row.role]}`}>
+                                    {roleLabels[row.role]}
+                                  </span>
+                                </TableCell>
+                                <TableCell>
+                                  {row.professionalId
+                                    ? `${row.professionalType === 'owner' ? 'Profissional proprietário' : 'Profissional operacional'}`
+                                    : 'Sem vínculo com profissional'}
+                                </TableCell>
+                                <TableCell>{row.email || '-'}</TableCell>
+                                <TableCell>
+                                  {row.hasAccess ? (
+                                    <span className="inline-flex items-center rounded-full bg-primary/10 px-2 py-0.5 text-xs text-primary">
+                                      Com acesso
+                                    </span>
+                                  ) : (
+                                    <span className="inline-flex items-center rounded-full bg-muted px-2 py-0.5 text-xs text-muted-foreground">
+                                      Sem acesso
+                                    </span>
+                                  )}
+                                </TableCell>
+                                <TableCell>
+                                  <div className="flex flex-wrap gap-1">
+                                    {!row.hasAccess ? (
+                                      <span className="text-sm text-muted-foreground">-</span>
+                                    ) : row.role === 'owner' || row.role === 'admin' ? (
+                                      <span className="text-sm text-muted-foreground">Acesso administrativo total</span>
+                                    ) : row.permissions.length === 0 ? (
+                                      <span className="text-sm text-muted-foreground">Nenhuma</span>
+                                    ) : (
+                                      row.permissions.map((permission) => (
+                                        <span
+                                          key={`${row.rowId}-${permission}`}
+                                          className="inline-flex items-center rounded-full bg-primary/10 px-2 py-0.5 text-xs text-primary"
+                                        >
+                                          {PERMISSIONS.find((item) => item.id === permission)?.label || permission}
+                                        </span>
+                                      ))
+                                    )}
+                                  </div>
+                                </TableCell>
+                                <TableCell className="text-right">
+                                  <div className="flex justify-end gap-2">
+                                    {canManage ? (
+                                      <>
+                                        <Button
+                                          variant="ghost"
+                                          size="icon"
+                                          onClick={() => {
+                                            setSelectedAccess(row);
+                                            setIsEditDialogOpen(true);
+                                          }}
+                                          title="Editar permissões"
+                                        >
+                                          <Edit className="h-4 w-4" />
+                                        </Button>
+                                        <Button
                                   variant="ghost"
                                   size="icon"
                                   className="text-primary hover:text-primary"
@@ -1027,9 +1052,26 @@ const Admin: React.FC = () => {
           </CardContent>
         </Card>
 
-        <div className="mt-8">
-          <CleaningStaffPermissions />
-        </div>
+            <div className="mt-8">
+              <CleaningStaffPermissions />
+            </div>
+          </TabsContent>
+
+          <TabsContent value="service-rules" className="mt-0">
+            <div className="space-y-3">
+              <div>
+                <h2 className="text-xl font-display font-semibold text-foreground flex items-center gap-2">
+                  <Scissors className="h-5 w-5 text-primary" />
+                  Habilitações e comissões por serviço
+                </h2>
+                <p className="text-sm text-muted-foreground">
+                  Defina quais profissionais podem executar cada serviço, com percentual, duração e tipo de liquidação. Essas regras refletem na agenda, na comanda, nas comissões e no reprocessamento histórico.
+                </p>
+              </div>
+              <ServiceCommissionMatrix />
+            </div>
+          </TabsContent>
+        </Tabs>
 
         <Dialog open={isEditDialogOpen} onOpenChange={setIsEditDialogOpen}>
           <DialogContent className="max-w-lg max-h-[90vh] overflow-hidden p-0 gap-0 flex flex-col">

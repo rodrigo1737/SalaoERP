@@ -63,8 +63,8 @@ const SUPER_ADMIN_TOP_TARGETS: AppPageId[] = ['super-dashboard', 'tenants'];
 
 const SIDEBAR_SECTIONS: SidebarSectionDefinition[] = [
   { id: 'operation', label: 'Operação', targets: ['clients', 'aesthetics'] },
-  { id: 'registrations', label: 'Cadastros', targets: ['professionals', 'services', 'commission-matrix', 'products'] },
-  { id: 'financial', label: 'Financeiro', targets: ['cashier', 'financial-management', 'commissions', 'professional-statement', 'commission-reprocessing'] },
+  { id: 'registrations', label: 'Cadastros', targets: ['professionals', 'services', 'products'] },
+  { id: 'financial', label: 'Financeiro', targets: ['financial-management'] },
   { id: 'inventory', label: 'Estoque', targets: ['suppliers', 'purchase', 'stock-movements'] },
   { id: 'reports', label: 'Relatórios', targets: ['reports'] },
   { id: 'administration', label: 'Administração', targets: ['admin-access', 'settings'] },
@@ -84,7 +84,7 @@ const SIDEBAR_TARGETS: Record<SidebarTargetId, SidebarTargetDefinition> = {
   purchase: { id: 'purchase', appPageId: 'purchase', label: 'Entradas', path: '/app/purchase' },
   'stock-movements': { id: 'stock-movements', appPageId: 'stock-movements', label: 'Movimentações', path: '/app/stock-movements' },
   cashier: { id: 'cashier', appPageId: 'cashier', label: 'Caixa e Movimentações', path: '/app/cashier' },
-  'financial-management': { id: 'financial-management', appPageId: 'financial-management', label: 'Gestão Financeira', path: '/app/financial-management' },
+  'financial-management': { id: 'financial-management', appPageId: 'financial-management', label: 'Central Financeira', path: '/app/financial-management' },
   commissions: { id: 'commissions', appPageId: 'commissions', label: 'Comissões, Repasses e Extratos', path: '/app/commissions' },
   'commission-reprocessing': { id: 'commission-reprocessing', appPageId: 'commission-reprocessing', label: 'Reprocessamento', path: '/app/commission-reprocessing' },
   'professional-statement': { id: 'professional-statement', appPageId: 'professional-statement', label: 'Extrato do Profissional', path: '/app/professional-statement' },
@@ -92,7 +92,7 @@ const SIDEBAR_TARGETS: Record<SidebarTargetId, SidebarTargetDefinition> = {
   settings: { id: 'settings', appPageId: 'settings', label: 'Configurações', path: '/app/settings' },
   'super-dashboard': { id: 'super-dashboard', appPageId: 'super-dashboard', label: 'Painel B2B', path: '/app/super-dashboard' },
   tenants: { id: 'tenants', appPageId: 'tenants', label: 'Clientes B2B', path: '/app/tenants' },
-  'admin-access': { id: 'admin-access', label: 'Usuários e Acessos', path: '/admin' },
+  'admin-access': { id: 'admin-access', label: 'Equipe e Acessos', path: '/admin' },
 };
 
 const isAdminUser = (ctx: NavigationAccessContext) => ctx.userRole === 'admin';
@@ -142,7 +142,13 @@ export const canAccessAppPage = (page: AppPageId, ctx: NavigationAccessContext) 
     case 'cashier':
       return !isCleaningTenant && (admin || can('manage_cash_flow') || can('reverse_financial_entries'));
     case 'financial-management':
-      return !isCleaningTenant && (admin || can('view_financial_history') || can('reverse_financial_entries'));
+      return !isCleaningTenant && (
+        admin
+        || can('manage_cash_flow')
+        || can('view_financial_history')
+        || can('reverse_financial_entries')
+        || can('view_commissions')
+      );
     case 'commissions':
     case 'professional-statement':
       return !isCleaningTenant && (admin || can('view_commissions'));
