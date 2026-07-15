@@ -248,6 +248,30 @@ export interface CommissionReprocessPreview {
   totalDifference: number;
 }
 
+type AppointmentEventType =
+  | 'created'
+  | 'updated'
+  | 'completed'
+  | 'reopened'
+  | 'cancelled'
+  | 'payment_registered'
+  | 'payment_reversed'
+  | 'partial_payment_reversed'
+  | 'commissions_reprocessed';
+
+type FinancialAuditAction =
+  | 'cash_opened'
+  | 'cash_closed'
+  | 'transaction_created'
+  | 'transaction_reversed'
+  | 'appointment_payment_registered'
+  | 'appointment_fully_refunded'
+  | 'appointment_partially_refunded'
+  | 'commission_paid'
+  | 'commission_batch_paid'
+  | 'voucher_created'
+  | 'commission_reprocessed';
+
 interface DataContextType {
   clients: Client[];
   professionals: Professional[];
@@ -907,6 +931,90 @@ export const DataProvider: React.FC<{ children: ReactNode }> = ({ children }) =>
     return true;
   };
 
+  const toAuditJson = (value: unknown) => JSON.parse(JSON.stringify(value ?? null));
+
+  const buildAppointmentSnapshot = (
+    appointment?: Partial<Appointment> | null,
+  ): Record<string, unknown> | null => {
+    if (!appointment) return null;
+    return {
+      id: appointment.id ?? null,
+      client_id: appointment.client_id ?? null,
+      professional_id: appointment.professional_id ?? null,
+      service_id: appointment.service_id ?? null,
+      start_time: appointment.start_time ?? null,
+      end_time: appointment.end_time ?? null,
+      status: appointment.status ?? null,
+      notes: appointment.notes ?? null,
+      total_value: appointment.total_value ?? null,
+      booking_source: appointment.booking_source ?? null,
+      client_user_id: appointment.client_user_id ?? null,
+      deleted_at: (appointment as { deleted_at?: string | null }).deleted_at ?? null,
+    };
+  };
+
+  const recordAppointmentEvent = async (params: {
+    appointmentId: string;
+    eventType: AppointmentEventType;
+    previousStatus?: Appointment['status'] | null;
+    nextStatus?: Appointment['status'] | null;
+    snapshot?: Partial<Appointment> | null;
+    metadata?: Record<string, unknown> | null;
+  }) => {
+    if (!tenantId || !params.appointmentId) return;
+    const { error } = await (supabase as any)
+      .from('appointment_events')
+      .insert({
+        tenant_id: tenantId,
+        appointment_id: params.appointmentId,
+        event_type: params.eventType,
+        previous_status: params.previousStatus ?? null,
+        next_status: params.nextStatus ?? null,
+        snapshot: buildAppointmentSnapshot(params.snapshot),
+        metadata: toAuditJson(params.metadata),
+        created_by: user?.id ?? null,
+      });
+
+    if (error) {
+      console.error('Erro ao registrar histórico do agendamento:', error);
+    }
+  };
+
+  const recordFinancialAudit = async (params: {
+    actionType: FinancialAuditAction;
+    entityType: 'cash_session' | 'transaction' | 'appointment' | 'commission';
+    description: string;
+    transactionId?: string | null;
+    cashSessionId?: string | null;
+    appointmentId?: string | null;
+    commissionId?: string | null;
+    beforeState?: Record<string, unknown> | null;
+    afterState?: Record<string, unknown> | null;
+    metadata?: Record<string, unknown> | null;
+  }) => {
+    if (!tenantId) return;
+    const { error } = await (supabase as any)
+      .from('financial_audit_logs')
+      .insert({
+        tenant_id: tenantId,
+        transaction_id: params.transactionId ?? null,
+        cash_session_id: params.cashSessionId ?? null,
+        appointment_id: params.appointmentId ?? null,
+        commission_id: params.commissionId ?? null,
+        action_type: params.actionType,
+        entity_type: params.entityType,
+        description: params.description,
+        before_state: toAuditJson(params.beforeState),
+        after_state: toAuditJson(params.afterState),
+        metadata: toAuditJson(params.metadata),
+        created_by: user?.id ?? null,
+      });
+
+    if (error) {
+      console.error('Erro ao registrar auditoria financeira:', error);
+    }
+  };
+
   // Garante um estado de caixa confiável antes de guards de fluxo (fechar
   // comanda, etc.): se a sincronização inicial ainda não terminou, consulta o
   // banco diretamente em vez de acusar "caixa fechado" com dados incompletos.
@@ -1225,12 +1333,22 @@ export const DataProvider: React.FC<{ children: ReactNode }> = ({ children }) =>
     if (error) { toast.error('Erro ao criar agendamento.'); return null; }
     const joined = joinAppointments([data as Appointment], clients, professionals, services)[0];
     setAppointments(prev => [joined, ...prev]);
+    await recordAppointmentEvent({
+      appointmentId: joined.id,
+      eventType: 'created',
+      nextStatus: joined.status,
+      snapshot: joined,
+      metadata: {
+        source: 'schedule',
+      },
+    });
     toast.success('Agendamento criado!');
     return joined;
   };
 
   const updateAppointment = async (id: string, data: Partial<Appointment>) => {
     if (!guardModify()) return;
+    const previousAppointment = appointments.find((appointment) => appointment.id === id) ?? null;
     const updateData: Record<string, unknown> = {};
     if (data.status !== undefined)          updateData.status = data.status;
     if (data.notes !== undefined)           updateData.notes = data.notes;
@@ -1241,16 +1359,30 @@ export const DataProvider: React.FC<{ children: ReactNode }> = ({ children }) =>
     if (data.service_id !== undefined)      updateData.service_id = data.service_id;
     const { error } = await supabase.from('appointments').update(updateData).eq('id', id).eq('tenant_id', tenantId);
     if (error) { toast.error('Erro ao atualizar agendamento.'); return; }
+    const nextAppointment = previousAppointment ? { ...previousAppointment, ...data } : { id, ...data };
     setAppointments(prev => prev.map(a => {
       if (a.id !== id) return a;
       const updated = { ...a, ...data };
       return joinAppointments([updated], clients, professionals, services)[0];
     }));
+    await recordAppointmentEvent({
+      appointmentId: id,
+      eventType: 'updated',
+      previousStatus: previousAppointment?.status ?? null,
+      nextStatus: (nextAppointment as Appointment).status ?? previousAppointment?.status ?? null,
+      snapshot: nextAppointment as Partial<Appointment>,
+      metadata: {
+        changed_fields: Object.keys(updateData),
+        before: buildAppointmentSnapshot(previousAppointment),
+        after: buildAppointmentSnapshot(nextAppointment as Partial<Appointment>),
+      },
+    });
   };
 
   // ITEM 4: não deleta comissões manualmente — FK ON DELETE SET NULL já trata isso
   const deleteAppointment = async (id: string) => {
     if (!guardModify()) return;
+    const previousAppointment = appointments.find((appointment) => appointment.id === id) ?? null;
     // Soft delete para preservar histórico
     const { error } = await supabase
       .from('appointments')
@@ -1259,6 +1391,16 @@ export const DataProvider: React.FC<{ children: ReactNode }> = ({ children }) =>
       .eq('tenant_id', tenantId);
     if (error) { toast.error('Erro ao remover agendamento.'); return; }
     setAppointments(prev => prev.filter(a => a.id !== id));
+    await recordAppointmentEvent({
+      appointmentId: id,
+      eventType: 'cancelled',
+      previousStatus: previousAppointment?.status ?? null,
+      nextStatus: 'cancelled',
+      snapshot: previousAppointment ? { ...previousAppointment, status: 'cancelled', deleted_at: new Date().toISOString() } as Partial<Appointment> : { id, status: 'cancelled' },
+      metadata: {
+        soft_delete: true,
+      },
+    });
     toast.success('Agendamento removido.');
   };
 
@@ -1317,62 +1459,113 @@ export const DataProvider: React.FC<{ children: ReactNode }> = ({ children }) =>
       }
     }
 
-    const { error: deleteCommissionError } = await supabase.from('commissions')
-      .delete()
-      .eq('appointment_id', id)
-      .eq('tenant_id', tenantId);
-
-    if (deleteCommissionError) {
-      console.error('Erro ao remover comissão da comanda estornada:', deleteCommissionError);
-      toast.error('Comanda reaberta, mas houve erro ao remover a comissão vinculada. Verifique manualmente.');
-      // Segue mesmo assim: o agendamento já foi reaberto no banco; abortar
-      // aqui deixaria a UI dessincronizada do que realmente está salvo.
+    const relatedCommissions = commissions.filter((commission) => commission.appointment_id === id);
+    const paidCommissions = relatedCommissions.filter((commission) => commission.status === 'paid');
+    if (paidCommissions.length > 0) {
+      toast.error('Estorne primeiro os pagamentos de comissão vinculados a esta comanda.');
+      return false;
     }
 
-    const { data: activePaymentTx } = await supabase
+    const { data: activePaymentRows, error: activePaymentError } = await supabase
       .from('transactions')
-      .select('id')
+      .select('*')
       .eq('tenant_id', tenantId)
       .eq('reference_id', id)
       .eq('reference_type', 'appointment')
       .eq('type', 'income')
       .is('reversed_at', null)
-      .order('created_at', { ascending: false })
-      .limit(1)
-      .maybeSingle();
+      .order('created_at', { ascending: true });
 
-    if (activePaymentTx?.id) {
-      await supabase
-        .from('transactions')
-        .update({ reference_type: 'appointment_refunded' })
-        .eq('tenant_id', tenantId)
-        .eq('id', activePaymentTx.id);
-      setTransactions(prev => prev.map(t => t.id === activePaymentTx.id ? { ...t, reference_type: 'appointment_refunded' } : t));
+    if (activePaymentError) {
+      console.error('Erro ao carregar pagamentos ativos da comanda:', activePaymentError);
+      toast.error('Não foi possível localizar os pagamentos da comanda para estorno.');
+      return false;
     }
 
-    let insertedRefundTx: Transaction | undefined;
-    if (wasReopenedNow && appointment.total_value) {
-      const { data: refundTx, error: refundTxError } = await supabase.from('transactions').insert({
-        cash_session_id: activeSession.id,
-        type: 'expense',
-        category: 'Estorno',
-        description: `Estorno: ${appointment.service?.name ?? 'Serviço'} - ${appointment.client?.name ?? 'Cliente'}`,
-        amount: appointment.total_value,
-        payment_method: 'other',
-        reference_id: id,
-        reference_type: 'refund',
-        created_by: user?.id,
-        tenant_id: tenantId,
-      }).select().single();
-      if (!refundTxError) insertedRefundTx = refundTx as Transaction;
+    const activePaymentTransactions = (activePaymentRows as Transaction[] | null) ?? [];
+
+    const { error: deleteCommissionError } = await supabase.from('commissions')
+      .delete()
+      .eq('appointment_id', id)
+      .eq('tenant_id', tenantId)
+      .eq('status', 'pending');
+
+    if (deleteCommissionError) {
+      console.error('Erro ao remover comissão da comanda estornada:', deleteCommissionError);
+      toast.error('Comanda reaberta, mas houve erro ao remover a comissão vinculada. Verifique manualmente.');
     }
 
-    // Otimista: evita recarregar todo o histórico financeiro do tenant.
+    const insertedRefundTransactions: Transaction[] = [];
+    for (const paymentTransaction of activePaymentTransactions) {
+      try {
+        const refundTx = await createReversalTransaction(paymentTransaction, {
+          category: 'Estorno de Comanda',
+          description: `Estorno de comanda: ${paymentTransaction.description ?? `${appointment.service?.name ?? 'Serviço'} - ${appointment.client?.name ?? 'Cliente'}`}`,
+          paymentMethod: paymentTransaction.payment_method,
+          referenceId: id,
+          referenceType: 'refund',
+          amount: Number(paymentTransaction.amount),
+        });
+
+        insertedRefundTransactions.push(refundTx);
+        await markTransactionAsReversed(paymentTransaction.id, refundTx.id, 'Estorno completo da comanda.', 'appointment_refunded');
+        await recordFinancialAudit({
+          actionType: 'appointment_fully_refunded',
+          entityType: 'transaction',
+          description: `Pagamento da comanda estornado: ${paymentTransaction.description ?? 'Pagamento do atendimento'}`,
+          transactionId: paymentTransaction.id,
+          cashSessionId: refundTx.cash_session_id ?? paymentTransaction.cash_session_id ?? activeSession.id,
+          appointmentId: id,
+          beforeState: paymentTransaction as unknown as Record<string, unknown>,
+          afterState: {
+            reversed_at: new Date().toISOString(),
+            reversal_transaction_id: refundTx.id,
+            reversal_reason: 'Estorno completo da comanda.',
+          },
+          metadata: {
+            reversal_transaction_id: refundTx.id,
+          },
+        });
+      } catch (refundError) {
+        console.error('Erro ao estornar pagamento da comanda:', refundError);
+        toast.error('A comanda foi reaberta, mas houve erro ao estornar um ou mais pagamentos. Verifique manualmente.');
+        return false;
+      }
+    }
+
     setAppointments(prev => prev.map(a => a.id === id ? { ...a, status: 'in_progress' } : a));
     if (!deleteCommissionError) {
-      setCommissions(prev => prev.filter(c => c.appointment_id !== id));
+      setCommissions(prev => prev.filter(c => !(c.appointment_id === id && c.status === 'pending')));
     }
-    if (insertedRefundTx) setTransactions(prev => [insertedRefundTx as Transaction, ...prev]);
+    if (insertedRefundTransactions.length > 0) {
+      setTransactions(prev => [...insertedRefundTransactions, ...prev]);
+    }
+
+    await recordAppointmentEvent({
+      appointmentId: id,
+      eventType: 'reopened',
+      previousStatus: 'completed',
+      nextStatus: 'in_progress',
+      snapshot: { ...appointment, status: 'in_progress' },
+      metadata: {
+        reason: 'full_refund',
+        reversed_payment_count: activePaymentTransactions.length,
+      },
+    });
+
+    await recordFinancialAudit({
+      actionType: 'appointment_fully_refunded',
+      entityType: 'appointment',
+      description: `Comanda reaberta após estorno completo${appointment.client?.name ? ` de ${appointment.client.name}` : ''}.`,
+      appointmentId: id,
+      cashSessionId: activeSession.id,
+      beforeState: buildAppointmentSnapshot(appointment),
+      afterState: buildAppointmentSnapshot({ ...appointment, status: 'in_progress' }),
+      metadata: {
+        reversed_payment_count: activePaymentTransactions.length,
+      },
+    });
+
     if (!deleteCommissionError) {
       toast.success('Pagamento estornado e comanda reaberta com sucesso.');
     }
@@ -1542,6 +1735,21 @@ export const DataProvider: React.FC<{ children: ReactNode }> = ({ children }) =>
       }
       // Otimista: evita depender do Realtime/recarga completa para aparecer.
       if (lineTx) setTransactions(prev => [lineTx as Transaction, ...prev]);
+      if (lineTx) {
+        await recordFinancialAudit({
+          actionType: 'appointment_payment_registered',
+          entityType: 'transaction',
+          description: `Pagamento da comanda registrado via ${line.method}.`,
+          transactionId: (lineTx as Transaction).id,
+          cashSessionId: billingSession!.id,
+          appointmentId: params.appointmentId,
+          afterState: lineTx as unknown as Record<string, unknown>,
+          metadata: {
+            payment_method: line.method,
+            amount: line.amount,
+          },
+        });
+      }
     }
 
     // 3) Parcela pendente vira dívida no razão do cliente.
@@ -1591,6 +1799,22 @@ export const DataProvider: React.FC<{ children: ReactNode }> = ({ children }) =>
         return false;
       }
       if (depositTx) setTransactions(prev => [depositTx as Transaction, ...prev]);
+      if (depositTx) {
+        await recordFinancialAudit({
+          actionType: 'transaction_created',
+          entityType: 'transaction',
+          description: `Crédito do cliente registrado na comanda.`,
+          transactionId: (depositTx as Transaction).id,
+          cashSessionId: billingSession!.id,
+          appointmentId: params.appointmentId,
+          afterState: depositTx as unknown as Record<string, unknown>,
+          metadata: {
+            payment_method: params.creditDeposit.method,
+            amount: params.creditDeposit.amount,
+            kind: 'client_credit_deposit',
+          },
+        });
+      }
       const { error: ledgerError } = await supabase.from('client_ledger_entries').insert({
         tenant_id: tenantId,
         client_id: params.clientId,
@@ -1607,6 +1831,18 @@ export const DataProvider: React.FC<{ children: ReactNode }> = ({ children }) =>
         return false;
       }
     }
+
+    await recordAppointmentEvent({
+      appointmentId: params.appointmentId,
+      eventType: 'payment_registered',
+      snapshot: appointments.find((appointment) => appointment.id === params.appointmentId) ?? { id: params.appointmentId },
+      metadata: {
+        paid_lines: moneyLines.map((line) => ({ method: line.method, amount: line.amount })),
+        credit_used: creditUse,
+        pending_amount: pendingAmount,
+        credit_deposit: params.creditDeposit ?? null,
+      },
+    });
 
     return true;
   };
@@ -1793,10 +2029,36 @@ export const DataProvider: React.FC<{ children: ReactNode }> = ({ children }) =>
     // financeiro do tenant a cada comanda fechada (ficava lento com o tempo).
     if (insertedTransaction) {
       setTransactions(prev => [insertedTransaction as Transaction, ...prev]);
+      await recordFinancialAudit({
+        actionType: 'transaction_created',
+        entityType: 'transaction',
+        description: `Recebimento da comanda registrado para ${appointment.client?.name ?? 'Cliente'}.`,
+        transactionId: insertedTransaction.id,
+        cashSessionId: insertedTransaction.cash_session_id ?? billingSession?.id ?? null,
+        appointmentId: id,
+        afterState: insertedTransaction as unknown as Record<string, unknown>,
+        metadata: {
+          payment_method: paymentMethod,
+          source: 'complete_appointment',
+        },
+      });
     }
     if (insertedCommissionRows.length > 0) {
       setCommissions(prev => [...insertedCommissionRows, ...prev]);
     }
+    await recordAppointmentEvent({
+      appointmentId: id,
+      eventType: 'completed',
+      previousStatus: existingAppointment.status,
+      nextStatus: 'completed',
+      snapshot: { ...appointment, status: 'completed' },
+      metadata: {
+        commission_lines: commissionLines.length,
+        generated_commissions: insertedCommissionRows.length,
+        transaction_id: transactionId ?? null,
+        skipped_transaction: options?.skipTransaction ?? false,
+      },
+    });
     if (wasCompletedNow) {
       toast.success('Atendimento finalizado!');
     }
@@ -1855,6 +2117,16 @@ export const DataProvider: React.FC<{ children: ReactNode }> = ({ children }) =>
     }
     const session = data as CashSession;
     applyCashSessionsState([session, ...cashSessions.filter((cashSession) => cashSession.id !== session.id)]);
+    await recordFinancialAudit({
+      actionType: 'cash_opened',
+      entityType: 'cash_session',
+      description: 'Caixa aberto.',
+      cashSessionId: session.id,
+      afterState: session as unknown as Record<string, unknown>,
+      metadata: {
+        opening_balance: openingBalance,
+      },
+    });
     toast.success('Caixa aberto!');
     return session;
   };
@@ -1888,7 +2160,11 @@ export const DataProvider: React.FC<{ children: ReactNode }> = ({ children }) =>
       return;
     }
 
-    const { error } = await supabase.from('cash_sessions').update({
+    const beforeState = {
+      ...targetSession,
+      expected_balance: expectedBalance,
+    } as Record<string, unknown>;
+    const closePayload = {
       closed_at: new Date().toISOString(),
       closing_balance: closingBalance,
       expected_balance: expectedBalance,
@@ -1898,10 +2174,25 @@ export const DataProvider: React.FC<{ children: ReactNode }> = ({ children }) =>
       is_late_closure: isSessionFromPreviousDay(targetSession),
       status: 'closed',
       notes,
-    })
+    };
+    const { error } = await supabase.from('cash_sessions').update(closePayload)
       .eq('id', targetSession.id)
       .eq('tenant_id', tenantId);
     if (error) { toast.error('Erro ao fechar caixa.'); return; }
+    await recordFinancialAudit({
+      actionType: 'cash_closed',
+      entityType: 'cash_session',
+      description: 'Caixa fechado.',
+      cashSessionId: targetSession.id,
+      beforeState,
+      afterState: {
+        ...beforeState,
+        ...closePayload,
+      },
+      metadata: {
+        difference,
+      },
+    });
     await refreshData(['cash']);
     toast.success('Caixa fechado!');
   };
@@ -1929,6 +2220,14 @@ export const DataProvider: React.FC<{ children: ReactNode }> = ({ children }) =>
     if (error) { toast.error('Erro ao registrar transação.'); return null; }
     const tx = data as Transaction;
     setTransactions(prev => [tx, ...prev]);
+    await recordFinancialAudit({
+      actionType: 'transaction_created',
+      entityType: 'transaction',
+      description: `Movimento manual registrado: ${tx.description ?? tx.category}.`,
+      transactionId: tx.id,
+      cashSessionId: targetSession.id,
+      afterState: tx as unknown as Record<string, unknown>,
+    });
     toast.success('Transação registrada!');
     return tx;
   };
@@ -1977,35 +2276,118 @@ export const DataProvider: React.FC<{ children: ReactNode }> = ({ children }) =>
           toast.error('Estorne primeiro os pagamentos de comissão vinculados a esta comanda.');
           return false;
         }
+        const appointmentRecord = appointments.find((item) => item.id === appointmentId) ?? null;
+        const { data: activeAppointmentTxRows, error: activeAppointmentTxError } = await supabase
+          .from('transactions')
+          .select('*')
+          .eq('tenant_id', tenantId)
+          .eq('reference_id', appointmentId)
+          .eq('reference_type', 'appointment')
+          .eq('type', 'income')
+          .is('reversed_at', null);
 
-        const { error: appointmentError } = await supabase
-          .from('appointments')
-          .update({ status: 'in_progress' })
-          .eq('id', appointmentId)
-          .eq('tenant_id', tenantId);
+        if (activeAppointmentTxError) throw activeAppointmentTxError;
 
-        if (appointmentError) throw appointmentError;
+        const activeAppointmentTransactions = ((activeAppointmentTxRows as Transaction[] | null) ?? [])
+          .filter((transaction) => transaction.id !== originalTransaction.id);
+        const isFullRefund = activeAppointmentTransactions.length === 0;
 
-        if (relatedCommissions.length > 0) {
-          const { error: deleteCommissionError } = await supabase
-            .from('commissions')
-            .delete()
-            .eq('tenant_id', tenantId)
-            .eq('appointment_id', appointmentId)
-            .eq('status', 'pending');
+        if (isFullRefund) {
+          const { error: appointmentError } = await supabase
+            .from('appointments')
+            .update({ status: 'in_progress' })
+            .eq('id', appointmentId)
+            .eq('tenant_id', tenantId);
 
-          if (deleteCommissionError) throw deleteCommissionError;
+          if (appointmentError) throw appointmentError;
+
+          if (relatedCommissions.length > 0) {
+            const { error: deleteCommissionError } = await supabase
+              .from('commissions')
+              .delete()
+              .eq('tenant_id', tenantId)
+              .eq('appointment_id', appointmentId)
+              .eq('status', 'pending');
+
+            if (deleteCommissionError) throw deleteCommissionError;
+          }
+        } else if (appointmentRecord?.client_id) {
+          const { error: debtError } = await supabase.from('client_ledger_entries').insert({
+            tenant_id: tenantId,
+            client_id: appointmentRecord.client_id,
+            appointment_id: appointmentId,
+            entry_type: 'debt',
+            amount: Number(originalTransaction.amount),
+            description: 'Pendência gerada por estorno parcial da comanda',
+            created_by: user?.id ?? null,
+          });
+          if (debtError) throw debtError;
         }
 
         reversalTransaction = await createReversalTransaction(originalTransaction, {
-          category: 'Estorno de Comanda',
-          description: `Estorno de comanda: ${originalTransaction.description ?? 'Pagamento do atendimento'}`,
+          category: isFullRefund ? 'Estorno de Comanda' : 'Estorno Parcial de Comanda',
+          description: `${isFullRefund ? 'Estorno de comanda' : 'Estorno parcial de comanda'}: ${originalTransaction.description ?? 'Pagamento do atendimento'}`,
           paymentMethod: originalTransaction.payment_method,
           referenceId: appointmentId,
           referenceType: 'refund',
         });
 
-        await markTransactionAsReversed(originalTransaction.id, reversalTransaction.id, reason, 'appointment_refunded');
+        await markTransactionAsReversed(
+          originalTransaction.id,
+          reversalTransaction.id,
+          reason ?? (isFullRefund ? 'Estorno completo da comanda.' : 'Estorno parcial do pagamento da comanda.'),
+          isFullRefund ? 'appointment_refunded' : 'appointment_partial_refund',
+        );
+
+        if (isFullRefund) {
+          await recordAppointmentEvent({
+            appointmentId,
+            eventType: 'reopened',
+            previousStatus: appointmentRecord?.status ?? 'completed',
+            nextStatus: 'in_progress',
+            snapshot: appointmentRecord ? { ...appointmentRecord, status: 'in_progress' } : { id: appointmentId, status: 'in_progress' },
+            metadata: {
+              reason: 'payment_reversed',
+              transaction_id: originalTransaction.id,
+            },
+          });
+        } else {
+          await recordAppointmentEvent({
+            appointmentId,
+            eventType: 'partial_payment_reversed',
+            previousStatus: appointmentRecord?.status ?? null,
+            nextStatus: appointmentRecord?.status ?? null,
+            snapshot: appointmentRecord,
+            metadata: {
+              transaction_id: originalTransaction.id,
+              reversed_amount: Number(originalTransaction.amount),
+              remaining_active_payment_count: activeAppointmentTransactions.length,
+            },
+          });
+        }
+
+        await recordFinancialAudit({
+          actionType: isFullRefund ? 'appointment_fully_refunded' : 'appointment_partially_refunded',
+          entityType: 'transaction',
+          description: isFullRefund
+            ? 'Estorno completo da comanda registrado.'
+            : 'Estorno parcial da comanda registrado.',
+          transactionId: originalTransaction.id,
+          cashSessionId: reversalTransaction.cash_session_id ?? originalTransaction.cash_session_id ?? targetSession.id,
+          appointmentId,
+          beforeState: originalTransaction as unknown as Record<string, unknown>,
+          afterState: {
+            reversed_at: new Date().toISOString(),
+            reversal_transaction_id: reversalTransaction.id,
+            reversal_reason: reason ?? null,
+            appointment_status: isFullRefund ? 'in_progress' : appointmentRecord?.status ?? null,
+          },
+          metadata: {
+            reversal_transaction_id: reversalTransaction.id,
+            full_refund: isFullRefund,
+            remaining_active_payment_count: activeAppointmentTransactions.length,
+          },
+        });
       } else if (originalTransaction.reference_type === 'commission') {
         const commissionId = originalTransaction.reference_id;
         if (!commissionId) {
@@ -2030,6 +2412,20 @@ export const DataProvider: React.FC<{ children: ReactNode }> = ({ children }) =>
         });
 
         await markTransactionAsReversed(originalTransaction.id, reversalTransaction.id, reason);
+        await recordFinancialAudit({
+          actionType: 'transaction_reversed',
+          entityType: 'transaction',
+          description: 'Pagamento de comissão estornado.',
+          transactionId: originalTransaction.id,
+          commissionId,
+          cashSessionId: reversalTransaction.cash_session_id ?? originalTransaction.cash_session_id ?? targetSession.id,
+          beforeState: originalTransaction as unknown as Record<string, unknown>,
+          afterState: {
+            reversed_at: new Date().toISOString(),
+            reversal_transaction_id: reversalTransaction.id,
+            reversal_reason: reason ?? null,
+          },
+        });
       } else if (originalTransaction.reference_type === 'commission_batch') {
         const { error: commissionBatchError } = await supabase
           .from('commissions')
@@ -2048,6 +2444,19 @@ export const DataProvider: React.FC<{ children: ReactNode }> = ({ children }) =>
         });
 
         await markTransactionAsReversed(originalTransaction.id, reversalTransaction.id, reason);
+        await recordFinancialAudit({
+          actionType: 'transaction_reversed',
+          entityType: 'transaction',
+          description: 'Pagamento em lote de comissões estornado.',
+          transactionId: originalTransaction.id,
+          cashSessionId: reversalTransaction.cash_session_id ?? originalTransaction.cash_session_id ?? targetSession.id,
+          beforeState: originalTransaction as unknown as Record<string, unknown>,
+          afterState: {
+            reversed_at: new Date().toISOString(),
+            reversal_transaction_id: reversalTransaction.id,
+            reversal_reason: reason ?? null,
+          },
+        });
       } else if (originalTransaction.reference_type === 'voucher') {
         const { error: voucherDeleteError } = await supabase
           .from('commissions')
@@ -2067,6 +2476,19 @@ export const DataProvider: React.FC<{ children: ReactNode }> = ({ children }) =>
         });
 
         await markTransactionAsReversed(originalTransaction.id, reversalTransaction.id, reason);
+        await recordFinancialAudit({
+          actionType: 'transaction_reversed',
+          entityType: 'transaction',
+          description: 'Vale estornado.',
+          transactionId: originalTransaction.id,
+          cashSessionId: reversalTransaction.cash_session_id ?? originalTransaction.cash_session_id ?? targetSession.id,
+          beforeState: originalTransaction as unknown as Record<string, unknown>,
+          afterState: {
+            reversed_at: new Date().toISOString(),
+            reversal_transaction_id: reversalTransaction.id,
+            reversal_reason: reason ?? null,
+          },
+        });
       } else {
         reversalTransaction = await createReversalTransaction(originalTransaction, {
           category: `Estorno ${originalTransaction.category}`,
@@ -2075,6 +2497,19 @@ export const DataProvider: React.FC<{ children: ReactNode }> = ({ children }) =>
         });
 
         await markTransactionAsReversed(originalTransaction.id, reversalTransaction.id, reason);
+        await recordFinancialAudit({
+          actionType: 'transaction_reversed',
+          entityType: 'transaction',
+          description: 'Movimentação financeira estornada.',
+          transactionId: originalTransaction.id,
+          cashSessionId: reversalTransaction.cash_session_id ?? originalTransaction.cash_session_id ?? targetSession.id,
+          beforeState: originalTransaction as unknown as Record<string, unknown>,
+          afterState: {
+            reversed_at: new Date().toISOString(),
+            reversal_transaction_id: reversalTransaction.id,
+            reversal_reason: reason ?? null,
+          },
+        });
       }
 
       await refreshData(['appointments', 'cash', 'transactions', 'commissions']);
@@ -2167,6 +2602,21 @@ export const DataProvider: React.FC<{ children: ReactNode }> = ({ children }) =>
       payment_method: paymentMethod,
     } : c));
     setTransactions(prev => [txData as Transaction, ...prev]);
+    await recordFinancialAudit({
+      actionType: 'commission_paid',
+      entityType: 'commission',
+      description: `${settlementKind === 'transfer_receivable' ? 'Repasse recebido' : 'Comissão paga'}${isPartial ? ' parcialmente' : ''}.`,
+      transactionId: txData?.id,
+      cashSessionId: targetSession.id,
+      commissionId: id,
+      afterState: {
+        transaction_id: txData?.id,
+        amount: payAmount,
+        payment_method: paymentMethod,
+        settled_amount: newSettled,
+        status: fullySettled ? 'paid' : 'pending',
+      },
+    });
     if (isPartial) {
       toast.success(`Liquidação parcial registrada. Saldo restante: ${new Intl.NumberFormat('pt-BR', { style: 'currency', currency: 'BRL' }).format(totalValue - newSettled)}.`);
     } else {
@@ -2269,6 +2719,19 @@ export const DataProvider: React.FC<{ children: ReactNode }> = ({ children }) =>
         : c
     ));
     setTransactions(prev => [txData as Transaction, ...prev]);
+    await recordFinancialAudit({
+      actionType: 'commission_batch_paid',
+      entityType: 'commission',
+      description: `${settlementKind === 'transfer_receivable' ? 'Lote de repasses recebido' : 'Lote de comissões/vales liquidado'}.`,
+      transactionId: txData?.id,
+      cashSessionId: targetSession.id,
+      afterState: {
+        professional_id: professionalId,
+        commission_count: settledIds.length,
+        amount: totalAmount,
+        payment_method: paymentMethod,
+      },
+    });
     toast.success(settlementKind === 'transfer_receivable'
       ? `${pendingCommissions.length} repasses recebidos!`
       : `${pendingCommissions.length} comissões/vales liquidados!`);
@@ -2328,6 +2791,19 @@ export const DataProvider: React.FC<{ children: ReactNode }> = ({ children }) =>
     // Otimista: evita recarregar todo o histórico financeiro do tenant.
     setTransactions(prev => [txData as Transaction, ...prev]);
     if (commissionRow) setCommissions(prev => [{ ...(commissionRow as Commission), professional }, ...prev]);
+    await recordFinancialAudit({
+      actionType: 'voucher_created',
+      entityType: 'transaction',
+      description: 'Vale registrado no caixa.',
+      transactionId: txData?.id,
+      cashSessionId: targetSession.id,
+      commissionId: commissionRow?.id ?? null,
+      afterState: txData as unknown as Record<string, unknown>,
+      metadata: {
+        professional_id: professionalId,
+        amount,
+      },
+    });
     toast.success('Vale registrado!');
   };
 
@@ -2552,6 +3028,24 @@ export const DataProvider: React.FC<{ children: ReactNode }> = ({ children }) =>
     if (insertedAdjustmentTransactions.length > 0) {
       setTransactions(prev => [...insertedAdjustmentTransactions, ...prev]);
     }
+
+    await recordFinancialAudit({
+      actionType: 'commission_reprocessed',
+      entityType: 'commission',
+      description: 'Reprocessamento de comissões executado.',
+      cashSessionId: adjustmentSession?.id ?? null,
+      afterState: {
+        recalculated_count: recalculatedCount,
+        skipped_count: skippedItems.length,
+        adjustment_transaction_count: insertedAdjustmentTransactions.length,
+      },
+      metadata: {
+        date_from: filters.dateFrom,
+        date_to: filters.dateTo,
+        include_paid: filters.includePaid ?? false,
+        professional_id: filters.professionalId ?? null,
+      },
+    });
 
     return {
       recalculatedCount,

@@ -206,11 +206,12 @@ export function CashHistory({ onBack }: CashHistoryProps) {
   ), [commissions, dateFrom, dateTo, normalizedSearch]);
 
   const summary = useMemo(() => {
-    const grossIncome = filteredTransactions
+    const activeTransactions = filteredTransactions.filter((transaction) => !transaction.reversed_at);
+    const grossIncome = activeTransactions
       .filter((transaction) => transaction.type === 'income')
       .reduce((sum, transaction) => sum + Number(transaction.amount), 0);
 
-    const grossExpense = filteredTransactions
+    const grossExpense = activeTransactions
       .filter((transaction) => transaction.type === 'expense')
       .reduce((sum, transaction) => sum + Number(transaction.amount), 0);
 
@@ -230,12 +231,13 @@ export function CashHistory({ onBack }: CashHistoryProps) {
     const sessionTransactions = (transactionsBySessionId.get(session.id) ?? []).filter((transaction) =>
       isDateBetween(transaction.created_at, dateFrom, dateTo),
     );
+    const activeSessionTransactions = sessionTransactions.filter((transaction) => !transaction.reversed_at);
 
-    const totalIncome = sessionTransactions
+    const totalIncome = activeSessionTransactions
       .filter((transaction) => transaction.type === 'income')
       .reduce((sum, transaction) => sum + Number(transaction.amount), 0);
 
-    const totalExpense = sessionTransactions
+    const totalExpense = activeSessionTransactions
       .filter((transaction) => transaction.type === 'expense')
       .reduce((sum, transaction) => sum + Number(transaction.amount), 0);
 
