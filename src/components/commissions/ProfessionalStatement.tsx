@@ -30,6 +30,8 @@ interface ProfessionalRow {
   professionalId: string;
   name: string;
   isTransfer: boolean;
+  grossAttended: number;
+  professionalGrossValue: number;
   commissionGenerated: number;
   commissionPending: number;
   commissionPaid: number;
@@ -106,12 +108,16 @@ export function ProfessionalStatement() {
       const transferGenerated = sum(receivable);
       const transferPending = sum(receivable.filter((c) => c.status === 'pending'));
       const transferReceived = sum(receivable.filter((c) => c.status === 'paid'));
+      const grossAttended = receivable.reduce((s, c) => s + Number(c.base_value || 0), 0);
+      const professionalGrossValue = grossAttended - transferGenerated;
       const vouchersTotal = vouchers.reduce((s, c) => s + Math.abs(Number(c.commission_value)), 0);
 
       return {
         professionalId: prof.id,
         name: prof.nickname || prof.name,
         isTransfer: prof.settlement_type === 'transfer',
+        grossAttended,
+        professionalGrossValue,
         commissionGenerated,
         commissionPending,
         commissionPaid,
@@ -131,10 +137,24 @@ export function ProfessionalStatement() {
   }, [canViewAll, currentProfessional, isProfessionalScopedUser, periodCommissions, professionals, professionalFilter]);
 
   const totals = useMemo(() => rows.reduce((acc, r) => ({
+    grossAttended: acc.grossAttended + r.grossAttended,
+    professionalGrossValue: acc.professionalGrossValue + r.professionalGrossValue,
+    transferGenerated: acc.transferGenerated + r.transferGenerated,
+    transferReceived: acc.transferReceived + r.transferReceived,
     netToPay: acc.netToPay + Math.max(0, r.netToPay),
     netToReceive: acc.netToReceive + r.netToReceive,
     vouchers: acc.vouchers + r.vouchers,
-  }), { netToPay: 0, netToReceive: 0, vouchers: 0 }), [rows]);
+  }), {
+    grossAttended: 0,
+    professionalGrossValue: 0,
+    transferGenerated: 0,
+    transferReceived: 0,
+    netToPay: 0,
+    netToReceive: 0,
+    vouchers: 0,
+  }), [rows]);
+
+  const isTransferMode = rows.length > 0 && rows.every((row) => row.isTransfer);
 
   const activeProfessionals = professionals.filter((p) => p.is_active);
 
@@ -170,20 +190,45 @@ export function ProfessionalStatement() {
         </div>
       </Card>
 
-      <div className="grid grid-cols-1 sm:grid-cols-3 gap-4">
-        <Card className="p-4 border-0 shadow-md">
-          <div className="flex items-center gap-2 text-muted-foreground text-xs"><TrendingDown className="w-4 h-4" /> A pagar aos profissionais</div>
-          <p className="text-2xl font-bold text-destructive mt-1">{formatCurrency(totals.netToPay)}</p>
-        </Card>
-        <Card className="p-4 border-0 shadow-md">
-          <div className="flex items-center gap-2 text-muted-foreground text-xs"><TrendingUp className="w-4 h-4" /> A receber (repasses)</div>
-          <p className="text-2xl font-bold text-success mt-1">{formatCurrency(totals.netToReceive)}</p>
-        </Card>
-        <Card className="p-4 border-0 shadow-md">
-          <div className="flex items-center gap-2 text-muted-foreground text-xs"><Ticket className="w-4 h-4" /> Vales no período</div>
-          <p className="text-2xl font-bold text-foreground mt-1">{formatCurrency(totals.vouchers)}</p>
-        </Card>
-      </div>
+      {isTransferMode ? (
+        <div className="grid grid-cols-1 sm:grid-cols-2 xl:grid-cols-5 gap-4">
+          <Card className="p-4 border-0 shadow-md">
+            <div className="flex items-center gap-2 text-muted-foreground text-xs"><Wallet className="w-4 h-4" /> Bruto atendido</div>
+            <p className="text-2xl font-bold text-foreground mt-1">{formatCurrency(totals.grossAttended)}</p>
+          </Card>
+          <Card className="p-4 border-0 shadow-md">
+            <div className="flex items-center gap-2 text-muted-foreground text-xs"><TrendingDown className="w-4 h-4" /> Valor profissional</div>
+            <p className="text-2xl font-bold text-foreground mt-1">{formatCurrency(totals.professionalGrossValue)}</p>
+          </Card>
+          <Card className="p-4 border-0 shadow-md">
+            <div className="flex items-center gap-2 text-muted-foreground text-xs"><TrendingUp className="w-4 h-4" /> Valor repasse</div>
+            <p className="text-2xl font-bold text-primary mt-1">{formatCurrency(totals.transferGenerated)}</p>
+          </Card>
+          <Card className="p-4 border-0 shadow-md">
+            <div className="flex items-center gap-2 text-muted-foreground text-xs"><TrendingUp className="w-4 h-4" /> Repasse recebido</div>
+            <p className="text-2xl font-bold text-success mt-1">{formatCurrency(totals.transferReceived)}</p>
+          </Card>
+          <Card className="p-4 border-0 shadow-md">
+            <div className="flex items-center gap-2 text-muted-foreground text-xs"><Ticket className="w-4 h-4" /> Vales no período</div>
+            <p className="text-2xl font-bold text-foreground mt-1">{formatCurrency(totals.vouchers)}</p>
+          </Card>
+        </div>
+      ) : (
+        <div className="grid grid-cols-1 sm:grid-cols-3 gap-4">
+          <Card className="p-4 border-0 shadow-md">
+            <div className="flex items-center gap-2 text-muted-foreground text-xs"><TrendingDown className="w-4 h-4" /> A pagar aos profissionais</div>
+            <p className="text-2xl font-bold text-destructive mt-1">{formatCurrency(totals.netToPay)}</p>
+          </Card>
+          <Card className="p-4 border-0 shadow-md">
+            <div className="flex items-center gap-2 text-muted-foreground text-xs"><TrendingUp className="w-4 h-4" /> Total de repasse</div>
+            <p className="text-2xl font-bold text-success mt-1">{formatCurrency(totals.netToReceive)}</p>
+          </Card>
+          <Card className="p-4 border-0 shadow-md">
+            <div className="flex items-center gap-2 text-muted-foreground text-xs"><Ticket className="w-4 h-4" /> Vales no período</div>
+            <p className="text-2xl font-bold text-foreground mt-1">{formatCurrency(totals.vouchers)}</p>
+          </Card>
+        </div>
+      )}
 
       <Card className="p-4 border-0 shadow-md">
         {rows.length === 0 ? (
@@ -197,11 +242,22 @@ export function ProfessionalStatement() {
               <thead>
                 <tr className="border-b bg-muted/40 text-xs text-muted-foreground">
                   <th className="p-2 text-left font-medium">Profissional</th>
-                  <th className="p-2 text-right font-medium">Comissão gerada</th>
-                  <th className="p-2 text-right font-medium">Pendente</th>
-                  <th className="p-2 text-right font-medium">Paga</th>
-                  <th className="p-2 text-right font-medium">Repasse a receber</th>
-                  <th className="p-2 text-right font-medium">Recebido</th>
+                  {isTransferMode ? (
+                    <>
+                      <th className="p-2 text-right font-medium">Bruto atendido</th>
+                      <th className="p-2 text-right font-medium">Valor profissional</th>
+                      <th className="p-2 text-right font-medium">Valor repasse</th>
+                      <th className="p-2 text-right font-medium">Repasse recebido</th>
+                    </>
+                  ) : (
+                    <>
+                      <th className="p-2 text-right font-medium">Comissão gerada</th>
+                      <th className="p-2 text-right font-medium">Pendente</th>
+                      <th className="p-2 text-right font-medium">Paga</th>
+                      <th className="p-2 text-right font-medium">Repasse</th>
+                      <th className="p-2 text-right font-medium">Recebido</th>
+                    </>
+                  )}
                   <th className="p-2 text-right font-medium">Vales</th>
                   <th className="p-2 text-right font-medium">Saldo líquido</th>
                 </tr>
@@ -215,17 +271,28 @@ export function ProfessionalStatement() {
                         {r.name}
                         {r.isTransfer && <span className="ml-2 text-[10px] rounded bg-primary/10 text-primary px-1.5 py-0.5">Repasse</span>}
                       </td>
-                      <td className="p-2 text-right">{formatCurrency(r.commissionGenerated)}</td>
-                      <td className="p-2 text-right text-warning">{formatCurrency(r.commissionPending)}</td>
-                      <td className="p-2 text-right text-success">{formatCurrency(r.commissionPaid)}</td>
-                      <td className="p-2 text-right">{formatCurrency(r.transferPending)}</td>
-                      <td className="p-2 text-right text-success">{formatCurrency(r.transferReceived)}</td>
+                      {isTransferMode ? (
+                        <>
+                          <td className="p-2 text-right">{formatCurrency(r.grossAttended)}</td>
+                          <td className="p-2 text-right">{formatCurrency(r.professionalGrossValue)}</td>
+                          <td className="p-2 text-right text-primary">{formatCurrency(r.transferGenerated)}</td>
+                          <td className="p-2 text-right text-success">{formatCurrency(r.transferReceived)}</td>
+                        </>
+                      ) : (
+                        <>
+                          <td className="p-2 text-right">{formatCurrency(r.commissionGenerated)}</td>
+                          <td className="p-2 text-right text-warning">{formatCurrency(r.commissionPending)}</td>
+                          <td className="p-2 text-right text-success">{formatCurrency(r.commissionPaid)}</td>
+                          <td className="p-2 text-right">{formatCurrency(r.transferPending)}</td>
+                          <td className="p-2 text-right text-success">{formatCurrency(r.transferReceived)}</td>
+                        </>
+                      )}
                       <td className="p-2 text-right text-destructive">{r.vouchers > 0 ? `- ${formatCurrency(r.vouchers)}` : '—'}</td>
                       <td className={`p-2 text-right font-bold ${net > 0.009 ? 'text-destructive' : net < -0.009 ? 'text-success' : 'text-muted-foreground'}`}>
                         {net > 0.009
                           ? `Pagar ${formatCurrency(net)}`
                           : net < -0.009
-                            ? `Receber ${formatCurrency(-net)}`
+                            ? `${isTransferMode ? 'Repasse' : 'Receber'} ${formatCurrency(-net)}`
                             : formatCurrency(0)}
                       </td>
                     </tr>
@@ -236,7 +303,9 @@ export function ProfessionalStatement() {
           </div>
         )}
         <p className="text-xs text-muted-foreground mt-3">
-          Saldo líquido = comissão pendente − vales (a pagar ao profissional) ou repasse pendente (a receber do profissional). Comissões pagas e repasses recebidos não entram no saldo.
+          {isTransferMode
+            ? 'No modelo de repasse, o bruto atendido mostra o total dos serviços do período, o valor profissional é o que fica com o profissional e o valor repasse é a parcela devida ao estabelecimento. Repasses já recebidos e vales não entram no saldo em aberto.'
+            : 'Saldo líquido = comissão pendente − vales (a pagar ao profissional) ou repasse pendente (a receber do profissional). Comissões pagas e repasses recebidos não entram no saldo.'}
         </p>
       </Card>
     </div>

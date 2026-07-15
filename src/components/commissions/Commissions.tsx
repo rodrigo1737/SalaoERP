@@ -220,6 +220,7 @@ export function Commissions() {
     .map(prof => {
     const profCommissions = periodFilteredCommissions.filter(c => c.professional_id === prof.id);
     const pending = profCommissions.filter(c => c.status === 'pending');
+    const serviceRows = profCommissions.filter(c => c.type !== 'voucher');
     const totalPending = pending.reduce((sum, c) => sum + Number(c.commission_value), 0);
     const totalPaid = profCommissions
       .filter(c => c.status === 'paid' && c.type !== 'voucher')
@@ -227,6 +228,9 @@ export function Commissions() {
     const totalVouchers = profCommissions
       .filter(c => c.type === 'voucher')
       .reduce((sum, c) => sum + Math.abs(Number(c.commission_value)), 0);
+    const grossAttended = serviceRows.reduce((sum, c) => sum + Number(c.base_value ?? 0), 0);
+    const totalGenerated = serviceRows.reduce((sum, c) => sum + Number(c.commission_value), 0);
+    const professionalGrossValue = grossAttended - totalGenerated;
 
     return {
       professional: prof,
@@ -234,6 +238,9 @@ export function Commissions() {
       totalPending,
       totalPaid,
       totalVouchers,
+      grossAttended,
+      professionalGrossValue,
+      totalGenerated,
       total: totalPending + totalPaid,
     };
   }).filter(p => p.pendingCount > 0 || p.totalPaid > 0 || p.totalVouchers > 0);
@@ -582,48 +589,111 @@ export function Commissions() {
               </div>
 
               <div className="space-y-2 mb-4">
-                <div className="flex items-center justify-between p-2 rounded-lg bg-warning-soft">
-                  <div className="flex items-center gap-2">
-                    <Clock className="w-4 h-4 text-warning shrink-0" />
-                    <span className="text-xs text-muted-foreground">
-                      {getSettlementPendingLabel(normalizeCommissionSettlementKind(undefined, item.professional.settlement_type))}
-                    </span>
-                  </div>
-                  <p className="text-sm font-bold text-warning">
-                    {formatCurrency(item.totalPending)}
-                  </p>
-                </div>
-                <div className="flex items-center justify-between p-2 rounded-lg bg-success-soft">
-                  <div className="flex items-center gap-2">
-                    <Check className="w-4 h-4 text-success shrink-0" />
-                    <span className="text-xs text-muted-foreground">
-                      {getSettlementPaidLabel(normalizeCommissionSettlementKind(undefined, item.professional.settlement_type))}
-                    </span>
-                  </div>
-                  <p className="text-sm font-bold text-success">
-                    {formatCurrency(item.totalPaid)}
-                  </p>
-                </div>
-                <div className="flex items-center justify-between p-2 rounded-lg bg-destructive-soft">
-                  <div className="flex items-center gap-2">
-                    <Ticket className="w-4 h-4 text-destructive shrink-0" />
-                    <span className="text-xs text-muted-foreground">Vales</span>
-                  </div>
-                  <p className="text-sm font-bold text-destructive">
-                    -{formatCurrency(item.totalVouchers)}
-                  </p>
-                </div>
-                <div className="flex items-center justify-between p-2 rounded-lg bg-primary/10 border border-primary/20">
-                  <div className="flex items-center gap-2">
-                    <DollarSign className="w-4 h-4 text-primary shrink-0" />
-                    <span className="text-xs font-medium text-foreground">
-                      {getProfessionalTotalLabel(item.professional.settlement_type)}
-                    </span>
-                  </div>
-                  <p className="text-sm font-bold text-primary">
-                    {formatCurrency(item.total)}
-                  </p>
-                </div>
+                {normalizeCommissionSettlementKind(undefined, item.professional.settlement_type) === 'transfer_receivable' ? (
+                  <>
+                    <div className="flex items-center justify-between p-2 rounded-lg bg-secondary/40">
+                      <div className="flex items-center gap-2">
+                        <Wallet className="w-4 h-4 text-foreground shrink-0" />
+                        <span className="text-xs text-muted-foreground">Bruto atendido</span>
+                      </div>
+                      <p className="text-sm font-bold text-foreground">
+                        {formatCurrency(item.grossAttended)}
+                      </p>
+                    </div>
+                    <div className="flex items-center justify-between p-2 rounded-lg bg-secondary/40">
+                      <div className="flex items-center gap-2">
+                        <User className="w-4 h-4 text-foreground shrink-0" />
+                        <span className="text-xs text-muted-foreground">Valor profissional</span>
+                      </div>
+                      <p className="text-sm font-bold text-foreground">
+                        {formatCurrency(item.professionalGrossValue)}
+                      </p>
+                    </div>
+                    <div className="flex items-center justify-between p-2 rounded-lg bg-warning-soft">
+                      <div className="flex items-center gap-2">
+                        <Clock className="w-4 h-4 text-warning shrink-0" />
+                        <span className="text-xs text-muted-foreground">Repasse pendente</span>
+                      </div>
+                      <p className="text-sm font-bold text-warning">
+                        {formatCurrency(item.totalPending)}
+                      </p>
+                    </div>
+                    <div className="flex items-center justify-between p-2 rounded-lg bg-success-soft">
+                      <div className="flex items-center gap-2">
+                        <Check className="w-4 h-4 text-success shrink-0" />
+                        <span className="text-xs text-muted-foreground">Repasse recebido</span>
+                      </div>
+                      <p className="text-sm font-bold text-success">
+                        {formatCurrency(item.totalPaid)}
+                      </p>
+                    </div>
+                    <div className="flex items-center justify-between p-2 rounded-lg bg-destructive-soft">
+                      <div className="flex items-center gap-2">
+                        <Ticket className="w-4 h-4 text-destructive shrink-0" />
+                        <span className="text-xs text-muted-foreground">Vales</span>
+                      </div>
+                      <p className="text-sm font-bold text-destructive">
+                        -{formatCurrency(item.totalVouchers)}
+                      </p>
+                    </div>
+                    <div className="flex items-center justify-between p-2 rounded-lg bg-primary/10 border border-primary/20">
+                      <div className="flex items-center gap-2">
+                        <DollarSign className="w-4 h-4 text-primary shrink-0" />
+                        <span className="text-xs font-medium text-foreground">
+                          Total a repassar ao estabelecimento
+                        </span>
+                      </div>
+                      <p className="text-sm font-bold text-primary">
+                        {formatCurrency(item.total)}
+                      </p>
+                    </div>
+                  </>
+                ) : (
+                  <>
+                    <div className="flex items-center justify-between p-2 rounded-lg bg-warning-soft">
+                      <div className="flex items-center gap-2">
+                        <Clock className="w-4 h-4 text-warning shrink-0" />
+                        <span className="text-xs text-muted-foreground">
+                          {getSettlementPendingLabel(normalizeCommissionSettlementKind(undefined, item.professional.settlement_type))}
+                        </span>
+                      </div>
+                      <p className="text-sm font-bold text-warning">
+                        {formatCurrency(item.totalPending)}
+                      </p>
+                    </div>
+                    <div className="flex items-center justify-between p-2 rounded-lg bg-success-soft">
+                      <div className="flex items-center gap-2">
+                        <Check className="w-4 h-4 text-success shrink-0" />
+                        <span className="text-xs text-muted-foreground">
+                          {getSettlementPaidLabel(normalizeCommissionSettlementKind(undefined, item.professional.settlement_type))}
+                        </span>
+                      </div>
+                      <p className="text-sm font-bold text-success">
+                        {formatCurrency(item.totalPaid)}
+                      </p>
+                    </div>
+                    <div className="flex items-center justify-between p-2 rounded-lg bg-destructive-soft">
+                      <div className="flex items-center gap-2">
+                        <Ticket className="w-4 h-4 text-destructive shrink-0" />
+                        <span className="text-xs text-muted-foreground">Vales</span>
+                      </div>
+                      <p className="text-sm font-bold text-destructive">
+                        -{formatCurrency(item.totalVouchers)}
+                      </p>
+                    </div>
+                    <div className="flex items-center justify-between p-2 rounded-lg bg-primary/10 border border-primary/20">
+                      <div className="flex items-center gap-2">
+                        <DollarSign className="w-4 h-4 text-primary shrink-0" />
+                        <span className="text-xs font-medium text-foreground">
+                          {getProfessionalTotalLabel(item.professional.settlement_type)}
+                        </span>
+                      </div>
+                      <p className="text-sm font-bold text-primary">
+                        {formatCurrency(item.total)}
+                      </p>
+                    </div>
+                  </>
+                )}
               </div>
 
               {canSettleCommissions && item.pendingCount > 0 && item.totalPending > 0.009 && (
