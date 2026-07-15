@@ -25,82 +25,84 @@ import { StableDataProvider } from '@/context/StableDataContext';
 import { StockProvider } from '@/context/StockContext';
 import { TenantSettingsProvider } from '@/contexts/TenantSettingsContext';
 import { useAuth } from '@/contexts/AuthContext';
-import { hasCleaningModulePackage, isCleaningControlTenant } from '@/lib/tenantSegments';
+import { isCleaningControlTenant } from '@/lib/tenantSegments';
+import {
+  type AppPageId,
+  type NavigationAccessContext,
+  canAccessAppPage,
+  getDefaultAppPage,
+} from '@/lib/appNavigation';
 
 import { SuppliersList } from '@/components/stock/SuppliersList';
 import { PurchaseEntry } from '@/components/stock/PurchaseEntry';
 import { StockMovements } from '@/components/stock/StockMovements';
 import { Loader2 } from 'lucide-react';
 
-// Páginas válidas por perfil
-const ADMIN_PAGES = ['dashboard', 'agenda', 'clients', 'professionals', 'services', 'commission-matrix', 'products', 'aesthetics',
-  'cleaning', 'suppliers', 'purchase', 'stock-movements', 'commissions', 'commission-reprocessing', 'professional-statement', 'reports', 'cashier', 'financial-management', 'settings'];
-const PROFESSIONAL_PAGES = ['agenda', 'cleaning', 'commissions', 'professional-statement', 'settings'];
-const SUPER_ADMIN_PAGES = ['super-dashboard', 'tenants'];
-const CLEANING_BLOCKED_PAGES = ['agenda', 'services', 'commission-matrix', 'products', 'suppliers', 'purchase', 'stock-movements', 'commissions', 'commission-reprocessing', 'professional-statement', 'cashier', 'financial-management'];
-
 const Index = () => {
   const { page } = useParams<{ page?: string }>();
   const navigate = useNavigate();
   const { userRole, isSuperAdmin, hasPermission, currentTenant, loading } = useAuth();
-  const isAdmin = userRole === 'admin';
   const isCleaningTenant = isCleaningControlTenant(currentTenant);
 
-  const canAccessPage = useCallback((targetPage: string) => {
-    if (isSuperAdmin) return SUPER_ADMIN_PAGES.includes(targetPage);
-    if (isCleaningTenant && CLEANING_BLOCKED_PAGES.includes(targetPage)) return false;
-    if (targetPage === 'aesthetics') {
-      return isAdmin && (currentTenant?.package_type === 'aesthetic_clinic' || currentTenant?.package_type === 'business_erp');
-    }
-    if (targetPage === 'cleaning') {
-      const hasPackage = hasCleaningModulePackage(currentTenant);
-      if (!hasPackage) return false;
-      return isAdmin || hasPermission('view_schedule') || hasPermission('edit_schedule');
-    }
-    if (isAdmin) return ADMIN_PAGES.includes(targetPage);
-    if (targetPage === 'agenda') return hasPermission('view_schedule') || hasPermission('edit_schedule');
-    if (targetPage === 'clients') return hasPermission('view_clients');
-    if (targetPage === 'commissions') return hasPermission('view_commissions');
-    if (targetPage === 'cashier') {
-      return hasPermission('manage_cash_flow') || hasPermission('reverse_financial_entries');
-    }
-    if (targetPage === 'financial-management') {
-      return hasPermission('view_financial_history')
-        || hasPermission('reverse_financial_entries');
-    }
-    if (targetPage === 'settings') return true;
-    return PROFESSIONAL_PAGES.includes(targetPage);
-  }, [hasPermission, isAdmin, isCleaningTenant, isSuperAdmin, currentTenant]);
+  const navigationContext = useCallback<() => NavigationAccessContext>(() => ({
+    isSuperAdmin,
+    userRole,
+    currentTenant,
+    hasPermission,
+  }), [currentTenant, hasPermission, isSuperAdmin, userRole]);
 
-  const getDefaultPage = useCallback(() => {
-    if (isSuperAdmin) return 'super-dashboard';
-    if (isAdmin) return 'dashboard';
-    if (isCleaningTenant && canAccessPage('cleaning')) return 'cleaning';
-    if (canAccessPage('agenda')) return 'agenda';
-    if (canAccessPage('commissions')) return 'commissions';
-    return 'settings';
-  }, [canAccessPage, isAdmin, isCleaningTenant, isSuperAdmin]);
+  const isValidAppPage = (targetPage?: string): targetPage is AppPageId => {
+    if (!targetPage) return false;
+
+    const validPages: AppPageId[] = [
+      'dashboard',
+      'agenda',
+      'clients',
+      'professionals',
+      'services',
+      'commission-matrix',
+      'products',
+      'aesthetics',
+      'cleaning',
+      'suppliers',
+      'purchase',
+      'stock-movements',
+      'commissions',
+      'commission-reprocessing',
+      'professional-statement',
+      'reports',
+      'cashier',
+      'financial-management',
+      'settings',
+      'super-dashboard',
+      'tenants',
+    ];
+
+    return validPages.includes(targetPage as AppPageId);
+  };
 
   // Redireciona para página padrão se nenhuma foi informada na URL
   useEffect(() => {
     if (loading) return;
     if (!page) {
-      navigate(`/app/${getDefaultPage()}`, { replace: true });
+      navigate(`/app/${getDefaultAppPage(navigationContext())}`, { replace: true });
     }
-  }, [page, navigate, getDefaultPage, loading]);
+  }, [page, navigate, navigationContext, loading]);
 
   // Redireciona profissional que tentou acessar página de admin
   useEffect(() => {
     if (loading) return;
-    if (!isSuperAdmin && page && !canAccessPage(page)) {
-      navigate(`/app/${getDefaultPage()}`, { replace: true });
+    if (!page || !isValidAppPage(page)) {
+      navigate(`/app/${getDefaultAppPage(navigationContext())}`, { replace: true });
+      return;
     }
-    if (isSuperAdmin && page && !SUPER_ADMIN_PAGES.includes(page)) {
-      navigate('/app/super-dashboard', { replace: true });
-    }
-  }, [page, isSuperAdmin, navigate, canAccessPage, getDefaultPage, loading]);
 
-  const currentPage = page ?? getDefaultPage();
+    if (!canAccessAppPage(page, navigationContext())) {
+      navigate(`/app/${getDefaultAppPage(navigationContext())}`, { replace: true });
+    }
+  }, [page, navigate, navigationContext, loading]);
+
+  const currentPage = (isValidAppPage(page) ? page : getDefaultAppPage(navigationContext())) as AppPageId;
 
   if (loading) {
     return (
@@ -121,13 +123,9 @@ const Index = () => {
       return <SuperAdminDashboard onNavigate={handleNavigate} />;
     }
 
-    if (isCleaningTenant && CLEANING_BLOCKED_PAGES.includes(currentPage)) {
-      return <CleaningModule />;
-    }
-
     switch (currentPage) {
       case 'dashboard':        return <Dashboard onNavigate={handleNavigate} />;
-      case 'agenda':           return isCleaningTenant ? <CleaningModule /> : <Schedule />;
+      case 'agenda':           return <Schedule />;
       case 'clients':          return <ClientsList />;
       case 'professionals':    return <ProfessionalsList />;
       case 'services':         return <ServicesList />;
