@@ -175,7 +175,12 @@ export function Commissions() {
         : []
   ), [canViewAllCommissions, currentProfessional, professionals]);
 
-  // Group by professional using period-filtered commissions
+  // Group by professional using period-filtered commissions.
+  // Vale (commission_value negativo) fica 'pending' até ser netado num
+  // pagamento em lote — por isso totalPending já sai líquido (comissão menos
+  // vale ainda não abatido). totalVouchers é só informativo (todo vale já
+  // emitido no período, pago ou não), não é subtraído de novo em "total"
+  // para não contar o vale pendente duas vezes.
   const commissionsByProfessional = visibleProfessionals.map(prof => {
     const profCommissions = periodFilteredCommissions.filter(c => c.professional_id === prof.id);
     const pending = profCommissions.filter(c => c.status === 'pending');
@@ -193,8 +198,7 @@ export function Commissions() {
       totalPending,
       totalPaid,
       totalVouchers,
-      netBalance: totalPaid - totalVouchers,
-      total: totalPending + totalPaid - totalVouchers,
+      total: totalPending + totalPaid,
     };
   }).filter(p => p.pendingCount > 0 || p.totalPaid > 0 || p.totalVouchers > 0);
 
@@ -221,16 +225,25 @@ export function Commissions() {
   };
 
   const openPayAllDialog = (professionalId: string) => {
-    const profCommissions = commissions.filter(
-      c => c.professional_id === professionalId && c.status === 'pending' && c.type !== 'voucher'
-    );
-    const totalAmount = profCommissions.reduce((sum, c) => sum + Number(c.commission_value), 0);
     const professional = professionals.find(p => p.id === professionalId);
+    // Repasse não neta vale no mesmo lote (direção financeira oposta) —
+    // mesma regra aplicada em payAllCommissions no DataContext.
+    const isTransferProfessional = professional?.settlement_type === 'transfer';
+    const profCommissions = commissions.filter(
+      c => c.professional_id === professionalId
+        && c.status === 'pending'
+        && (c.type !== 'voucher' || !isTransferProfessional)
+    );
+    // Vale (negativo) abate do total, igual ao cálculo do backend.
+    const totalAmount = profCommissions.reduce((sum, c) => {
+      if (c.type === 'voucher') return sum + Number(c.commission_value);
+      return sum + Math.max(0, Math.abs(Number(c.commission_value)) - Math.abs(Number(c.settled_amount ?? 0)));
+    }, 0);
     const settlementKind = normalizeCommissionSettlementKind(
-      profCommissions[0]?.settlement_kind,
+      profCommissions.find((c) => c.type !== 'voucher')?.settlement_kind,
       professional?.settlement_type,
     );
-    
+
     setPaymentDialog({
       isOpen: true,
       type: 'all',
@@ -429,7 +442,7 @@ export function Commissions() {
                 </div>
               </div>
 
-              {canSettleCommissions && item.pendingCount > 0 && (
+              {canSettleCommissions && item.pendingCount > 0 && item.totalPending > 0.009 && (
                 <Button
                   className="w-full"
                   onClick={() => openPayAllDialog(item.professional.id)}

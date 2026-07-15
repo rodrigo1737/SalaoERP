@@ -8,7 +8,6 @@ import {
   CreditCard,
   DollarSign,
   Smartphone,
-  Ticket,
   TrendingDown,
   TrendingUp,
   User,
@@ -81,15 +80,14 @@ export function Cashier() {
   const [isOpenDialogOpen, setIsOpenDialogOpen] = useState(false);
   const [isCloseDialogOpen, setIsCloseDialogOpen] = useState(false);
   const [isTransactionDialogOpen, setIsTransactionDialogOpen] = useState(false);
-  const [isVoucherDialogOpen, setIsVoucherDialogOpen] = useState(false);
   const [isPendingDialogOpen, setIsPendingDialogOpen] = useState(false);
   const [transactionType, setTransactionType] = useState<'income' | 'expense'>('income');
   const [isSubmitting, setIsSubmitting] = useState(false);
   const [closeTargetSessionId, setCloseTargetSessionId] = useState<string | null>(null);
 
+  // Profissional só é preenchido quando a categoria da saída é "Vale" — o
+  // vale vive dentro do fluxo normal de saída, não numa tela separada.
   const [voucherProfessionalId, setVoucherProfessionalId] = useState('');
-  const [voucherAmount, setVoucherAmount] = useState('');
-  const [voucherDescription, setVoucherDescription] = useState('');
 
   const [openingBalance, setOpeningBalance] = useState('');
 
@@ -271,50 +269,47 @@ export function Cashier() {
     }
   };
 
-  const handleAddTransaction = async () => {
-    if (!transactionCategory || !transactionAmount) return;
+  const isVoucherCategory = transactionType === 'expense' && transactionCategory === 'Vale';
 
-    setIsSubmitting(true);
-    try {
-      await addTransaction({
-        type: transactionType,
-        category: transactionCategory,
-        description: transactionDescription,
-        amount: parseFloat(transactionAmount),
-        payment_method: transactionPaymentMethod as Transaction['payment_method'],
-      });
-      toast({
-        title: transactionType === 'income' ? 'Entrada registrada' : 'Saída registrada',
-        description: `R$ ${parseFloat(transactionAmount).toFixed(2)}`,
-      });
-      setIsTransactionDialogOpen(false);
-      setTransactionCategory('');
-      setTransactionDescription('');
-      setTransactionAmount('');
-      setTransactionPaymentMethod('cash');
-    } catch (error) {
-      toast({ variant: 'destructive', title: 'Erro', description: 'Não foi possível registrar o movimento.' });
-    } finally {
-      setIsSubmitting(false);
-    }
+  const resetTransactionDialog = () => {
+    setTransactionCategory('');
+    setTransactionDescription('');
+    setTransactionAmount('');
+    setTransactionPaymentMethod('cash');
+    setVoucherProfessionalId('');
   };
 
-  const handleAddVoucher = async () => {
-    if (!voucherProfessionalId || !voucherAmount) return;
+  const handleAddTransaction = async () => {
+    if (!transactionCategory || !transactionAmount) return;
+    if (isVoucherCategory && !voucherProfessionalId) return;
 
     setIsSubmitting(true);
     try {
-      await addVoucher(voucherProfessionalId, parseFloat(voucherAmount), voucherDescription || undefined);
-      toast({
-        title: 'Vale registrado',
-        description: `R$ ${parseFloat(voucherAmount).toFixed(2)} debitado das comissões.`,
-      });
-      setIsVoucherDialogOpen(false);
-      setVoucherProfessionalId('');
-      setVoucherAmount('');
-      setVoucherDescription('');
+      if (isVoucherCategory) {
+        // Vale: débito do profissional, sem forma de pagamento (não é uma
+        // movimentação por método — o valor sai do caixa e abate a comissão).
+        await addVoucher(voucherProfessionalId, parseFloat(transactionAmount), transactionDescription || undefined);
+        toast({
+          title: 'Vale registrado',
+          description: `R$ ${parseFloat(transactionAmount).toFixed(2)} lançado como saída e debitado da comissão do profissional.`,
+        });
+      } else {
+        await addTransaction({
+          type: transactionType,
+          category: transactionCategory,
+          description: transactionDescription,
+          amount: parseFloat(transactionAmount),
+          payment_method: transactionPaymentMethod as Transaction['payment_method'],
+        });
+        toast({
+          title: transactionType === 'income' ? 'Entrada registrada' : 'Saída registrada',
+          description: `R$ ${parseFloat(transactionAmount).toFixed(2)}`,
+        });
+      }
+      setIsTransactionDialogOpen(false);
+      resetTransactionDialog();
     } catch (error) {
-      toast({ variant: 'destructive', title: 'Erro', description: 'Não foi possível registrar o vale.' });
+      toast({ variant: 'destructive', title: 'Erro', description: 'Não foi possível registrar o movimento.' });
     } finally {
       setIsSubmitting(false);
     }
@@ -394,10 +389,6 @@ export function Cashier() {
             <>
               {canManageCashFlow || canPerformAdvancedFinancialOps ? (
                 <>
-                  <Button variant="outline" onClick={() => setIsVoucherDialogOpen(true)}>
-                    <Ticket className="w-4 h-4 mr-2" />
-                    Vale
-                  </Button>
                   <Button
                     variant="outline"
                     onClick={() => {
@@ -765,17 +756,32 @@ export function Cashier() {
         </DialogContent>
       </Dialog>
 
-      <Dialog open={isTransactionDialogOpen} onOpenChange={setIsTransactionDialogOpen}>
+      <Dialog
+        open={isTransactionDialogOpen}
+        onOpenChange={(open) => {
+          setIsTransactionDialogOpen(open);
+          if (!open) resetTransactionDialog();
+        }}
+      >
         <DialogContent className="sm:max-w-md">
           <DialogHeader>
             <DialogTitle className="font-display text-xl">
               {transactionType === 'income' ? 'Nova Entrada' : 'Nova Saída'}
             </DialogTitle>
+            {isVoucherCategory ? (
+              <DialogDescription>O vale será registrado como saída e descontado do saldo de comissões do profissional.</DialogDescription>
+            ) : null}
           </DialogHeader>
           <div className="space-y-4 py-4">
             <div className="space-y-2">
               <Label>Categoria</Label>
-              <Select value={transactionCategory} onValueChange={setTransactionCategory}>
+              <Select
+                value={transactionCategory}
+                onValueChange={(value) => {
+                  setTransactionCategory(value);
+                  if (value !== 'Vale') setVoucherProfessionalId('');
+                }}
+              >
                 <SelectTrigger>
                   <SelectValue placeholder="Selecione a categoria" />
                 </SelectTrigger>
@@ -797,11 +803,30 @@ export function Cashier() {
               </Select>
             </div>
 
+            {isVoucherCategory ? (
+              <div className="space-y-2">
+                <Label>Profissional</Label>
+                <Select value={voucherProfessionalId} onValueChange={setVoucherProfessionalId}>
+                  <SelectTrigger>
+                    <User className="w-4 h-4 mr-2" />
+                    <SelectValue placeholder="Selecione o profissional" />
+                  </SelectTrigger>
+                  <SelectContent>
+                    {activeProfessionals.map((professional) => (
+                      <SelectItem key={professional.id} value={professional.id}>
+                        {professional.nickname} - {professional.name}
+                      </SelectItem>
+                    ))}
+                  </SelectContent>
+                </Select>
+              </div>
+            ) : null}
+
             <div className="space-y-2">
-              <Label htmlFor="description">Descrição</Label>
+              <Label htmlFor="description">Descrição {isVoucherCategory ? '(opcional)' : ''}</Label>
               <Input
                 id="description"
-                placeholder="Descrição da movimentação"
+                placeholder={isVoucherCategory ? 'Ex: adiantamento, despesa...' : 'Descrição da movimentação'}
                 value={transactionDescription}
                 onChange={(event) => setTransactionDescription(event.target.value)}
               />
@@ -820,97 +845,38 @@ export function Cashier() {
               />
             </div>
 
-            <div className="space-y-2">
-              <Label>Forma de Pagamento</Label>
-              <div className="grid grid-cols-2 gap-2">
-                {paymentMethods.map((method) => {
-                  const Icon = method.icon;
-                  return (
-                    <Button
-                      key={method.value}
-                      type="button"
-                      variant={transactionPaymentMethod === method.value ? 'default' : 'outline'}
-                      className="justify-start"
-                      onClick={() => setTransactionPaymentMethod(method.value)}
-                    >
-                      <Icon className="w-4 h-4 mr-2" />
-                      {method.label}
-                    </Button>
-                  );
-                })}
+            {!isVoucherCategory ? (
+              <div className="space-y-2">
+                <Label>Forma de Pagamento</Label>
+                <div className="grid grid-cols-2 gap-2">
+                  {paymentMethods.map((method) => {
+                    const Icon = method.icon;
+                    return (
+                      <Button
+                        key={method.value}
+                        type="button"
+                        variant={transactionPaymentMethod === method.value ? 'default' : 'outline'}
+                        className="justify-start"
+                        onClick={() => setTransactionPaymentMethod(method.value)}
+                      >
+                        <Icon className="w-4 h-4 mr-2" />
+                        {method.label}
+                      </Button>
+                    );
+                  })}
+                </div>
               </div>
-            </div>
+            ) : null}
 
             <div className="flex justify-end gap-2 pt-4">
               <Button variant="outline" onClick={() => setIsTransactionDialogOpen(false)}>
                 Cancelar
               </Button>
-              <Button onClick={handleAddTransaction} disabled={!transactionCategory || !transactionAmount || isSubmitting}>
-                {isSubmitting ? 'Salvando...' : 'Registrar'}
-              </Button>
-            </div>
-          </div>
-        </DialogContent>
-      </Dialog>
-
-      <Dialog open={isVoucherDialogOpen} onOpenChange={setIsVoucherDialogOpen}>
-        <DialogContent className="sm:max-w-md">
-          <DialogHeader>
-            <DialogTitle className="font-display text-xl">
-              <div className="flex items-center gap-2">
-                <Ticket className="w-5 h-5 text-primary" />
-                Emitir Vale
-              </div>
-            </DialogTitle>
-            <DialogDescription>O vale será descontado do saldo de comissões do profissional.</DialogDescription>
-          </DialogHeader>
-          <div className="space-y-4 py-4">
-            <div className="space-y-2">
-              <Label>Profissional</Label>
-              <Select value={voucherProfessionalId} onValueChange={setVoucherProfessionalId}>
-                <SelectTrigger>
-                  <User className="w-4 h-4 mr-2" />
-                  <SelectValue placeholder="Selecione o profissional" />
-                </SelectTrigger>
-                <SelectContent>
-                  {activeProfessionals.map((professional) => (
-                    <SelectItem key={professional.id} value={professional.id}>
-                      {professional.nickname} - {professional.name}
-                    </SelectItem>
-                  ))}
-                </SelectContent>
-              </Select>
-            </div>
-
-            <div className="space-y-2">
-              <Label htmlFor="voucherAmount">Valor do Vale (R$)</Label>
-              <Input
-                id="voucherAmount"
-                type="number"
-                min="0"
-                step="0.01"
-                placeholder="0,00"
-                value={voucherAmount}
-                onChange={(event) => setVoucherAmount(event.target.value)}
-              />
-            </div>
-
-            <div className="space-y-2">
-              <Label htmlFor="voucherDescription">Descrição (opcional)</Label>
-              <Input
-                id="voucherDescription"
-                placeholder="Ex: adiantamento, despesa..."
-                value={voucherDescription}
-                onChange={(event) => setVoucherDescription(event.target.value)}
-              />
-            </div>
-
-            <div className="flex justify-end gap-2 pt-4">
-              <Button variant="outline" onClick={() => setIsVoucherDialogOpen(false)}>
-                Cancelar
-              </Button>
-              <Button onClick={handleAddVoucher} disabled={!voucherProfessionalId || !voucherAmount || isSubmitting}>
-                {isSubmitting ? 'Emitindo...' : 'Emitir Vale'}
+              <Button
+                onClick={handleAddTransaction}
+                disabled={!transactionCategory || !transactionAmount || isSubmitting || (isVoucherCategory && !voucherProfessionalId)}
+              >
+                {isSubmitting ? 'Salvando...' : isVoucherCategory ? 'Registrar Vale' : 'Registrar'}
               </Button>
             </div>
           </div>

@@ -2186,19 +2186,31 @@ export const DataProvider: React.FC<{ children: ReactNode }> = ({ children }) =>
       toast.error('Abra o caixa antes de pagar comissões.');
       return;
     }
+    const professional = professionals.find(p => p.id === professionalId);
+    // Repasse (o profissional recebe do cliente e devolve ao salão) tem
+    // direção financeira oposta à do vale (o salão adiantou dinheiro ao
+    // profissional) — misturar os dois no mesmo lote inverteria o sinal
+    // incorretamente, então vale só é netado aqui para profissionais de
+    // comissão normal. Para repasse, o vale segue pendente à parte.
+    const isTransferProfessional = professional?.settlement_type === 'transfer';
     const pendingCommissions = commissions.filter(
-      c => c.professional_id === professionalId && c.status === 'pending' && c.type !== 'voucher'
+      c => c.professional_id === professionalId
+        && c.status === 'pending'
+        && (c.type !== 'voucher' || !isTransferProfessional)
     );
     if (pendingCommissions.length === 0) { toast.info('Nenhuma comissão pendente para pagar.'); return; }
-    // Saldo de cada comissão (desconta liquidações parciais já feitas) para não
-    // cobrar em dobro no pagamento em lote.
-    const totalAmount = pendingCommissions.reduce(
-      (s, c) => s + Math.max(0, Math.abs(Number(c.commission_value)) - Math.abs(Number(c.settled_amount ?? 0))),
-      0,
-    );
-    const professional = professionals.find(p => p.id === professionalId);
+    // Vale (commission_value negativo) abate diretamente do valor a pagar —
+    // é isso que fazia o vale "não debitar": antes ele era ignorado aqui.
+    const totalAmount = pendingCommissions.reduce((s, c) => {
+      if (c.type === 'voucher') return s + Number(c.commission_value);
+      return s + Math.max(0, Math.abs(Number(c.commission_value)) - Math.abs(Number(c.settled_amount ?? 0)));
+    }, 0);
+    if (totalAmount <= 0.009) {
+      toast.info('Os vales pendentes já cobrem (ou superam) a comissão deste profissional. Nada líquido a pagar no momento.');
+      return;
+    }
     const settlementKind = normalizeCommissionSettlementKind(
-      pendingCommissions[0]?.settlement_kind,
+      pendingCommissions.find((c) => c.type !== 'voucher')?.settlement_kind,
       professional?.settlement_type,
     );
     const methodLabel = paymentMethod === 'cash' ? 'Dinheiro' : paymentMethod === 'pix' ? 'PIX' : 'Transferência';
@@ -2222,34 +2234,44 @@ export const DataProvider: React.FC<{ children: ReactNode }> = ({ children }) =>
       .select()
       .single();
     if (txError) { toast.error(settlementKind === 'transfer_receivable' ? 'Erro ao registrar recebimento no caixa.' : 'Erro ao registrar pagamento no caixa.'); return; }
-    // ITEM 1: filtro .neq('type', 'voucher') adicionado para evitar pagar vouchers
-    await supabase
+    // Atualiza cada linha individualmente para gravar settled_amount correto
+    // por linha (vale e comissão têm magnitudes diferentes).
+    const updateResults = await Promise.all(pendingCommissions.map((c) => supabase
       .from('commissions')
       .update({
         status: 'paid',
         paid_at: paidAt,
         transaction_id: txData?.id,
         payment_method: paymentMethod,
+        settled_amount: Math.abs(Number(c.commission_value)),
       })
-      .eq('professional_id', professionalId)
+      .eq('id', c.id)
       .eq('tenant_id', tenantId)
-      .eq('status', 'pending')
-      .neq('type', 'voucher');
+      .then((result) => ({ id: c.id, error: result.error }))));
+
+    const failedIds = new Set(updateResults.filter((r) => r.error).map((r) => r.id));
+    if (failedIds.size > 0) {
+      console.error('Erro ao liquidar comissões/vales:', updateResults.filter((r) => r.error));
+      toast.warning(`${failedIds.size} item(ns) não foram liquidados corretamente. Verifique manualmente.`);
+    }
+    const settledIds = pendingCommissions.map((c) => c.id).filter((id) => !failedIds.has(id));
+
     setCommissions(prev => prev.map(c =>
-      c.professional_id === professionalId && c.status === 'pending' && c.type !== 'voucher'
+      settledIds.includes(c.id)
         ? {
             ...c,
             status: 'paid',
             paid_at: paidAt,
             transaction_id: txData?.id,
             payment_method: paymentMethod,
+            settled_amount: Math.abs(Number(c.commission_value)),
           }
         : c
     ));
     setTransactions(prev => [txData as Transaction, ...prev]);
     toast.success(settlementKind === 'transfer_receivable'
       ? `${pendingCommissions.length} repasses recebidos!`
-      : `${pendingCommissions.length} comissões pagas!`);
+      : `${pendingCommissions.length} comissões/vales liquidados!`);
   };
 
   const addVoucher = async (professionalId: string, amount: number, description?: string) => {
@@ -2284,6 +2306,9 @@ export const DataProvider: React.FC<{ children: ReactNode }> = ({ children }) =>
       .select()
       .single();
     if (txError) { toast.error('Erro ao registrar vale.'); return; }
+    // status 'pending' (não 'paid'): o vale é um débito em aberto que precisa
+    // ser abatido na próxima liquidação de comissões do profissional (Pagar
+    // Todas). Fica 'paid' só quando efetivamente netado contra uma comissão.
     const { data: commissionRow, error: commError } = await supabase.from('commissions').insert({
       professional_id: professionalId,
       transaction_id: txData?.id,
@@ -2295,8 +2320,7 @@ export const DataProvider: React.FC<{ children: ReactNode }> = ({ children }) =>
       service_name_snapshot: 'Vale',
       professional_name_snapshot: professional?.nickname ?? professional?.name ?? 'Profissional',
       calculation_source: 'voucher',
-      status: 'paid',
-      paid_at: movementTimestamp ?? new Date().toISOString(),
+      status: 'pending',
       tenant_id: tenantId,
       ...(movementTimestamp ? { created_at: movementTimestamp } : {}),
     }).select().single();
