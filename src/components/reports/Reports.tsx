@@ -42,6 +42,7 @@ import { supabase } from '@/integrations/supabase/client';
 import { useAuth } from '@/contexts/AuthContext';
 import { Appointment, Commission, Transaction } from '@/context/DataContext';
 import {
+  calculateSettlementAmount,
   type CommissionSettlementKind,
   normalizeCommissionSettlementKind,
 } from '@/lib/commissionSettlement';
@@ -248,7 +249,15 @@ export function Reports() {
         const { rate, value } = parseLegacyCommissionData(appointment.notes);
         const fallbackRate = appointment.professional?.commission_service ?? 0;
         const effectiveRate = rate ?? fallbackRate;
-        const effectiveValue = value ?? ((Number(appointment.total_value) || 0) * effectiveRate) / 100;
+        const settlementKind = normalizeCommissionSettlementKind(
+          undefined,
+          appointment.professional?.settlement_type,
+        );
+        const effectiveValue = value ?? calculateSettlementAmount(
+          Number(appointment.total_value) || 0,
+          effectiveRate,
+          settlementKind,
+        );
 
         if (!effectiveValue || effectiveValue <= 0) return null;
 
@@ -257,10 +266,7 @@ export function Reports() {
           professional_id: appointment.professional_id!,
           appointment_id: appointment.id,
           commission_value: Number(effectiveValue),
-          settlement_kind: normalizeCommissionSettlementKind(
-            undefined,
-            appointment.professional?.settlement_type,
-          ),
+          settlement_kind: settlementKind,
           status: 'paid' as const,
           created_at: appointment.start_time,
           paid_at: appointment.end_time,

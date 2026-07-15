@@ -54,3 +54,25 @@ export const getSettlementTransactionCategory = (value?: string | null) =>
 
 export const getSettlementDialogTitle = (value?: string | null) =>
   isTransferReceivable(value) ? 'Repasse' : 'Comissão';
+
+const roundCurrency = (value: number) => Math.round((value + Number.EPSILON) * 100) / 100;
+
+export const calculateProfessionalShareAmount = (
+  baseValue: number,
+  professionalRate: number,
+) => roundCurrency((Number(baseValue || 0) * Number(professionalRate || 0)) / 100);
+
+export const calculateSettlementAmount = (
+  baseValue: number,
+  professionalRate: number,
+  settlementKind?: string | null,
+) => {
+  const normalizedBase = Number(baseValue || 0);
+  const professionalShare = calculateProfessionalShareAmount(normalizedBase, professionalRate);
+
+  if (isTransferReceivable(settlementKind)) {
+    return roundCurrency(Math.max(0, normalizedBase - professionalShare));
+  }
+
+  return professionalShare;
+};

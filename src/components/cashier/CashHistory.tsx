@@ -25,6 +25,7 @@ import { useAuth } from '@/contexts/AuthContext';
 import { cn } from '@/lib/utils';
 import { supabase } from '@/integrations/supabase/client';
 import {
+  calculateSettlementAmount,
   CommissionSettlementKind,
   getSettlementPaidLabel,
   normalizeCommissionSettlementKind,
@@ -410,7 +411,11 @@ export function CashHistory({ onBack }: CashHistoryProps) {
         }
 
         const settlementKind = normalizeCommissionSettlementKind(mapping.settlement_kind);
-        const commissionValue = (lineValue * Number(mapping.commission_rate || 0)) / 100;
+        const commissionValue = calculateSettlementAmount(
+          lineValue,
+          Number(mapping.commission_rate || 0),
+          settlementKind,
+        );
 
         if (settlementKind === 'transfer_receivable') {
           projectedTransferIncome += commissionValue;

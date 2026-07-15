@@ -5,6 +5,7 @@ import { useAuth } from '@/contexts/AuthContext';
 import { toast } from 'sonner';
 import { isCleaningControlTenant } from '@/lib/tenantSegments';
 import {
+  calculateSettlementAmount,
   CommissionSettlementKind,
   DEFAULT_COMMISSION_SETTLEMENT_KIND,
   getSettlementDirection,
@@ -1995,7 +1996,8 @@ export const DataProvider: React.FC<{ children: ReactNode }> = ({ children }) =>
         const mapping = resolvedCommissionMappings.get(`${line.service_id}:${line.professional_id}`);
         if (!mapping) continue;
         const commissionRate = Number(mapping.commission_rate) || 0;
-        const commissionValue = (line.value * commissionRate) / 100;
+        const settlementKind = normalizeCommissionSettlementKind(mapping.settlement_kind);
+        const commissionValue = calculateSettlementAmount(line.value, commissionRate, settlementKind);
         const service = services.find((item) => item.id === line.service_id);
         const professional = professionals.find((item) => item.id === line.professional_id);
         const { data: commissionRow, error: commError } = await supabase.from('commissions').insert({
@@ -2007,7 +2009,7 @@ export const DataProvider: React.FC<{ children: ReactNode }> = ({ children }) =>
           base_value: line.value,
           commission_rate: commissionRate,
           commission_value: commissionValue,
-          settlement_kind: normalizeCommissionSettlementKind(mapping.settlement_kind),
+          settlement_kind: settlementKind,
           service_name_snapshot: service?.name ?? appointment.service?.name ?? 'Serviço',
           professional_name_snapshot: professional?.nickname ?? professional?.name ?? 'Profissional',
           rule_source_id: mapping.id,
@@ -2865,7 +2867,11 @@ export const DataProvider: React.FC<{ children: ReactNode }> = ({ children }) =>
       }
 
       const nextRate = Number(mapping.commission_rate) || 0;
-      const nextValue = (Number(commission.base_value) * nextRate) / 100;
+      const nextValue = calculateSettlementAmount(
+        Number(commission.base_value),
+        nextRate,
+        mapping.settlement_kind,
+      );
       totalNext += nextValue;
       const difference = nextValue - currentValue;
       if (Math.abs(difference) > 0.009) affectedCount += 1;
@@ -2938,8 +2944,12 @@ export const DataProvider: React.FC<{ children: ReactNode }> = ({ children }) =>
       }
 
       const nextRate = Number(mapping.commission_rate) || 0;
-      const nextValue = (Number(commission.base_value) * nextRate) / 100;
       const settlementKind = normalizeCommissionSettlementKind(mapping.settlement_kind);
+      const nextValue = calculateSettlementAmount(
+        Number(commission.base_value),
+        nextRate,
+        settlementKind,
+      );
       const professional = professionals.find((item) => item.id === commission.professional_id);
       const service = services.find((item) => item.id === commission.service_id);
       const isPaid = commission.status === 'paid';
