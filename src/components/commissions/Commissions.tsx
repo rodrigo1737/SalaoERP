@@ -16,6 +16,7 @@ import {
   FileSpreadsheet,
   FileText,
   Eye,
+  Wallet,
 } from 'lucide-react';
 import { startOfDay, endOfDay, startOfMonth, isWithinInterval, format } from 'date-fns';
 import { ptBR } from 'date-fns/locale';
