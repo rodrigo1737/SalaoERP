@@ -1,6 +1,6 @@
 import React, { useCallback, useEffect, useMemo, useState } from 'react';
 import { useNavigate, useSearchParams } from 'react-router-dom';
-import { ArrowLeft, Edit, Loader2, Shield, ShieldPlus, ShieldMinus, KeyRound, Trash2, UserPlus } from 'lucide-react';
+import { ArrowLeft, Edit, Loader2, Scissors, Shield, ShieldPlus, ShieldMinus, KeyRound, Trash2, UserPlus } from 'lucide-react';
 import { useAuth } from '@/contexts/AuthContext';
 import { supabase } from '@/integrations/supabase/client';
 import { Button } from '@/components/ui/button';
