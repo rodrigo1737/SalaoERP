@@ -318,8 +318,12 @@ export function Commissions() {
     Profissional: c.professional?.nickname ?? c.professional_name_snapshot ?? '-',
     Cliente: getClientName(c),
     'Serviço': c.type === 'voucher' ? 'Vale' : (c.service_name_snapshot ?? '-'),
+    'Tipo de liquidação': getCommissionSettlementKind(c) === 'transfer_receivable'
+      ? 'Repasse ao estabelecimento'
+      : 'Comissão ao profissional',
     'Valor Cobrado': c.type === 'voucher' ? 0 : Number(c.base_value ?? 0),
-    'Valor Comissão': Number(c.commission_value),
+    'Percentual Profissional': Number(c.commission_rate ?? 0),
+    'Valor do Lançamento': Number(c.commission_value),
     Status: c.status === 'paid' ? 'Pago' : 'Pendente',
   }));
 
@@ -436,10 +440,10 @@ export function Commissions() {
       <div className="flex flex-col sm:flex-row sm:items-center sm:justify-between gap-4">
         <div>
           <h1 className="text-3xl lg:text-4xl font-display font-bold text-foreground">
-            Comissões
+            Comissões e Repasses
           </h1>
           <p className="text-muted-foreground mt-1">
-            {formatCurrency(totalPendingAll)} pendente
+            {formatCurrency(totalPendingAll)} em aberto
           </p>
         </div>
         <div className="flex items-center gap-2">
@@ -604,7 +608,7 @@ export function Commissions() {
                     <div className="flex items-center justify-between p-2 rounded-lg bg-secondary/40">
                       <div className="flex items-center gap-2">
                         <User className="w-4 h-4 text-foreground shrink-0" />
-                        <span className="text-xs text-muted-foreground">Valor profissional</span>
+                        <span className="text-xs text-muted-foreground">Parcela do profissional</span>
                       </div>
                       <p className="text-sm font-bold text-foreground">
                         {formatCurrency(item.professionalGrossValue)}
@@ -613,7 +617,7 @@ export function Commissions() {
                     <div className="flex items-center justify-between p-2 rounded-lg bg-warning-soft">
                       <div className="flex items-center gap-2">
                         <Clock className="w-4 h-4 text-warning shrink-0" />
-                        <span className="text-xs text-muted-foreground">Repasse pendente</span>
+                        <span className="text-xs text-muted-foreground">Repasse pendente ao estabelecimento</span>
                       </div>
                       <p className="text-sm font-bold text-warning">
                         {formatCurrency(item.totalPending)}
@@ -622,7 +626,7 @@ export function Commissions() {
                     <div className="flex items-center justify-between p-2 rounded-lg bg-success-soft">
                       <div className="flex items-center gap-2">
                         <Check className="w-4 h-4 text-success shrink-0" />
-                        <span className="text-xs text-muted-foreground">Repasse recebido</span>
+                        <span className="text-xs text-muted-foreground">Repasse recebido pelo estabelecimento</span>
                       </div>
                       <p className="text-sm font-bold text-success">
                         {formatCurrency(item.totalPaid)}
@@ -730,7 +734,7 @@ export function Commissions() {
           <Card className="p-6 border-0 shadow-lg">
             <div className="flex flex-col sm:flex-row sm:items-center sm:justify-between gap-3 mb-4">
               <h2 className="text-lg font-display font-semibold text-foreground">
-                Histórico de Comissões
+                Histórico de Comissões e Repasses
               </h2>
               <div className="flex items-center gap-2">
                 <Button variant="outline" size="sm" onClick={handleExportExcel}>
@@ -791,7 +795,7 @@ export function Commissions() {
                         {commission.type !== 'voucher' && (
                           <>
                             <span>•</span>
-                            <span>{commission.commission_rate}%</span>
+                            <span>{commission.commission_rate}% profissional</span>
                           </>
                         )}
                         {commission.type !== 'voucher' && (
@@ -844,7 +848,7 @@ export function Commissions() {
 
                     {commission.type !== 'voucher' && (
                       <Badge variant="outline">
-                        {settlementKind === 'transfer_receivable' ? 'Repasse' : 'Comissão'}
+                        {settlementKind === 'transfer_receivable' ? 'Repasse ao estabelecimento' : 'Comissão'}
                       </Badge>
                     )}
                     
@@ -1084,7 +1088,7 @@ export function Commissions() {
 
     {/* Relatório imprimível (PDF via impressão do navegador) */}
     <div className="hidden print:block p-8 text-black bg-white">
-      <h1 className="text-2xl font-bold mb-1">Relatório de Comissões</h1>
+      <h1 className="text-2xl font-bold mb-1">Relatório de Comissões e Repasses</h1>
       <p className="text-sm mb-4">
         Período: {startDate ? format(startDate, 'dd/MM/yyyy', { locale: ptBR }) : '-'} a {endDate ? format(endDate, 'dd/MM/yyyy', { locale: ptBR }) : '-'}
         {professionalFilter !== 'all' && ` • Profissional: ${professionalsById.get(professionalFilter)?.nickname ?? ''}`}
@@ -1097,21 +1101,30 @@ export function Commissions() {
             <th className="text-left py-1 pr-2">Profissional</th>
             <th className="text-left py-1 pr-2">Cliente</th>
             <th className="text-left py-1 pr-2">Serviço</th>
+            <th className="text-left py-1 pr-2">Liquidação</th>
             <th className="text-right py-1 pr-2">Valor Cobrado</th>
-            <th className="text-right py-1 pr-2">Valor Comissão</th>
+            <th className="text-right py-1 pr-2">Valor do Lançamento</th>
             <th className="text-left py-1">Status</th>
           </tr>
         </thead>
         <tbody>
           {filteredCommissions.map((c) => (
             <tr key={c.id} className="border-b border-gray-300">
+              {(() => {
+                const settlementKind = getCommissionSettlementKind(c);
+                return (
+                  <>
               <td className="py-1 pr-2">{formatDate(c.created_at)}</td>
               <td className="py-1 pr-2">{c.professional?.nickname ?? c.professional_name_snapshot ?? '-'}</td>
               <td className="py-1 pr-2">{getClientName(c)}</td>
               <td className="py-1 pr-2">{c.type === 'voucher' ? 'Vale' : (c.service_name_snapshot ?? '-')}</td>
+              <td className="py-1 pr-2">{c.type === 'voucher' ? 'Vale' : (settlementKind === 'transfer_receivable' ? 'Repasse ao estabelecimento' : 'Comissão ao profissional')}</td>
               <td className="py-1 pr-2 text-right">{c.type === 'voucher' ? '-' : formatCurrency(Number(c.base_value ?? 0))}</td>
               <td className="py-1 pr-2 text-right">{formatCurrency(Number(c.commission_value))}</td>
               <td className="py-1">{c.status === 'paid' ? 'Pago' : 'Pendente'}</td>
+                  </>
+                );
+              })()}
             </tr>
           ))}
         </tbody>

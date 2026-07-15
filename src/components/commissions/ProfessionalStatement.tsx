@@ -43,6 +43,11 @@ interface ProfessionalRow {
   netToReceive: number;  // profissional deve ao salão (repasse pendente)
 }
 
+const getTransferNetLabel = (value: number) => {
+  if (value > 0.009) return `Repassar ${formatCurrency(value)} ao estabelecimento`;
+  return formatCurrency(0);
+};
+
 export function ProfessionalStatement() {
   const { professionals, commissions } = useData();
   const { userRole, hasPermission, currentProfessional } = useAuth();
@@ -197,15 +202,15 @@ export function ProfessionalStatement() {
             <p className="text-2xl font-bold text-foreground mt-1">{formatCurrency(totals.grossAttended)}</p>
           </Card>
           <Card className="p-4 border-0 shadow-md">
-            <div className="flex items-center gap-2 text-muted-foreground text-xs"><TrendingDown className="w-4 h-4" /> Valor profissional</div>
+            <div className="flex items-center gap-2 text-muted-foreground text-xs"><TrendingDown className="w-4 h-4" /> Parcela do profissional</div>
             <p className="text-2xl font-bold text-foreground mt-1">{formatCurrency(totals.professionalGrossValue)}</p>
           </Card>
           <Card className="p-4 border-0 shadow-md">
-            <div className="flex items-center gap-2 text-muted-foreground text-xs"><TrendingUp className="w-4 h-4" /> Valor repasse</div>
+            <div className="flex items-center gap-2 text-muted-foreground text-xs"><TrendingUp className="w-4 h-4" /> Parcela do estabelecimento</div>
             <p className="text-2xl font-bold text-primary mt-1">{formatCurrency(totals.transferGenerated)}</p>
           </Card>
           <Card className="p-4 border-0 shadow-md">
-            <div className="flex items-center gap-2 text-muted-foreground text-xs"><TrendingUp className="w-4 h-4" /> Repasse recebido</div>
+            <div className="flex items-center gap-2 text-muted-foreground text-xs"><TrendingUp className="w-4 h-4" /> Repasse recebido pelo estabelecimento</div>
             <p className="text-2xl font-bold text-success mt-1">{formatCurrency(totals.transferReceived)}</p>
           </Card>
           <Card className="p-4 border-0 shadow-md">
@@ -220,7 +225,7 @@ export function ProfessionalStatement() {
             <p className="text-2xl font-bold text-destructive mt-1">{formatCurrency(totals.netToPay)}</p>
           </Card>
           <Card className="p-4 border-0 shadow-md">
-            <div className="flex items-center gap-2 text-muted-foreground text-xs"><TrendingUp className="w-4 h-4" /> Total de repasse</div>
+            <div className="flex items-center gap-2 text-muted-foreground text-xs"><TrendingUp className="w-4 h-4" /> Repasses a receber</div>
             <p className="text-2xl font-bold text-success mt-1">{formatCurrency(totals.netToReceive)}</p>
           </Card>
           <Card className="p-4 border-0 shadow-md">
@@ -245,8 +250,8 @@ export function ProfessionalStatement() {
                   {isTransferMode ? (
                     <>
                       <th className="p-2 text-right font-medium">Bruto atendido</th>
-                      <th className="p-2 text-right font-medium">Valor profissional</th>
-                      <th className="p-2 text-right font-medium">Valor repasse</th>
+                      <th className="p-2 text-right font-medium">Parcela do profissional</th>
+                      <th className="p-2 text-right font-medium">Parcela do estabelecimento</th>
                       <th className="p-2 text-right font-medium">Repasse recebido</th>
                     </>
                   ) : (
@@ -292,7 +297,7 @@ export function ProfessionalStatement() {
                         {net > 0.009
                           ? `Pagar ${formatCurrency(net)}`
                           : net < -0.009
-                            ? `${isTransferMode ? 'Repasse' : 'Receber'} ${formatCurrency(-net)}`
+                            ? (isTransferMode ? getTransferNetLabel(-net) : `Receber ${formatCurrency(-net)}`)
                             : formatCurrency(0)}
                       </td>
                     </tr>
@@ -304,7 +309,7 @@ export function ProfessionalStatement() {
         )}
         <p className="text-xs text-muted-foreground mt-3">
           {isTransferMode
-            ? 'No modelo de repasse, o bruto atendido mostra o total dos serviços do período, o valor profissional é o que fica com o profissional e o valor repasse é a parcela devida ao estabelecimento. Repasses já recebidos e vales não entram no saldo em aberto.'
+            ? 'No modelo de repasse, o bruto atendido mostra o total dos serviços do período, o valor profissional mostra a parte que fica com o profissional e a parcela do estabelecimento mostra o valor devido ao salao. Repasses já recebidos e vales não entram no saldo em aberto.'
             : 'Saldo líquido = comissão pendente − vales (a pagar ao profissional) ou repasse pendente (a receber do profissional). Comissões pagas e repasses recebidos não entram no saldo.'}
         </p>
       </Card>
