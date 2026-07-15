@@ -1,4 +1,4 @@
-import { useMemo, useState } from 'react';
+import { useEffect, useMemo, useState } from 'react';
 import { Wallet, TrendingUp, TrendingDown, Ticket } from 'lucide-react';
 import { Card } from '@/components/ui/card';
 import { Input } from '@/components/ui/input';
@@ -45,14 +45,26 @@ export function ProfessionalStatement() {
   const { professionals, commissions } = useData();
   const { userRole, hasPermission, currentProfessional } = useAuth();
 
-  const canViewAll = userRole === 'admin'
-    || hasPermission('view_financial_history')
-    || hasPermission('reverse_financial_entries')
-    || hasPermission('view_commissions');
+  const isAdmin = userRole === 'admin';
+  const isProfessionalScopedUser = userRole === 'staff' && !!currentProfessional;
+  const canViewAll = isAdmin
+    || (userRole === 'staff'
+      && !isProfessionalScopedUser
+      && (
+        hasPermission('view_financial_history')
+        || hasPermission('reverse_financial_entries')
+        || hasPermission('view_commissions')
+      ));
 
   const [dateFrom, setDateFrom] = useState(firstDayOfMonth());
   const [dateTo, setDateTo] = useState(today());
   const [professionalFilter, setProfessionalFilter] = useState('all');
+
+  useEffect(() => {
+    if (isProfessionalScopedUser && currentProfessional?.id) {
+      setProfessionalFilter(currentProfessional.id);
+    }
+  }, [currentProfessional?.id, isProfessionalScopedUser]);
 
   const rangeStart = new Date(`${dateFrom}T00:00:00`).getTime();
   const rangeEnd = new Date(`${dateTo}T23:59:59`).getTime();
@@ -111,10 +123,12 @@ export function ProfessionalStatement() {
         netToReceive: transferPending,
       };
     }).filter((r) =>
-      (professionalFilter === 'all' || r.professionalId === professionalFilter)
+      ((isProfessionalScopedUser && currentProfessional?.id)
+        ? r.professionalId === currentProfessional.id
+        : (professionalFilter === 'all' || r.professionalId === professionalFilter))
       && (r.commissionGenerated !== 0 || r.transferGenerated !== 0 || r.vouchers !== 0),
     );
-  }, [canViewAll, currentProfessional, periodCommissions, professionals, professionalFilter]);
+  }, [canViewAll, currentProfessional, isProfessionalScopedUser, periodCommissions, professionals, professionalFilter]);
 
   const totals = useMemo(() => rows.reduce((acc, r) => ({
     netToPay: acc.netToPay + Math.max(0, r.netToPay),

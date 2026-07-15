@@ -97,6 +97,24 @@ const SIDEBAR_TARGETS: Record<SidebarTargetId, SidebarTargetDefinition> = {
 
 const isAdminUser = (ctx: NavigationAccessContext) => ctx.userRole === 'admin';
 
+const canAccessFinancialCenter = (ctx: NavigationAccessContext) => {
+  if (ctx.isSuperAdmin) return false;
+
+  const isCleaningTenant = isCleaningControlTenant(ctx.currentTenant);
+  if (isCleaningTenant) return false;
+
+  if (isAdminUser(ctx)) return true;
+
+  const can = (permission: string) => ctx.hasPermission(permission);
+  return (
+    can('manage_cash_flow')
+    || can('view_financial_history')
+    || can('reverse_financial_entries')
+    || can('view_commissions')
+    || can('refund_bill')
+  );
+};
+
 export const getSidebarTargetDefinition = (target: SidebarTargetId) => SIDEBAR_TARGETS[target];
 
 export const canAccessSidebarTarget = (target: SidebarTargetId, ctx: NavigationAccessContext) => {
@@ -142,13 +160,7 @@ export const canAccessAppPage = (page: AppPageId, ctx: NavigationAccessContext) 
     case 'cashier':
       return !isCleaningTenant && (admin || can('manage_cash_flow') || can('reverse_financial_entries'));
     case 'financial-management':
-      return !isCleaningTenant && (
-        admin
-        || can('manage_cash_flow')
-        || can('view_financial_history')
-        || can('reverse_financial_entries')
-        || can('view_commissions')
-      );
+      return canAccessFinancialCenter(ctx);
     case 'commissions':
     case 'professional-statement':
       return !isCleaningTenant && (admin || can('view_commissions'));
@@ -186,9 +198,22 @@ export const getVisibleSidebarSections = (ctx: NavigationAccessContext): Sidebar
   if (ctx.isSuperAdmin) return [];
 
   return SIDEBAR_SECTIONS
-    .map((section) => ({
-      ...section,
-      targets: section.targets.filter((target) => canAccessSidebarTarget(target, ctx)),
-    }))
+    .map((section) => {
+      const visibleTargets = section.targets.filter((target) => canAccessSidebarTarget(target, ctx));
+
+      if (
+        section.id === 'financial'
+        && isAdminUser(ctx)
+        && !isCleaningControlTenant(ctx.currentTenant)
+        && !visibleTargets.includes('financial-management')
+      ) {
+        visibleTargets.unshift('financial-management');
+      }
+
+      return {
+        ...section,
+        targets: visibleTargets,
+      };
+    })
     .filter((section) => section.targets.length > 0);
 };
