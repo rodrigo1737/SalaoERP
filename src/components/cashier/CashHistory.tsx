@@ -1,4 +1,4 @@
-import { useMemo, useState } from 'react';
+import { useEffect, useMemo, useState } from 'react';
 import { motion } from 'framer-motion';
 import {
   AlertCircle,
@@ -23,13 +23,31 @@ import { Input } from '@/components/ui/input';
 import { useData, CashSession, Transaction } from '@/context/DataContext';
 import { useAuth } from '@/contexts/AuthContext';
 import { cn } from '@/lib/utils';
+import { supabase } from '@/integrations/supabase/client';
 import {
+  CommissionSettlementKind,
   getSettlementPaidLabel,
   normalizeCommissionSettlementKind,
 } from '@/lib/commissionSettlement';
 
 interface CashHistoryProps {
   onBack?: () => void;
+}
+
+interface AppointmentProvisionRow {
+  id: string;
+  appointment_id: string;
+  service_id: string;
+  professional_id: string;
+  value: number;
+}
+
+interface ServiceProfessionalProvisionRow {
+  id: string;
+  service_id: string;
+  professional_id: string;
+  commission_rate: number;
+  settlement_kind?: CommissionSettlementKind | null;
 }
 
 const formatCurrency = (value: number) => (
@@ -113,8 +131,18 @@ const getMovementTone = (transaction: Transaction) => {
   return transaction.type === 'income' ? 'success' : 'danger';
 };
 
+const PROVISION_STATUSES = new Set([
+  'pre_scheduled',
+  'scheduled',
+  'confirmed',
+  'in_progress',
+] as const);
+
+const PROVISION_PENDING_COMMISSION_STATUSES = new Set(['pending'] as const);
+
 export function CashHistory({ onBack }: CashHistoryProps) {
   const {
+    appointments,
     cashSessions,
     transactions,
     commissions,
@@ -136,6 +164,9 @@ export function CashHistory({ onBack }: CashHistoryProps) {
   const [dateFrom, setDateFrom] = useState(() => currentMonthRange().from);
   const [dateTo, setDateTo] = useState(() => currentMonthRange().to);
   const [search, setSearch] = useState('');
+  const [appointmentProvisionRows, setAppointmentProvisionRows] = useState<AppointmentProvisionRow[]>([]);
+  const [serviceProvisionMappings, setServiceProvisionMappings] = useState<ServiceProfessionalProvisionRow[]>([]);
+  const [provisionLoading, setProvisionLoading] = useState(false);
 
   const normalizedSearch = search.trim().toLowerCase();
   const transactionsBySessionId = useMemo(() => {
@@ -205,6 +236,84 @@ export function CashHistory({ onBack }: CashHistoryProps) {
     })
   ), [commissions, dateFrom, dateTo, normalizedSearch]);
 
+  const filteredProvisionAppointments = useMemo(() => (
+    appointments.filter((appointment) => {
+      if (!PROVISION_STATUSES.has(appointment.status)) return false;
+      if (!isDateBetween(appointment.start_time, dateFrom, dateTo)) return false;
+      if (!normalizedSearch) return true;
+
+      const haystack = [
+        appointment.client?.name,
+        appointment.professional?.nickname,
+        appointment.professional?.name,
+        appointment.service?.name,
+        appointment.status,
+        appointment.notes,
+      ].join(' ').toLowerCase();
+
+      return haystack.includes(normalizedSearch);
+    })
+  ), [appointments, dateFrom, dateTo, normalizedSearch]);
+
+  useEffect(() => {
+    let cancelled = false;
+
+    const loadProvisionData = async () => {
+      const appointmentIds = filteredProvisionAppointments.map((appointment) => appointment.id);
+      if (appointmentIds.length === 0) {
+        if (!cancelled) {
+          setAppointmentProvisionRows([]);
+          setServiceProvisionMappings([]);
+          setProvisionLoading(false);
+        }
+        return;
+      }
+
+      setProvisionLoading(true);
+
+      const serviceIds = Array.from(new Set(filteredProvisionAppointments.map((appointment) => appointment.service_id).filter(Boolean))) as string[];
+      const professionalIds = Array.from(new Set(filteredProvisionAppointments.map((appointment) => appointment.professional_id).filter(Boolean))) as string[];
+
+      const [appointmentServicesResult, serviceMappingsResult] = await Promise.all([
+        supabase
+          .from('appointment_services')
+          .select('id, appointment_id, service_id, professional_id, value')
+          .in('appointment_id', appointmentIds),
+        serviceIds.length > 0 && professionalIds.length > 0
+          ? supabase
+            .from('service_professionals')
+            .select('id, service_id, professional_id, commission_rate, settlement_kind')
+            .in('service_id', serviceIds)
+            .in('professional_id', professionalIds)
+          : Promise.resolve({ data: [], error: null }),
+      ]);
+
+      if (!cancelled) {
+        if (appointmentServicesResult.error) {
+          console.error('Error loading appointment provision rows:', appointmentServicesResult.error);
+          setAppointmentProvisionRows([]);
+        } else {
+          setAppointmentProvisionRows((appointmentServicesResult.data as AppointmentProvisionRow[] | null) ?? []);
+        }
+
+        if ('error' in serviceMappingsResult && serviceMappingsResult.error) {
+          console.error('Error loading service provision mappings:', serviceMappingsResult.error);
+          setServiceProvisionMappings([]);
+        } else {
+          setServiceProvisionMappings((serviceMappingsResult.data as ServiceProfessionalProvisionRow[] | null) ?? []);
+        }
+
+        setProvisionLoading(false);
+      }
+    };
+
+    void loadProvisionData();
+
+    return () => {
+      cancelled = true;
+    };
+  }, [filteredProvisionAppointments]);
+
   const summary = useMemo(() => {
     const activeTransactions = filteredTransactions.filter((transaction) => !transaction.reversed_at);
     const grossIncome = activeTransactions
@@ -226,6 +335,120 @@ export function CashHistory({ onBack }: CashHistoryProps) {
       closedSessions: filteredSessions.filter((session) => session.status === 'closed').length,
     };
   }, [filteredSessions, filteredTransactions]);
+
+  const provisionSummary = useMemo(() => {
+    const appointmentRowsById = new Map<string, AppointmentProvisionRow[]>();
+    appointmentProvisionRows.forEach((row) => {
+      const current = appointmentRowsById.get(row.appointment_id) ?? [];
+      current.push(row);
+      appointmentRowsById.set(row.appointment_id, current);
+    });
+
+    const mappingByKey = new Map(
+      serviceProvisionMappings.map((mapping) => [`${mapping.service_id}:${mapping.professional_id}`, mapping]),
+    );
+
+    const pendingGeneratedCommissionPayables = commissions
+      .filter((commission) => {
+        if (!PROVISION_PENDING_COMMISSION_STATUSES.has(commission.status)) return false;
+        if (!isDateBetween(commission.created_at, dateFrom, dateTo)) return false;
+        return normalizeCommissionSettlementKind(
+          commission.settlement_kind,
+          commission.professional?.settlement_type,
+        ) === 'commission_payable';
+      })
+      .reduce((sum, commission) => sum + Math.abs(Number(commission.commission_value)), 0);
+
+    const pendingGeneratedTransfers = commissions
+      .filter((commission) => {
+        if (!PROVISION_PENDING_COMMISSION_STATUSES.has(commission.status)) return false;
+        if (!isDateBetween(commission.created_at, dateFrom, dateTo)) return false;
+        return normalizeCommissionSettlementKind(
+          commission.settlement_kind,
+          commission.professional?.settlement_type,
+        ) === 'transfer_receivable';
+      })
+      .reduce((sum, commission) => sum + Math.abs(Number(commission.commission_value)), 0);
+
+    let projectedCashIncome = 0;
+    let projectedTransferIncome = 0;
+    let projectedCommissionExpense = 0;
+    let unresolvedRuleCount = 0;
+    let appointmentsWithoutValue = 0;
+
+    filteredProvisionAppointments.forEach((appointment) => {
+      const detailedRows = appointmentRowsById.get(appointment.id) ?? [];
+      const lines = detailedRows.length > 0
+        ? detailedRows
+        : (appointment.service_id && appointment.professional_id && Number(appointment.total_value) > 0
+          ? [{
+              id: `fallback:${appointment.id}`,
+              appointment_id: appointment.id,
+              service_id: appointment.service_id,
+              professional_id: appointment.professional_id,
+              value: Number(appointment.total_value),
+            }]
+          : []);
+
+      if (lines.length === 0) {
+        appointmentsWithoutValue += 1;
+        return;
+      }
+
+      lines.forEach((line) => {
+        const lineValue = Number(line.value) || 0;
+        if (lineValue <= 0) {
+          appointmentsWithoutValue += 1;
+          return;
+        }
+
+        const mapping = mappingByKey.get(`${line.service_id}:${line.professional_id}`);
+        if (!mapping) {
+          unresolvedRuleCount += 1;
+          projectedCashIncome += lineValue;
+          return;
+        }
+
+        const settlementKind = normalizeCommissionSettlementKind(mapping.settlement_kind);
+        const commissionValue = (lineValue * Number(mapping.commission_rate || 0)) / 100;
+
+        if (settlementKind === 'transfer_receivable') {
+          projectedTransferIncome += commissionValue;
+          return;
+        }
+
+        projectedCashIncome += lineValue;
+        projectedCommissionExpense += commissionValue;
+      });
+    });
+
+    const projectedNet = summary.net
+      + projectedCashIncome
+      + projectedTransferIncome
+      - projectedCommissionExpense
+      - pendingGeneratedCommissionPayables
+      + pendingGeneratedTransfers;
+
+    return {
+      projectedCashIncome,
+      projectedTransferIncome,
+      projectedCommissionExpense,
+      pendingGeneratedCommissionPayables,
+      pendingGeneratedTransfers,
+      projectedNet,
+      baseAppointments: filteredProvisionAppointments.length,
+      unresolvedRuleCount,
+      appointmentsWithoutValue,
+    };
+  }, [
+    appointmentProvisionRows,
+    commissions,
+    dateFrom,
+    dateTo,
+    filteredProvisionAppointments,
+    serviceProvisionMappings,
+    summary.net,
+  ]);
 
   const getSessionStats = (session: CashSession) => {
     const sessionTransactions = (transactionsBySessionId.get(session.id) ?? []).filter((transaction) =>
@@ -368,6 +591,81 @@ export function CashHistory({ onBack }: CashHistoryProps) {
           <p className="text-2xl font-bold text-foreground">{summary.reversedCount}</p>
         </Card>
       </div>
+
+      <Card className="border-0 shadow-md">
+        <div className="border-b border-border/60 px-4 py-4">
+          <div className="flex flex-col gap-2 lg:flex-row lg:items-center lg:justify-between">
+            <div>
+              <h2 className="text-lg font-semibold text-foreground">Provisões de caixa</h2>
+              <p className="text-sm text-muted-foreground">
+                Agenda futura e obrigações pendentes para projetar entrada, comissão, repasse e líquido.
+              </p>
+            </div>
+            <Badge variant="outline">
+              {provisionSummary.baseAppointments} agendamento(s) na base do previsto
+            </Badge>
+          </div>
+        </div>
+
+        <div className="grid gap-4 p-4 md:grid-cols-2 xl:grid-cols-5">
+          <div className="rounded-2xl border border-border/60 bg-background/80 p-4 shadow-sm">
+            <div className="mb-2 flex items-center justify-between">
+              <span className="text-sm text-muted-foreground">Receita prevista</span>
+              <TrendingUp className="h-4 w-4 text-primary" />
+            </div>
+            <p className="text-2xl font-bold text-foreground">{formatCurrency(provisionSummary.projectedCashIncome)}</p>
+            <p className="mt-1 text-xs text-muted-foreground">Agenda do período ainda não realizada</p>
+          </div>
+
+          <div className="rounded-2xl border border-border/60 bg-background/80 p-4 shadow-sm">
+            <div className="mb-2 flex items-center justify-between">
+              <span className="text-sm text-muted-foreground">Comissões previstas</span>
+              <TrendingDown className="h-4 w-4 text-destructive" />
+            </div>
+            <p className="text-2xl font-bold text-foreground">
+              {formatCurrency(provisionSummary.projectedCommissionExpense + provisionSummary.pendingGeneratedCommissionPayables)}
+            </p>
+            <p className="mt-1 text-xs text-muted-foreground">Agenda futura + comissões pendentes de pagar</p>
+          </div>
+
+          <div className="rounded-2xl border border-border/60 bg-background/80 p-4 shadow-sm">
+            <div className="mb-2 flex items-center justify-between">
+              <span className="text-sm text-muted-foreground">Repasses previstos</span>
+              <Receipt className="h-4 w-4 text-success" />
+            </div>
+            <p className="text-2xl font-bold text-foreground">
+              {formatCurrency(provisionSummary.projectedTransferIncome + provisionSummary.pendingGeneratedTransfers)}
+            </p>
+            <p className="mt-1 text-xs text-muted-foreground">Repasse futuro + repasse já pendente</p>
+          </div>
+
+          <div className="rounded-2xl border border-border/60 bg-background/80 p-4 shadow-sm">
+            <div className="mb-2 flex items-center justify-between">
+              <span className="text-sm text-muted-foreground">Líquido previsto</span>
+              <DollarSign className="h-4 w-4 text-primary" />
+            </div>
+            <p className="text-2xl font-bold text-foreground">{formatCurrency(provisionSummary.projectedNet)}</p>
+            <p className="mt-1 text-xs text-muted-foreground">Realizado atual + previsto líquido do período</p>
+          </div>
+
+          <div className="rounded-2xl border border-border/60 bg-background/80 p-4 shadow-sm">
+            <div className="mb-2 flex items-center justify-between">
+              <span className="text-sm text-muted-foreground">Pendências de regra</span>
+              <AlertCircle className="h-4 w-4 text-amber-500" />
+            </div>
+            <p className="text-2xl font-bold text-foreground">{provisionSummary.unresolvedRuleCount}</p>
+            <p className="mt-1 text-xs text-muted-foreground">
+              {provisionSummary.appointmentsWithoutValue} item(ns) sem valor base configurado
+            </p>
+          </div>
+        </div>
+
+        <div className="border-t border-border/60 px-4 py-3 text-sm text-muted-foreground">
+          {provisionLoading
+            ? 'Atualizando provisões financeiras...'
+            : 'O previsto considera agendamentos pré-agendados, agendados, confirmados e em atendimento dentro do filtro atual.'}
+        </div>
+      </Card>
 
       <Card className="p-4 border-0 shadow-md">
         <div className="grid gap-3 lg:grid-cols-[1fr_180px_180px]">

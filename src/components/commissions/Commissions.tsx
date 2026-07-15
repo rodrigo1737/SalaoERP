@@ -415,6 +415,12 @@ export function Commissions() {
     )
   );
 
+  const getProfessionalTotalLabel = (professionalSettlementType?: string | null) => (
+    normalizeCommissionSettlementKind(undefined, professionalSettlementType) === 'transfer_receivable'
+      ? 'Total a repassar ao estabelecimento'
+      : 'Total a receber'
+  );
+
   return (
     <>
     <div className="p-6 lg:p-8 space-y-6 print:hidden">
@@ -610,7 +616,9 @@ export function Commissions() {
                 <div className="flex items-center justify-between p-2 rounded-lg bg-primary/10 border border-primary/20">
                   <div className="flex items-center gap-2">
                     <DollarSign className="w-4 h-4 text-primary shrink-0" />
-                    <span className="text-xs font-medium text-foreground">Total</span>
+                    <span className="text-xs font-medium text-foreground">
+                      {getProfessionalTotalLabel(item.professional.settlement_type)}
+                    </span>
                   </div>
                   <p className="text-sm font-bold text-primary">
                     {formatCurrency(item.total)}

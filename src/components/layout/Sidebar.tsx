@@ -1,4 +1,4 @@
-import { type ComponentType, useMemo, useState } from 'react';
+import { type ComponentType, useEffect, useMemo, useRef, useState } from 'react';
 import { useNavigate } from 'react-router-dom';
 import { useAuth } from '@/contexts/AuthContext';
 import { useTenantSettings } from '@/contexts/TenantSettingsContext';
@@ -88,10 +88,13 @@ const DEFAULT_EXPANDED_SECTIONS: SidebarSectionDefinition['id'][] = [
   'financial',
 ];
 
+const SIDEBAR_SCROLL_STORAGE_KEY = 'multisolution.sidebar.scroll-position';
+
 export function Sidebar({ currentPage, onNavigate }: SidebarProps) {
   const [collapsed, setCollapsed] = useState(false);
   const [mobileOpen, setMobileOpen] = useState(false);
   const [expandedSections, setExpandedSections] = useState<string[]>(DEFAULT_EXPANDED_SECTIONS);
+  const navRef = useRef<HTMLElement | null>(null);
   const navigate = useNavigate();
   const { user, userRole, isOwner, isSuperAdmin, currentTenant, signOut, hasPermission } = useAuth();
   const { settings: tenantSettings } = useTenantSettings();
@@ -114,9 +117,25 @@ export function Sidebar({ currentPage, onNavigate }: SidebarProps) {
     [navigationContext],
   );
 
+  useEffect(() => {
+    const nav = navRef.current;
+    if (!nav || typeof window === 'undefined') return;
+
+    const storedPosition = window.sessionStorage.getItem(SIDEBAR_SCROLL_STORAGE_KEY);
+    if (!storedPosition) return;
+
+    nav.scrollTop = Number(storedPosition) || 0;
+  }, [currentPage, collapsed, expandedSections, mobileOpen]);
+
   const handleLogout = async () => {
     await signOut();
     navigate('/auth');
+  };
+
+  const handleNavScroll = () => {
+    const nav = navRef.current;
+    if (!nav || typeof window === 'undefined') return;
+    window.sessionStorage.setItem(SIDEBAR_SCROLL_STORAGE_KEY, String(nav.scrollTop));
   };
 
   const toggleSection = (sectionId: string) => {
@@ -220,7 +239,11 @@ export function Sidebar({ currentPage, onNavigate }: SidebarProps) {
         </div>
       )}
 
-      <nav className="flex-1 py-6 px-3 space-y-4 overflow-y-auto scrollbar-thin">
+      <nav
+        ref={navRef}
+        onScroll={handleNavScroll}
+        className="flex-1 py-6 px-3 space-y-4 overflow-y-auto scrollbar-thin"
+      >
         <div className="space-y-1">
           {topTargets.map((target) => {
             const definition = getSidebarTargetDefinition(target);
