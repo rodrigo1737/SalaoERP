@@ -212,6 +212,7 @@ export interface Transaction {
   reversed_at?: string | null;
   reversed_by?: string | null;
   reversal_transaction_id?: string | null;
+  reversal_of_transaction_id?: string | null;
   reversal_reason?: string | null;
   created_by?: string;
   created_at: string;
@@ -1321,11 +1322,12 @@ export const DataProvider: React.FC<{ children: ReactNode }> = ({ children }) =>
       referenceType?: string | null;
       amount?: number;
       cashSessionId?: string | null;
+      reversalOfTransactionId?: string | null;
     },
   ) => {
-    const targetSession = options?.cashSessionId
+    const targetSession = options?.cashSessionId || originalTransaction.cash_session_id
       ? getBillingTargetSession({
-          cashSessionId: options.cashSessionId,
+          cashSessionId: options?.cashSessionId ?? originalTransaction.cash_session_id,
           requireActiveCash: false,
         })
       : getCashOperationTargetSession({
@@ -1349,6 +1351,7 @@ export const DataProvider: React.FC<{ children: ReactNode }> = ({ children }) =>
       payment_method: options?.paymentMethod ?? originalTransaction.payment_method ?? 'other',
       reference_id: options?.referenceId ?? originalTransaction.id,
       reference_type: options?.referenceType ?? 'transaction_reversal',
+      reversal_of_transaction_id: options?.reversalOfTransactionId ?? originalTransaction.id,
       created_by: user.id,
       tenant_id: tenantId,
       ...(movementTimestamp ? { created_at: movementTimestamp } : {}),
@@ -2548,18 +2551,26 @@ export const DataProvider: React.FC<{ children: ReactNode }> = ({ children }) =>
   const reverseTransaction = async (transactionId: string, reason?: string) => {
     if (!guardModify()) return false;
     if (!guardFinancialPermission(canRefundBills, 'Você não tem permissão para estornar movimentos financeiros.')) return false;
-    const targetSession = getCashOperationTargetSession({
-      allowPendingSession: true,
-      permissionMessage: 'Somente usuários financeiros podem estornar movimentos em caixas pendentes.',
-    });
-    if (!targetSession) {
-      toast.error('Abra o caixa antes de registrar um estorno.');
-      return false;
-    }
 
     const originalTransaction = transactions.find((transaction) => transaction.id === transactionId);
     if (!originalTransaction) {
       toast.error('Movimentação não encontrada.');
+      return false;
+    }
+
+    // O estorno pertence ao mesmo caixa financeiro do movimento original.
+    // A data da ação continua sendo registrada na auditoria/reversed_at.
+    const targetSession = originalTransaction.cash_session_id
+      ? getBillingTargetSession({
+          cashSessionId: originalTransaction.cash_session_id,
+          requireActiveCash: false,
+        })
+      : getCashOperationTargetSession({
+          allowPendingSession: true,
+          permissionMessage: 'Somente usuários financeiros podem estornar movimentos em caixas pendentes.',
+        });
+    if (!targetSession) {
+      toast.error('Regularize ou abra o caixa de origem antes de registrar o estorno.');
       return false;
     }
 

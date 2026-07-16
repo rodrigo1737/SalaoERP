@@ -142,6 +142,13 @@ const getMovementTone = (transaction: Transaction) => {
   return transaction.type === 'income' ? 'success' : 'danger';
 };
 
+const getReversalFinancialTimestamp = (
+  transaction: Transaction,
+  allTransactions: Transaction[],
+) => transaction.reversal_transaction_id
+  ? allTransactions.find((item) => item.id === transaction.reversal_transaction_id)?.created_at ?? null
+  : null;
+
 const PROVISION_STATUSES = new Set([
   'pre_scheduled',
   'scheduled',
@@ -945,7 +952,11 @@ export function CashHistory({ onBack }: CashHistoryProps) {
                                   </p>
                                   <p className="text-xs text-muted-foreground">
                                     {formatDateTime(transaction.created_at)}
-                                    {transaction.reversed_at ? ` • Estornado em ${formatDateTime(transaction.reversed_at)}` : ''}
+                                    {transaction.reversed_at ? (
+                                      ` • Estorno financeiro no caixa em ${formatDateTime(
+                                        getReversalFinancialTimestamp(transaction, transactions) ?? transaction.created_at,
+                                      )} • Ação registrada em ${formatDateTime(transaction.reversed_at)}`
+                                    ) : ''}
                                   </p>
                                 </div>
 
@@ -1012,6 +1023,13 @@ export function CashHistory({ onBack }: CashHistoryProps) {
                       </p>
                       <div className="flex flex-wrap gap-3 text-xs text-muted-foreground">
                         <span>{formatDateTime(transaction.created_at)}</span>
+                        {transaction.reversed_at ? (
+                          <span>
+                            Estorno no caixa em {formatDateTime(
+                              getReversalFinancialTimestamp(transaction, transactions) ?? transaction.created_at,
+                            )} • ação em {formatDateTime(transaction.reversed_at)}
+                          </span>
+                        ) : null}
                         <span>{paymentMethodLabels[transaction.payment_method ?? ''] ?? 'Outro'}</span>
                         <span>
                           {transaction.cash_session_id

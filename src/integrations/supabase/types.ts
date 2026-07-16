@@ -1302,6 +1302,7 @@ export type Database = {
           reference_id: string | null
           reference_type: string | null
           reversal_reason: string | null
+          reversal_of_transaction_id: string | null
           reversal_transaction_id: string | null
           reversed_at: string | null
           reversed_by: string | null
@@ -1320,6 +1321,7 @@ export type Database = {
           reference_id?: string | null
           reference_type?: string | null
           reversal_reason?: string | null
+          reversal_of_transaction_id?: string | null
           reversal_transaction_id?: string | null
           reversed_at?: string | null
           reversed_by?: string | null
@@ -1338,6 +1340,7 @@ export type Database = {
           reference_id?: string | null
           reference_type?: string | null
           reversal_reason?: string | null
+          reversal_of_transaction_id?: string | null
           reversal_transaction_id?: string | null
           reversed_at?: string | null
           reversed_by?: string | null
@@ -1357,6 +1360,13 @@ export type Database = {
             columns: ["tenant_id"]
             isOneToOne: false
             referencedRelation: "tenants"
+            referencedColumns: ["id"]
+          },
+          {
+            foreignKeyName: "transactions_reversal_of_transaction_id_fkey"
+            columns: ["reversal_of_transaction_id"]
+            isOneToOne: false
+            referencedRelation: "transactions"
             referencedColumns: ["id"]
           },
           {
