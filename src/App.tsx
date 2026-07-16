@@ -4,6 +4,9 @@ import { TooltipProvider } from "@/components/ui/tooltip";
 import { QueryClient, QueryClientProvider } from "@tanstack/react-query";
 import { BrowserRouter, Routes, Route, Navigate } from "react-router-dom";
 import { AuthProvider } from "./contexts/AuthContext";
+import { DataProvider } from "./context/DataContext";
+import { StableDataProvider } from "./context/StableDataContext";
+import { TenantSettingsProvider } from "./contexts/TenantSettingsContext";
 import ProtectedRoute from "./components/ProtectedRoute";
 import Index from "./pages/Index";
 import Auth from "./pages/Auth";
@@ -58,7 +61,13 @@ const App = () => (
 
             <Route path="/admin" element={
               <ProtectedRoute requiredRole="admin">
-                <Admin />
+                <TenantSettingsProvider>
+                  <DataProvider>
+                    <StableDataProvider>
+                      <Admin />
+                    </StableDataProvider>
+                  </DataProvider>
+                </TenantSettingsProvider>
               </ProtectedRoute>
             } />
 
