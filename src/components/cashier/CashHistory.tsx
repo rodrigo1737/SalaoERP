@@ -20,6 +20,16 @@ import { Button } from '@/components/ui/button';
 import { Badge } from '@/components/ui/badge';
 import { Tabs, TabsContent, TabsList, TabsTrigger } from '@/components/ui/tabs';
 import { Input } from '@/components/ui/input';
+import { Textarea } from '@/components/ui/textarea';
+import { Label } from '@/components/ui/label';
+import {
+  Dialog,
+  DialogContent,
+  DialogDescription,
+  DialogFooter,
+  DialogHeader,
+  DialogTitle,
+} from '@/components/ui/dialog';
 import { useData, CashSession, Transaction } from '@/context/DataContext';
 import { useAuth } from '@/contexts/AuthContext';
 import { cn } from '@/lib/utils';
@@ -150,8 +160,10 @@ export function CashHistory({ onBack }: CashHistoryProps) {
     currentCashSession,
     pendingCashSession,
     selectedHistoricalCashSession,
-    selectHistoricalCashSession,
-    clearHistoricalCashSession,
+    activeCashRegularization,
+    startHistoricalCashRegularization,
+    finishHistoricalCashRegularization,
+    cancelHistoricalCashRegularization,
     reverseTransaction,
     loading,
   } = useData();
@@ -172,6 +184,66 @@ export function CashHistory({ onBack }: CashHistoryProps) {
   const [appointmentProvisionRows, setAppointmentProvisionRows] = useState<AppointmentProvisionRow[]>([]);
   const [serviceProvisionMappings, setServiceProvisionMappings] = useState<ServiceProfessionalProvisionRow[]>([]);
   const [provisionLoading, setProvisionLoading] = useState(false);
+  const [regularizationToStart, setRegularizationToStart] = useState<CashSession | null>(null);
+  const [regularizationReason, setRegularizationReason] = useState('Baixa de comanda antiga');
+  const [isStartRegularizationOpen, setIsStartRegularizationOpen] = useState(false);
+  const [isFinishRegularizationOpen, setIsFinishRegularizationOpen] = useState(false);
+  const [closingBalance, setClosingBalance] = useState('');
+  const [divergenceReason, setDivergenceReason] = useState('');
+  const [regularizationActionLoading, setRegularizationActionLoading] = useState(false);
+
+  const historicalExpectedCash = useMemo(() => {
+    if (!selectedHistoricalCashSession) return 0;
+    return Math.round((selectedHistoricalCashSession.opening_balance + transactions
+      .filter((transaction) => (
+        transaction.cash_session_id === selectedHistoricalCashSession.id
+        && transaction.payment_method === 'cash'
+        && !transaction.reversed_at
+      ))
+      .reduce((total, transaction) => total + (transaction.type === 'income' ? transaction.amount : -transaction.amount), 0)) * 100) / 100;
+  }, [selectedHistoricalCashSession, transactions]);
+
+  const parsedClosingBalance = Number(closingBalance);
+  const hasHistoricalDivergence = Number.isFinite(parsedClosingBalance)
+    && Math.abs(parsedClosingBalance - historicalExpectedCash) > 0.01;
+
+  const openStartRegularizationDialog = (session: CashSession) => {
+    setRegularizationToStart(session);
+    setRegularizationReason('Baixa de comanda antiga');
+    setIsStartRegularizationOpen(true);
+  };
+
+  const submitStartRegularization = async () => {
+    if (!regularizationToStart || regularizationReason.trim().length < 5) return;
+    setRegularizationActionLoading(true);
+    const result = await startHistoricalCashRegularization(
+      regularizationToStart.id,
+      regularizationReason.trim(),
+    );
+    setRegularizationActionLoading(false);
+    if (result) {
+      setIsStartRegularizationOpen(false);
+      setRegularizationToStart(null);
+    }
+  };
+
+  const openFinishRegularizationDialog = () => {
+    setClosingBalance('');
+    setDivergenceReason('');
+    setIsFinishRegularizationOpen(true);
+  };
+
+  const submitFinishRegularization = async () => {
+    if (!Number.isFinite(parsedClosingBalance) || parsedClosingBalance < 0) return;
+    if (hasHistoricalDivergence && divergenceReason.trim().length < 5) return;
+    setRegularizationActionLoading(true);
+    const finished = await finishHistoricalCashRegularization(
+      parsedClosingBalance,
+      hasHistoricalDivergence ? divergenceReason.trim() : undefined,
+    );
+    setRegularizationActionLoading(false);
+    if (finished) setIsFinishRegularizationOpen(false);
+  };
 
   const normalizedSearch = search.trim().toLowerCase();
   const transactionsBySessionId = useMemo(() => {
@@ -573,9 +645,14 @@ export function CashHistory({ onBack }: CashHistoryProps) {
                 <strong>{formatDate(selectedHistoricalCashSession.opened_at)}</strong>, preservando a data financeira daquele caixa.
               </p>
             </div>
-            <Button variant="outline" onClick={clearHistoricalCashSession}>
-              Encerrar regularização
-            </Button>
+            <div className="flex flex-wrap gap-2">
+              <Button variant="outline" onClick={() => void cancelHistoricalCashRegularization()}>
+                Cancelar regularização
+              </Button>
+              <Button onClick={openFinishRegularizationDialog}>
+                Finalizar regularização
+              </Button>
+            </div>
           </div>
         </Card>
       ) : null}
@@ -785,19 +862,19 @@ export function CashHistory({ onBack }: CashHistoryProps) {
                           variant={selectedHistoricalCashSession?.id === session.id ? 'default' : 'outline'}
                           onClick={() => {
                             if (selectedHistoricalCashSession?.id === session.id) {
-                              clearHistoricalCashSession();
+                              openFinishRegularizationDialog();
                               return;
                             }
-                            selectHistoricalCashSession(session.id);
+                            openStartRegularizationDialog(session);
                           }}
                         >
                           <RotateCcw className="mr-2 h-4 w-4" />
                           {selectedHistoricalCashSession?.id === session.id
-                            ? 'Caixa em regularização'
-                            : 'Reabrir para regularização'}
+                            ? 'Finalizar regularização'
+                            : 'Iniciar regularização'}
                         </Button>
                         <span className="text-sm text-muted-foreground">
-                          Permite baixar comandas antigas neste caixa sem reabrir o caixa do dia.
+                          Permite baixar comandas antigas neste caixa sem abrir uma segunda sessão de caixa.
                         </span>
                       </div>
                     ) : null}
@@ -1063,6 +1140,108 @@ export function CashHistory({ onBack }: CashHistoryProps) {
           )}
         </TabsContent>
       </Tabs>
+
+      <Dialog
+        open={isStartRegularizationOpen}
+        onOpenChange={(open) => {
+          setIsStartRegularizationOpen(open);
+          if (!open) setRegularizationToStart(null);
+        }}
+      >
+        <DialogContent className="sm:max-w-lg">
+          <DialogHeader>
+            <DialogTitle>Iniciar regularização histórica</DialogTitle>
+            <DialogDescription>
+              O caixa de {regularizationToStart ? formatDate(regularizationToStart.opened_at) : '--'} continuará fechado.
+              A regularização autoriza somente as baixas administrativas vinculadas a esse período.
+            </DialogDescription>
+          </DialogHeader>
+          <div className="space-y-2">
+            <Label htmlFor="historicalRegularizationReason">Motivo da regularização *</Label>
+            <Textarea
+              id="historicalRegularizationReason"
+              value={regularizationReason}
+              onChange={(event) => setRegularizationReason(event.target.value)}
+              placeholder="Ex.: baixar comandas importadas do dia anterior"
+              rows={3}
+            />
+            <p className="text-xs text-muted-foreground">Informe ao menos 5 caracteres para manter a auditoria do processo.</p>
+          </div>
+          <DialogFooter>
+            <Button variant="outline" onClick={() => setIsStartRegularizationOpen(false)} disabled={regularizationActionLoading}>
+              Cancelar
+            </Button>
+            <Button
+              onClick={() => void submitStartRegularization()}
+              disabled={regularizationActionLoading || regularizationReason.trim().length < 5}
+            >
+              {regularizationActionLoading ? 'Iniciando...' : 'Iniciar regularização'}
+            </Button>
+          </DialogFooter>
+        </DialogContent>
+      </Dialog>
+
+      <Dialog
+        open={isFinishRegularizationOpen}
+        onOpenChange={(open) => {
+          setIsFinishRegularizationOpen(open);
+          if (!open) {
+            setClosingBalance('');
+            setDivergenceReason('');
+          }
+        }}
+      >
+        <DialogContent className="sm:max-w-lg">
+          <DialogHeader>
+            <DialogTitle>Finalizar regularização histórica</DialogTitle>
+            <DialogDescription>
+              Informe o saldo físico contado do caixa de {selectedHistoricalCashSession ? formatDate(selectedHistoricalCashSession.opened_at) : '--'}.
+              O saldo calculado em dinheiro será conciliado antes do encerramento.
+            </DialogDescription>
+          </DialogHeader>
+          <div className="space-y-4">
+            <div className="rounded-xl border border-border/60 bg-secondary/30 px-4 py-3 text-sm">
+              <span className="text-muted-foreground">Saldo calculado em dinheiro: </span>
+              <strong className="text-foreground">{formatCurrency(historicalExpectedCash)}</strong>
+            </div>
+            <div className="space-y-2">
+              <Label htmlFor="historicalClosingBalance">Saldo físico contado (R$) *</Label>
+              <Input
+                id="historicalClosingBalance"
+                type="number"
+                min="0"
+                step="0.01"
+                value={closingBalance}
+                onChange={(event) => setClosingBalance(event.target.value)}
+                placeholder="0,00"
+              />
+            </div>
+            {hasHistoricalDivergence ? (
+              <div className="space-y-2">
+                <Label htmlFor="historicalDivergenceReason">Justificativa da divergência *</Label>
+                <Textarea
+                  id="historicalDivergenceReason"
+                  value={divergenceReason}
+                  onChange={(event) => setDivergenceReason(event.target.value)}
+                  placeholder="Explique a diferença encontrada na conferência"
+                  rows={3}
+                />
+              </div>
+            ) : null}
+          </div>
+          <DialogFooter>
+            <Button variant="outline" onClick={() => setIsFinishRegularizationOpen(false)} disabled={regularizationActionLoading}>
+              Cancelar
+            </Button>
+            <Button
+              onClick={() => void submitFinishRegularization()}
+              disabled={regularizationActionLoading || !Number.isFinite(parsedClosingBalance) || parsedClosingBalance < 0 || (hasHistoricalDivergence && divergenceReason.trim().length < 5)}
+            >
+              {regularizationActionLoading ? 'Finalizando...' : 'Finalizar e registrar auditoria'}
+            </Button>
+          </DialogFooter>
+        </DialogContent>
+      </Dialog>
 
       {canReverseFinancialEntries ? (
         <div className="flex items-start gap-3 rounded-2xl border border-amber-200 bg-amber-50/80 px-4 py-3 text-sm text-amber-900">

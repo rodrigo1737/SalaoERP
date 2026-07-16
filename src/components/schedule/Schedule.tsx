@@ -176,7 +176,10 @@ export function Schedule() {
   const restrictToOwnProfessional = effectiveScope === 'own' && !!currentProfessional;
   const canCloseBill = isAdmin || hasPermission('close_bill') || hasPermission('manage_cash_flow');
   const canRefundBill = isAdmin || hasPermission('refund_bill') || hasPermission('reverse_financial_entries');
-  const selectedHistoricalCashSessionId = isAdmin ? selectedHistoricalCashSession?.id ?? null : null;
+  const canPerformAdvancedFinancialOps = isAdmin || hasPermission('reverse_financial_entries');
+  const selectedHistoricalCashSessionId = canPerformAdvancedFinancialOps
+    ? selectedHistoricalCashSession?.id ?? null
+    : null;
 
   const scheduleProfessionals = professionals.filter(p => p.is_active && p.has_schedule);
 
@@ -751,7 +754,7 @@ export function Schedule() {
 
     // Admin pode faturar com caixa pendente: o movimento entra na sessão
     // aberta de data anterior com a data do próprio lançamento.
-    if (cashState.pendingCashSession && !isAdmin) {
+    if (cashState.pendingCashSession && !isAdmin && !canPerformAdvancedFinancialOps && !selectedHistoricalCashSessionId) {
       toast({
         variant: "destructive",
         title: "Caixa pendente",
@@ -760,7 +763,7 @@ export function Schedule() {
       return;
     }
 
-    if (!cashState.currentCashSession && !(isAdmin && (cashState.pendingCashSession || selectedHistoricalCashSessionId))) {
+    if (!cashState.currentCashSession && !(canPerformAdvancedFinancialOps && (cashState.pendingCashSession || selectedHistoricalCashSessionId))) {
       toast({
         variant: "destructive",
         title: "Caixa fechado",
@@ -769,12 +772,12 @@ export function Schedule() {
       return;
     }
 
-    if (isAdmin && selectedHistoricalCashSession) {
+    if (canPerformAdvancedFinancialOps && selectedHistoricalCashSession) {
       toast({
         title: "Regularização em andamento",
         description: `A comanda será lançada no caixa de ${new Date(selectedHistoricalCashSession.opened_at).toLocaleDateString('pt-BR')}.`,
       });
-    } else if (isAdmin && cashState.pendingCashSession && !cashState.currentCashSession) {
+    } else if (canPerformAdvancedFinancialOps && cashState.pendingCashSession && !cashState.currentCashSession) {
       toast({
         title: "Caixa pendente em uso",
         description: "A comanda será lançada no caixa aberto de data anterior, com a data de hoje no movimento."
@@ -967,7 +970,7 @@ export function Schedule() {
 
     const cashState = await ensureCashSessionState();
 
-    if (cashState.pendingCashSession && !isAdmin) {
+    if (cashState.pendingCashSession && !isAdmin && !canPerformAdvancedFinancialOps && !selectedHistoricalCashSessionId) {
       toast({
         variant: "destructive",
         title: "Caixa pendente",
@@ -976,7 +979,7 @@ export function Schedule() {
       return;
     }
 
-    if (!cashState.currentCashSession && !(isAdmin && (cashState.pendingCashSession || selectedHistoricalCashSessionId))) {
+    if (!cashState.currentCashSession && !(canPerformAdvancedFinancialOps && (cashState.pendingCashSession || selectedHistoricalCashSessionId))) {
       toast({
         variant: "destructive",
         title: "Caixa fechado",

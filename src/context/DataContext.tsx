@@ -179,6 +179,24 @@ export interface CashSession {
   created_at: string;
 }
 
+export interface CashSessionRegularization {
+  id: string;
+  tenant_id: string;
+  cash_session_id: string;
+  status: 'active' | 'closed' | 'cancelled';
+  reason: string;
+  started_by: string;
+  started_at: string;
+  ended_by?: string | null;
+  ended_at?: string | null;
+  ended_reason?: string | null;
+  closing_balance?: number | null;
+  expected_balance?: number | null;
+  difference?: number | null;
+  divergence_reason?: string | null;
+  created_at: string;
+}
+
 export interface Transaction {
   id: string;
   cash_session_id?: string;
@@ -203,6 +221,7 @@ export interface Commission {
   appointment_id?: string;
   service_id?: string;
   transaction_id?: string;
+  cash_session_id?: string | null;
   payment_method?: 'cash' | 'pix' | 'transfer' | null;
   type: 'service' | 'product' | 'voucher';
   base_value: number;
@@ -285,6 +304,7 @@ interface DataContextType {
   currentCashSession: CashSession | null;
   pendingCashSession: CashSession | null;
   selectedHistoricalCashSession: CashSession | null;
+  activeCashRegularization: CashSessionRegularization | null;
   loading: boolean;
   cashLoading: boolean;
   transactionsLoading: boolean;
@@ -346,8 +366,11 @@ interface DataContextType {
     notes?: string,
     options?: { sessionId?: string; divergenceReason?: string },
   ) => Promise<void>;
-  selectHistoricalCashSession: (sessionId: string | null) => void;
+  selectHistoricalCashSession: (sessionId: string | null, reason?: string) => void;
   clearHistoricalCashSession: () => void;
+  startHistoricalCashRegularization: (sessionId: string, reason?: string) => Promise<CashSessionRegularization | null>;
+  finishHistoricalCashRegularization: (closingBalance: number, divergenceReason?: string) => Promise<boolean>;
+  cancelHistoricalCashRegularization: (reason?: string) => Promise<boolean>;
   addTransaction: (transaction: Omit<Transaction, 'id' | 'created_at'>) => Promise<Transaction | null>;
   reverseTransaction: (transactionId: string, reason?: string) => Promise<boolean>;
   // Commissions
@@ -472,7 +495,7 @@ export const DataProvider: React.FC<{ children: ReactNode }> = ({ children }) =>
   const [commissions, setCommissions] = useState<Commission[]>([]);
   const [currentCashSession, setCurrentCashSession] = useState<CashSession | null>(null);
   const [pendingCashSession, setPendingCashSession] = useState<CashSession | null>(null);
-  const [selectedHistoricalCashSessionId, setSelectedHistoricalCashSessionId] = useState<string | null>(null);
+  const [activeCashRegularization, setActiveCashRegularization] = useState<CashSessionRegularization | null>(null);
   const [cashLoading, setCashLoading] = useState(true);
   const [transactionsLoading, setTransactionsLoading] = useState(true);
   const realtimeChannelRef = useRef<ReturnType<typeof supabase.channel> | null>(null);
@@ -498,8 +521,8 @@ export const DataProvider: React.FC<{ children: ReactNode }> = ({ children }) =>
     || hasPermission('view_commissions')
     || hasPermission('view_financial_history')
     || hasPermission('reverse_financial_entries');
-  const selectedHistoricalCashSession = selectedHistoricalCashSessionId
-    ? cashSessions.find((session) => session.id === selectedHistoricalCashSessionId) ?? null
+  const selectedHistoricalCashSession = activeCashRegularization
+    ? cashSessions.find((session) => session.id === activeCashRegularization.cash_session_id) ?? null
     : null;
 
   const applyCashSessionsState = (cashData: CashSession[]) => {
@@ -510,14 +533,7 @@ export const DataProvider: React.FC<{ children: ReactNode }> = ({ children }) =>
   };
 
   useEffect(() => {
-    if (!selectedHistoricalCashSessionId) return;
-    if (!cashSessions.some((session) => session.id === selectedHistoricalCashSessionId)) {
-      setSelectedHistoricalCashSessionId(null);
-    }
-  }, [cashSessions, selectedHistoricalCashSessionId]);
-
-  useEffect(() => {
-    setSelectedHistoricalCashSessionId(null);
+    setActiveCashRegularization(null);
   }, [tenantId]);
 
   const fetchAllPages = async <T,>(queryFactory: () => any): Promise<T[]> => {
@@ -611,6 +627,23 @@ export const DataProvider: React.FC<{ children: ReactNode }> = ({ children }) =>
     );
   };
 
+  const fetchActiveCashRegularization = async (): Promise<CashSessionRegularization | null> => {
+    if (!tenantId || !canViewCashData) return null;
+    const { data, error } = await (supabase as any)
+      .from('cash_session_regularizations')
+      .select('*')
+      .eq('tenant_id', tenantId)
+      .eq('status', 'active')
+      .maybeSingle();
+    if (error) {
+      // Compatibilidade durante o deploy: a tela continua carregando o caixa
+      // legado caso a migration ainda nao tenha chegado ao ambiente remoto.
+      console.error('Erro ao consultar regularizacao ativa:', error);
+      return null;
+    }
+    return (data as CashSessionRegularization | null) ?? null;
+  };
+
   const fetchTransactions = async () => {
     if (!tenantId) return [];
     return fetchAllPages<Transaction>(() =>
@@ -687,6 +720,7 @@ export const DataProvider: React.FC<{ children: ReactNode }> = ({ children }) =>
       setCommissions([]);
       setCurrentCashSession(null);
       setPendingCashSession(null);
+      setActiveCashRegularization(null);
       setCashLoading(false);
       setTransactionsLoading(false);
       setLoading(false);
@@ -705,6 +739,7 @@ export const DataProvider: React.FC<{ children: ReactNode }> = ({ children }) =>
       setCashSessions([]);
       setCurrentCashSession(null);
       setPendingCashSession(null);
+      setActiveCashRegularization(null);
       setTransactions([]);
       setCommissions([]);
     }
@@ -714,10 +749,13 @@ export const DataProvider: React.FC<{ children: ReactNode }> = ({ children }) =>
       // O caixa é resolvido em paralelo e aplicado assim que responder: a
       // tabela é pequena e o estado do caixa não pode esperar o download de
       // transações/agendamentos/comissões (potencialmente lento).
-      const cashFetchPromise = (!isCleaningTenant && canViewCashData ? fetchCash() : Promise.resolve([] as CashSession[]))
-        .then(async (cashData) => {
+      const cashFetchPromise = (!isCleaningTenant && canViewCashData
+        ? Promise.all([fetchCash(), fetchActiveCashRegularization()])
+        : Promise.resolve([[] as CashSession[], null] as const))
+        .then(async ([cashData, regularization]) => {
           if (requestId !== fetchRequestRef.current) return;
           applyCashSessionsState(cashData);
+          setActiveCashRegularization(regularization);
 
           // As movimentações da sessão aberta chegam junto com o estado do
           // caixa (consulta pequena e indexada); o histórico completo continua
@@ -1137,6 +1175,13 @@ export const DataProvider: React.FC<{ children: ReactNode }> = ({ children }) =>
         toast.error('Somente administradores ou usuários financeiros podem regularizar comandas em caixas históricos.');
         return null;
       }
+      if (
+        historicalTargetSession.status === 'closed'
+        && activeCashRegularization?.cash_session_id !== historicalTargetSession.id
+      ) {
+        toast.error('Inicie a regularização deste caixa antes de lançar a comanda antiga.');
+        return null;
+      }
       return historicalTargetSession;
     }
 
@@ -1165,27 +1210,103 @@ export const DataProvider: React.FC<{ children: ReactNode }> = ({ children }) =>
     return candidateSession;
   };
 
-  const selectHistoricalCashSession = (sessionId: string | null) => {
-    if (!sessionId) {
-      setSelectedHistoricalCashSessionId(null);
-      return;
+  const startHistoricalCashRegularization = async (
+    sessionId: string,
+    reason = 'Regularizacao retroativa de comanda antiga',
+  ): Promise<CashSessionRegularization | null> => {
+    if (!canPerformAdvancedFinancialOps) {
+      toast.error('Somente administradores ou usuários financeiros podem regularizar caixas antigos.');
+      return null;
     }
 
     const targetSession = cashSessions.find((session) => session.id === sessionId) ?? null;
     if (!targetSession) {
       toast.error('Não foi possível localizar o caixa selecionado para regularização.');
-      return;
+      return null;
     }
-    if (!canPerformAdvancedFinancialOps) {
-      toast.error('Somente administradores ou usuários financeiros podem regularizar caixas antigos.');
-      return;
+    if (targetSession.status !== 'closed') {
+      toast.error('Somente caixas fechados podem entrar em regularização retroativa.');
+      return null;
+    }
+    if (activeCashRegularization && activeCashRegularization.cash_session_id !== sessionId) {
+      toast.error('Já existe outra regularização retroativa ativa para este cliente.');
+      return null;
     }
 
-    setSelectedHistoricalCashSessionId(sessionId);
+    const { data, error } = await (supabase as any).rpc('start_cash_session_regularization', {
+      _cash_session_id: sessionId,
+      _reason: reason,
+    });
+    if (error) {
+      console.error('Erro ao iniciar regularização retroativa:', error);
+      toast.error(error.message || 'Não foi possível iniciar a regularização retroativa.');
+      return null;
+    }
+
+    const regularization = (data?.id ? data : data?.[0]) as CashSessionRegularization | undefined;
+    if (!regularization) {
+      toast.error('A regularização não retornou um identificador válido.');
+      return null;
+    }
+    setActiveCashRegularization(regularization);
+    toast.success('Regularização retroativa iniciada.');
+    return regularization;
+  };
+
+  const finishHistoricalCashRegularization = async (
+    closingBalance: number,
+    divergenceReason?: string,
+  ): Promise<boolean> => {
+    if (!activeCashRegularization) {
+      toast.error('Não existe regularização retroativa ativa.');
+      return false;
+    }
+    const { data, error } = await (supabase as any).rpc('finish_cash_session_regularization', {
+      _regularization_id: activeCashRegularization.id,
+      _closing_balance: closingBalance,
+      _divergence_reason: divergenceReason ?? null,
+    });
+    if (error) {
+      console.error('Erro ao finalizar regularização retroativa:', error);
+      toast.error(error.message || 'Não foi possível finalizar a regularização retroativa.');
+      return false;
+    }
+    setActiveCashRegularization(null);
+    await refreshData(['cash']);
+    toast.success('Regularização retroativa finalizada.');
+    return Boolean(data);
+  };
+
+  const cancelHistoricalCashRegularization = async (
+    reason = 'Regularização encerrada pelo operador',
+  ): Promise<boolean> => {
+    if (!activeCashRegularization) return true;
+    const { error } = await (supabase as any).rpc('cancel_cash_session_regularization', {
+      _regularization_id: activeCashRegularization.id,
+      _reason: reason,
+    });
+    if (error) {
+      console.error('Erro ao cancelar regularização retroativa:', error);
+      toast.error(error.message || 'Não foi possível encerrar a regularização retroativa.');
+      return false;
+    }
+    setActiveCashRegularization(null);
+    toast.success('Regularização retroativa encerrada.');
+    return true;
+  };
+
+  // Compatibilidade com os componentes existentes: o antigo seletor local
+  // agora inicia uma operação persistida no banco, e não apenas estado React.
+  const selectHistoricalCashSession = (sessionId: string | null, reason?: string) => {
+    if (!sessionId) {
+      void cancelHistoricalCashRegularization();
+      return;
+    }
+    void startHistoricalCashRegularization(sessionId, reason);
   };
 
   const clearHistoricalCashSession = () => {
-    setSelectedHistoricalCashSessionId(null);
+    void cancelHistoricalCashRegularization();
   };
 
   const createReversalTransaction = async (
@@ -1989,7 +2110,7 @@ export const DataProvider: React.FC<{ children: ReactNode }> = ({ children }) =>
     if (!guardFinancialPermission(canCloseBill, 'Você não tem permissão para receber e encerrar comandas.')) return null;
     // Admin pode faturar comandas mesmo com caixa pendente de data anterior:
     // o movimento entra na sessão aberta com a data do próprio lançamento.
-    if (pendingCashSession && !isAdminUser) {
+    if (pendingCashSession && !canPerformAdvancedFinancialOps && !activeCashRegularization) {
       toast.error('Existe um caixa pendente de data anterior. Regularize o fechamento antes de receber novas comandas.');
       return null;
     }
@@ -2046,6 +2167,15 @@ export const DataProvider: React.FC<{ children: ReactNode }> = ({ children }) =>
       .limit(1)
       .maybeSingle();
 
+    const billingSession = getBillingTargetSession({
+      cashSessionId: options?.cashSessionId ?? null,
+      appointmentDate: options?.movementDate ?? appointment.start_time,
+      requireActiveCash: false,
+    });
+    if ((options?.cashSessionId || activeCashRegularization) && !billingSession) {
+      return null;
+    }
+
     const appointmentUpdate: Record<string, unknown> = { status: 'completed' };
     if (overrides?.total_value !== undefined) appointmentUpdate.total_value = overrides.total_value;
     if (overrides?.notes !== undefined) appointmentUpdate.notes = overrides.notes;
@@ -2081,11 +2211,6 @@ export const DataProvider: React.FC<{ children: ReactNode }> = ({ children }) =>
       transactionId = persistedPaymentTx?.id;
     }
 
-    const billingSession = getBillingTargetSession({
-      cashSessionId: options?.cashSessionId ?? null,
-      appointmentDate: options?.movementDate ?? appointment.start_time,
-      requireActiveCash: false,
-    });
     const billSettlementKinds = commissionLines
       .map((line) => resolvedCommissionMappings.get(`${line.service_id}:${line.professional_id}`)?.settlement_kind)
       .filter(Boolean) as CommissionSettlementKind[];
@@ -2139,6 +2264,7 @@ export const DataProvider: React.FC<{ children: ReactNode }> = ({ children }) =>
           appointment_id: id,
           service_id: line.service_id,
           transaction_id: transactionId,
+          cash_session_id: billingSession?.id ?? null,
           type: 'service',
           base_value: line.value,
           commission_rate: commissionRate,
@@ -2915,6 +3041,7 @@ export const DataProvider: React.FC<{ children: ReactNode }> = ({ children }) =>
     const { data: commissionRow, error: commError } = await supabase.from('commissions').insert({
       professional_id: professionalId,
       transaction_id: txData?.id,
+      cash_session_id: targetSession.id,
       type: 'voucher',
       base_value: amount,
       commission_rate: 100,
@@ -3205,7 +3332,8 @@ export const DataProvider: React.FC<{ children: ReactNode }> = ({ children }) =>
   return (
     <DataContext.Provider value={{
       clients, professionals, services, products, appointments,
-      cashSessions, transactions, commissions, currentCashSession, pendingCashSession, selectedHistoricalCashSession, loading, cashLoading, transactionsLoading,
+      cashSessions, transactions, commissions, currentCashSession, pendingCashSession, selectedHistoricalCashSession,
+      activeCashRegularization, loading, cashLoading, transactionsLoading,
       ensureCashSessionState,
       refreshData,
       addClient, updateClient, deleteClient,
@@ -3215,7 +3343,9 @@ export const DataProvider: React.FC<{ children: ReactNode }> = ({ children }) =>
       addAppointment, updateAppointment, deleteAppointment, refundAppointment, completeAppointment,
       fetchAppointmentServices, saveAppointmentServices,
       fetchClientBalances, registerBillPayments,
-      openCashSession, closeCashSession, selectHistoricalCashSession, clearHistoricalCashSession, addTransaction, reverseTransaction,
+      openCashSession, closeCashSession, selectHistoricalCashSession, clearHistoricalCashSession,
+      startHistoricalCashRegularization, finishHistoricalCashRegularization, cancelHistoricalCashRegularization,
+      addTransaction, reverseTransaction,
       payCommission, payAllCommissions, addVoucher, reprocessPendingCommissions, previewReprocessPendingCommissions,
     }}>
       {children}

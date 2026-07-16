@@ -448,6 +448,7 @@ export type Database = {
         Row: {
           appointment_id: string | null
           base_value: number
+          cash_session_id: string | null
           calculation_source: string
           commission_rate: number
           commission_value: number
@@ -470,6 +471,7 @@ export type Database = {
         Insert: {
           appointment_id?: string | null
           base_value: number
+          cash_session_id?: string | null
           calculation_source?: string
           commission_rate: number
           commission_value: number
@@ -492,6 +494,7 @@ export type Database = {
         Update: {
           appointment_id?: string | null
           base_value?: number
+          cash_session_id?: string | null
           calculation_source?: string
           commission_rate?: number
           commission_value?: number
@@ -517,6 +520,13 @@ export type Database = {
             columns: ["appointment_id"]
             isOneToOne: false
             referencedRelation: "appointments"
+            referencedColumns: ["id"]
+          },
+          {
+            foreignKeyName: "commissions_cash_session_id_fkey"
+            columns: ["cash_session_id"]
+            isOneToOne: false
+            referencedRelation: "cash_sessions"
             referencedColumns: ["id"]
           },
           {

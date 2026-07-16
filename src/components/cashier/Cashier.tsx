@@ -69,7 +69,7 @@ export function Cashier() {
     transactionsLoading,
     openCashSession,
     closeCashSession,
-    clearHistoricalCashSession,
+    cancelHistoricalCashRegularization,
     addTransaction,
     addVoucher,
   } = useData();
@@ -462,8 +462,8 @@ export function Cashier() {
               </p>
             </div>
             {canPerformAdvancedFinancialOps ? (
-              <Button variant="outline" onClick={clearHistoricalCashSession}>
-                Encerrar regularização
+              <Button variant="outline" onClick={() => void cancelHistoricalCashRegularization()}>
+                Cancelar regularização
               </Button>
             ) : null}
           </div>
