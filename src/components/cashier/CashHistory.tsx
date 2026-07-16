@@ -149,6 +149,9 @@ export function CashHistory({ onBack }: CashHistoryProps) {
     commissions,
     currentCashSession,
     pendingCashSession,
+    selectedHistoricalCashSession,
+    selectHistoricalCashSession,
+    clearHistoricalCashSession,
     reverseTransaction,
     loading,
   } = useData();
@@ -160,6 +163,7 @@ export function CashHistory({ onBack }: CashHistoryProps) {
   const canReverseFinancialEntries = userRole === 'admin'
     || hasPermission('refund_bill')
     || hasPermission('reverse_financial_entries');
+  const canRegularizeHistoricalCash = userRole === 'admin' || hasPermission('reverse_financial_entries');
 
   const [tab, setTab] = useState('sessions');
   const [dateFrom, setDateFrom] = useState(() => currentMonthRange().from);
@@ -559,6 +563,23 @@ export function CashHistory({ onBack }: CashHistoryProps) {
         )}
       </div>
 
+      {selectedHistoricalCashSession ? (
+        <Card className="border border-warning/30 bg-warning-soft/30 px-4 py-4 shadow-sm">
+          <div className="flex flex-col gap-3 lg:flex-row lg:items-center lg:justify-between">
+            <div className="space-y-1">
+              <p className="text-sm font-medium text-foreground">Regularização histórica ativa</p>
+              <p className="text-sm text-muted-foreground">
+                Novas baixas administrativas de comanda serão lançadas no caixa de{' '}
+                <strong>{formatDate(selectedHistoricalCashSession.opened_at)}</strong>, preservando a data financeira daquele caixa.
+              </p>
+            </div>
+            <Button variant="outline" onClick={clearHistoricalCashSession}>
+              Encerrar regularização
+            </Button>
+          </div>
+        </Card>
+      ) : null}
+
       <div className="grid gap-4 md:grid-cols-2 xl:grid-cols-5">
         <Card className="p-4 border-0 shadow-md">
           <div className="flex items-center justify-between mb-2">
@@ -757,6 +778,29 @@ export function CashHistory({ onBack }: CashHistoryProps) {
                         </div>
                       </div>
                     </div>
+
+                    {canRegularizeHistoricalCash && session.status === 'closed' ? (
+                      <div className="flex flex-wrap items-center gap-3">
+                        <Button
+                          variant={selectedHistoricalCashSession?.id === session.id ? 'default' : 'outline'}
+                          onClick={() => {
+                            if (selectedHistoricalCashSession?.id === session.id) {
+                              clearHistoricalCashSession();
+                              return;
+                            }
+                            selectHistoricalCashSession(session.id);
+                          }}
+                        >
+                          <RotateCcw className="mr-2 h-4 w-4" />
+                          {selectedHistoricalCashSession?.id === session.id
+                            ? 'Caixa em regularização'
+                            : 'Reabrir para regularização'}
+                        </Button>
+                        <span className="text-sm text-muted-foreground">
+                          Permite baixar comandas antigas neste caixa sem reabrir o caixa do dia.
+                        </span>
+                      </div>
+                    ) : null}
 
                     {session.notes ? (
                       <div className="rounded-xl border border-border/60 bg-background/60 px-4 py-3 text-sm text-muted-foreground">

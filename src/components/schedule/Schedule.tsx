@@ -127,7 +127,27 @@ const normalizeText = (value?: string | null) => {
 };
 
 export function Schedule() {
-  const { clients, professionals, services, products, appointments, loading, addClient, addService, addAppointment, updateAppointment, deleteAppointment, refundAppointment, ensureCashSessionState, completeAppointment, fetchAppointmentServices, saveAppointmentServices, fetchClientBalances, registerBillPayments } = useData();
+  const {
+    clients,
+    professionals,
+    services,
+    products,
+    appointments,
+    loading,
+    addClient,
+    addService,
+    addAppointment,
+    updateAppointment,
+    deleteAppointment,
+    refundAppointment,
+    ensureCashSessionState,
+    completeAppointment,
+    fetchAppointmentServices,
+    saveAppointmentServices,
+    fetchClientBalances,
+    registerBillPayments,
+    selectedHistoricalCashSession,
+  } = useData();
   const { settings: tenantSettings } = useTenantSettings();
   const navigate = useNavigate();
 
@@ -156,6 +176,7 @@ export function Schedule() {
   const restrictToOwnProfessional = effectiveScope === 'own' && !!currentProfessional;
   const canCloseBill = isAdmin || hasPermission('close_bill') || hasPermission('manage_cash_flow');
   const canRefundBill = isAdmin || hasPermission('refund_bill') || hasPermission('reverse_financial_entries');
+  const selectedHistoricalCashSessionId = isAdmin ? selectedHistoricalCashSession?.id ?? null : null;
 
   const scheduleProfessionals = professionals.filter(p => p.is_active && p.has_schedule);
 
@@ -225,6 +246,27 @@ export function Schedule() {
   const [newServiceCategory, setNewServiceCategory] = useState('Outros');
   const [editValue, setEditValue] = useState('');
   const [editDuration, setEditDuration] = useState('');
+
+  const fetchServiceLinks = useCallback(async () => {
+    if (!tenantId || isCleaningTenant) {
+      setServiceProfessionalLinks([]);
+      return [];
+    }
+
+    const { data, error } = await supabase
+      .from('service_professionals')
+      .select('id, service_id, professional_id, commission_rate, assistant_commission_rate, settlement_kind, duration_minutes, tenant_id, created_at, updated_at')
+      .eq('tenant_id', tenantId);
+
+    if (error) {
+      console.error('Erro ao carregar vínculo de serviços por profissional:', error);
+      return [];
+    }
+
+    const rows = (data as ServiceProfessional[]) ?? [];
+    setServiceProfessionalLinks(rows);
+    return rows;
+  }, [isCleaningTenant, tenantId]);
 
   const clientsById = useMemo(() => new Map(clients.map((client) => [client.id, client])), [clients]);
   const professionalsById = useMemo(() => new Map(professionals.map((professional) => [professional.id, professional])), [professionals]);
@@ -335,27 +377,8 @@ export function Schedule() {
   }, [authLoading, isCleaningTenant, tenantId, currentDate, fetchScheduleAppointments]);
 
   useEffect(() => {
-    const fetchServiceLinks = async () => {
-      if (!tenantId || isCleaningTenant) {
-        setServiceProfessionalLinks([]);
-        return;
-      }
-
-      const { data, error } = await supabase
-        .from('service_professionals')
-        .select('id, service_id, professional_id, commission_rate, assistant_commission_rate, settlement_kind, duration_minutes, tenant_id, created_at, updated_at')
-        .eq('tenant_id', tenantId);
-
-      if (error) {
-        console.error('Erro ao carregar vínculo de serviços por profissional:', error);
-        return;
-      }
-
-      setServiceProfessionalLinks((data as ServiceProfessional[]) ?? []);
-    };
-
     void fetchServiceLinks();
-  }, [isCleaningTenant, tenantId]);
+  }, [fetchServiceLinks]);
 
   useEffect(() => {
     if (!selectedSlot?.professionalId || !formService) return;
@@ -737,7 +760,7 @@ export function Schedule() {
       return;
     }
 
-    if (!cashState.currentCashSession && !(isAdmin && cashState.pendingCashSession)) {
+    if (!cashState.currentCashSession && !(isAdmin && (cashState.pendingCashSession || selectedHistoricalCashSessionId))) {
       toast({
         variant: "destructive",
         title: "Caixa fechado",
@@ -746,7 +769,12 @@ export function Schedule() {
       return;
     }
 
-    if (isAdmin && cashState.pendingCashSession && !cashState.currentCashSession) {
+    if (isAdmin && selectedHistoricalCashSession) {
+      toast({
+        title: "Regularização em andamento",
+        description: `A comanda será lançada no caixa de ${new Date(selectedHistoricalCashSession.opened_at).toLocaleDateString('pt-BR')}.`,
+      });
+    } else if (isAdmin && cashState.pendingCashSession && !cashState.currentCashSession) {
       toast({
         title: "Caixa pendente em uso",
         description: "A comanda será lançada no caixa aberto de data anterior, com a data de hoje no movimento."
@@ -837,6 +865,7 @@ export function Schedule() {
 
   const findMissingCommissionMappings = (
     commissionLines: Array<{ service_id: string; professional_id: string; value: number }>,
+    links: ServiceProfessional[],
   ) => {
     const uniqueMissing = new Map<string, {
       service_id: string;
@@ -849,7 +878,7 @@ export function Schedule() {
 
     commissionLines.forEach((line) => {
       const key = `${line.service_id}:${line.professional_id}`;
-      const hasMapping = serviceProfessionalLinks.some((link) =>
+      const hasMapping = links.some((link) =>
         link.service_id === line.service_id && link.professional_id === line.professional_id);
 
       if (hasMapping || uniqueMissing.has(key)) return;
@@ -947,7 +976,7 @@ export function Schedule() {
       return;
     }
 
-    if (!cashState.currentCashSession && !(isAdmin && cashState.pendingCashSession)) {
+    if (!cashState.currentCashSession && !(isAdmin && (cashState.pendingCashSession || selectedHistoricalCashSessionId))) {
       toast({
         variant: "destructive",
         title: "Caixa fechado",
@@ -961,7 +990,9 @@ export function Schedule() {
     try {
       const baseValue = parseFloat(editValue) || selectedAppointment.total_value || 0;
       const commissionLines = buildCommissionLinesForClosing(baseValue);
-      const unresolvedMappings = findMissingCommissionMappings(commissionLines);
+      const latestLinks = await fetchServiceLinks();
+      const activeLinks = latestLinks.length > 0 ? latestLinks : serviceProfessionalLinks;
+      const unresolvedMappings = findMissingCommissionMappings(commissionLines, activeLinks);
 
       if (unresolvedMappings.length > 0) {
         setMissingMappings(unresolvedMappings);
@@ -1028,7 +1059,7 @@ export function Schedule() {
       // Comanda 100% de repasse: o dinheiro não passa pelo salão — mantém o
       // fluxo legado (sem lançamentos de pagamento no caixa do salão).
       const settlementForLine = (line: { service_id: string; professional_id: string }) =>
-        serviceProfessionalLinks.find((link) => link.service_id === line.service_id && link.professional_id === line.professional_id)?.settlement_kind
+        activeLinks.find((link) => link.service_id === line.service_id && link.professional_id === line.professional_id)?.settlement_kind
           ?? (professionalsById.get(line.professional_id)?.settlement_type === 'transfer' ? 'transfer_receivable' : 'commission_payable');
       const fullyTransfer = commissionLines.length > 0
         && commissionLines.every((line) => settlementForLine(line) === 'transfer_receivable');
@@ -1055,6 +1086,8 @@ export function Schedule() {
           clientName: selectedAppointment.client?.name,
           lines: resolvedLines,
           creditDeposit,
+          cashSessionId: selectedHistoricalCashSessionId,
+          appointmentDate: selectedAppointment.start_time,
         });
         if (!paymentsOk) return;
       }
@@ -1069,7 +1102,13 @@ export function Schedule() {
       const transactionId = await completeAppointment(selectedAppointment.id, primaryMethod, {
         total_value: mainTotal,
         notes,
-      }, { skipCommission, commissionLines: commissionLines.length > 0 ? commissionLines : undefined, skipTransaction: !fullyTransfer });
+      }, {
+        skipCommission,
+        commissionLines: commissionLines.length > 0 ? commissionLines : undefined,
+        skipTransaction: !fullyTransfer,
+        cashSessionId: selectedHistoricalCashSessionId,
+        movementDate: selectedAppointment.start_time,
+      });
 
       // Com skipTransaction (pagamento dividido) o dinheiro já entrou via
       // registerBillPayments — a ausência de transactionId não é falha.
@@ -1093,7 +1132,12 @@ export function Schedule() {
             extra.id,
             primaryMethod,
             undefined,
-            { skipCommission, skipTransaction: !fullyTransfer },
+            {
+              skipCommission,
+              skipTransaction: !fullyTransfer,
+              cashSessionId: selectedHistoricalCashSessionId,
+              movementDate: extra.start_time,
+            },
           );
           if (extra.service_id) {
             try {

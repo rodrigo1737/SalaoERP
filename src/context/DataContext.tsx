@@ -284,6 +284,7 @@ interface DataContextType {
   commissions: Commission[];
   currentCashSession: CashSession | null;
   pendingCashSession: CashSession | null;
+  selectedHistoricalCashSession: CashSession | null;
   loading: boolean;
   cashLoading: boolean;
   transactionsLoading: boolean;
@@ -318,7 +319,13 @@ interface DataContextType {
     id: string,
     paymentMethod: string,
     overrides?: Partial<Appointment>,
-    options?: { skipCommission?: boolean; commissionLines?: AppointmentServiceLine[]; skipTransaction?: boolean },
+    options?: {
+      skipCommission?: boolean;
+      commissionLines?: AppointmentServiceLine[];
+      skipTransaction?: boolean;
+      cashSessionId?: string | null;
+      movementDate?: string | null;
+    },
   ) => Promise<string | null>;
   fetchAppointmentServices: (appointmentId: string) => Promise<AppointmentServiceRow[]>;
   saveAppointmentServices: (appointmentId: string, lines: AppointmentServiceLine[]) => Promise<void>;
@@ -329,6 +336,8 @@ interface DataContextType {
     clientName?: string;
     lines: BillPaymentLine[];
     creditDeposit?: { method: 'cash' | 'pix' | 'credit_card' | 'debit_card'; amount: number } | null;
+    cashSessionId?: string | null;
+    appointmentDate?: string | null;
   }) => Promise<boolean>;
   // Cash
   openCashSession: (openingBalance: number) => Promise<CashSession | null>;
@@ -337,6 +346,8 @@ interface DataContextType {
     notes?: string,
     options?: { sessionId?: string; divergenceReason?: string },
   ) => Promise<void>;
+  selectHistoricalCashSession: (sessionId: string | null) => void;
+  clearHistoricalCashSession: () => void;
   addTransaction: (transaction: Omit<Transaction, 'id' | 'created_at'>) => Promise<Transaction | null>;
   reverseTransaction: (transactionId: string, reason?: string) => Promise<boolean>;
   // Commissions
@@ -405,6 +416,12 @@ function getBusinessDateKey(value: string | Date) {
   }).format(new Date(value));
 }
 
+function findCashSessionByBusinessDate(cashSessions: CashSession[], value?: string | Date | null) {
+  if (!value) return null;
+  const targetBusinessDate = getBusinessDateKey(value);
+  return cashSessions.find((session) => getBusinessDateKey(session.opened_at) === targetBusinessDate) ?? null;
+}
+
 function isSessionFromPreviousDay(session: CashSession, reference = new Date()) {
   return getBusinessDateKey(session.opened_at) < getBusinessDateKey(reference);
 }
@@ -455,6 +472,7 @@ export const DataProvider: React.FC<{ children: ReactNode }> = ({ children }) =>
   const [commissions, setCommissions] = useState<Commission[]>([]);
   const [currentCashSession, setCurrentCashSession] = useState<CashSession | null>(null);
   const [pendingCashSession, setPendingCashSession] = useState<CashSession | null>(null);
+  const [selectedHistoricalCashSessionId, setSelectedHistoricalCashSessionId] = useState<string | null>(null);
   const [cashLoading, setCashLoading] = useState(true);
   const [transactionsLoading, setTransactionsLoading] = useState(true);
   const realtimeChannelRef = useRef<ReturnType<typeof supabase.channel> | null>(null);
@@ -480,6 +498,9 @@ export const DataProvider: React.FC<{ children: ReactNode }> = ({ children }) =>
     || hasPermission('view_commissions')
     || hasPermission('view_financial_history')
     || hasPermission('reverse_financial_entries');
+  const selectedHistoricalCashSession = selectedHistoricalCashSessionId
+    ? cashSessions.find((session) => session.id === selectedHistoricalCashSessionId) ?? null
+    : null;
 
   const applyCashSessionsState = (cashData: CashSession[]) => {
     setCashSessions(cashData);
@@ -487,6 +508,17 @@ export const DataProvider: React.FC<{ children: ReactNode }> = ({ children }) =>
     setCurrentCashSession(state.currentCashSession);
     setPendingCashSession(state.pendingCashSession);
   };
+
+  useEffect(() => {
+    if (!selectedHistoricalCashSessionId) return;
+    if (!cashSessions.some((session) => session.id === selectedHistoricalCashSessionId)) {
+      setSelectedHistoricalCashSessionId(null);
+    }
+  }, [cashSessions, selectedHistoricalCashSessionId]);
+
+  useEffect(() => {
+    setSelectedHistoricalCashSessionId(null);
+  }, [tenantId]);
 
   const fetchAllPages = async <T,>(queryFactory: () => any): Promise<T[]> => {
     const rows: T[] = [];
@@ -610,18 +642,31 @@ export const DataProvider: React.FC<{ children: ReactNode }> = ({ children }) =>
       .eq('service_id', serviceId)
       .eq('professional_id', professionalId)
       .eq('tenant_id', tenantId)
-      .maybeSingle();
+      .order('updated_at', { ascending: false })
+      .order('created_at', { ascending: false });
 
     if (error) {
       console.error('Erro ao resolver vínculo de comissão:', error);
       return null;
     }
 
-    return (data as ServiceProfessional | null)
+    const rows = (data as ServiceProfessional[] | null) ?? [];
+    if (rows.length > 1) {
+      console.warn('Mais de um vínculo encontrado para serviço/profissional. Usando o mais recente.', {
+        tenantId,
+        serviceId,
+        professionalId,
+        count: rows.length,
+      });
+    }
+
+    const resolved = rows[0] ?? null;
+
+    return resolved
       ? {
-          ...(data as ServiceProfessional),
+          ...resolved,
           settlement_kind: normalizeCommissionSettlementKind(
-            (data as ServiceProfessional).settlement_kind,
+            resolved.settlement_kind,
           ),
         }
       : null;
@@ -1073,6 +1118,74 @@ export const DataProvider: React.FC<{ children: ReactNode }> = ({ children }) =>
     }
 
     return candidateSession;
+  };
+
+  const getBillingTargetSession = (
+    options?: {
+      cashSessionId?: string | null;
+      appointmentDate?: string | null;
+      requireActiveCash?: boolean;
+    },
+  ) => {
+    const explicitSession = options?.cashSessionId
+      ? cashSessions.find((session) => session.id === options.cashSessionId)
+      : null;
+    const historicalTargetSession = explicitSession ?? selectedHistoricalCashSession;
+
+    if (historicalTargetSession) {
+      if (!canPerformAdvancedFinancialOps) {
+        toast.error('Somente administradores ou usuários financeiros podem regularizar comandas em caixas históricos.');
+        return null;
+      }
+      return historicalTargetSession;
+    }
+
+    const sameDayOpenSession = findCashSessionByBusinessDate(
+      cashSessions.filter((session) => session.status === 'open'),
+      options?.appointmentDate,
+    );
+
+    const candidateSession = sameDayOpenSession
+      ?? currentCashSession
+      ?? (isAdminUser ? pendingCashSession : null)
+      ?? getLatestOpenCashSession(cashSessions);
+
+    if (!candidateSession) {
+      if (options?.requireActiveCash ?? true) {
+        toast.error('Abra o caixa antes de receber pagamentos.');
+      }
+      return null;
+    }
+
+    if (isSessionFromPreviousDay(candidateSession) && !isAdminUser) {
+      toast.error('Existe um caixa pendente de data anterior. Regularize o fechamento antes de receber novas comandas.');
+      return null;
+    }
+
+    return candidateSession;
+  };
+
+  const selectHistoricalCashSession = (sessionId: string | null) => {
+    if (!sessionId) {
+      setSelectedHistoricalCashSessionId(null);
+      return;
+    }
+
+    const targetSession = cashSessions.find((session) => session.id === sessionId) ?? null;
+    if (!targetSession) {
+      toast.error('Não foi possível localizar o caixa selecionado para regularização.');
+      return;
+    }
+    if (!canPerformAdvancedFinancialOps) {
+      toast.error('Somente administradores ou usuários financeiros podem regularizar caixas antigos.');
+      return;
+    }
+
+    setSelectedHistoricalCashSessionId(sessionId);
+  };
+
+  const clearHistoricalCashSession = () => {
+    setSelectedHistoricalCashSessionId(null);
   };
 
   const createReversalTransaction = async (
@@ -1686,9 +1799,14 @@ export const DataProvider: React.FC<{ children: ReactNode }> = ({ children }) =>
     clientName?: string;
     lines: BillPaymentLine[];
     creditDeposit?: { method: 'cash' | 'pix' | 'credit_card' | 'debit_card'; amount: number } | null;
+    cashSessionId?: string | null;
+    appointmentDate?: string | null;
   }): Promise<boolean> => {
     if (!tenantId) return false;
-    const billingSession = currentCashSession ?? (isAdminUser ? pendingCashSession : null);
+    const billingSession = getBillingTargetSession({
+      cashSessionId: params.cashSessionId ?? null,
+      appointmentDate: params.appointmentDate ?? null,
+    });
     const movementTimestamp = getSessionMovementTimestamp(billingSession);
     const clientLabel = params.clientName ?? 'Cliente';
 
@@ -1748,6 +1866,8 @@ export const DataProvider: React.FC<{ children: ReactNode }> = ({ children }) =>
           metadata: {
             payment_method: line.method,
             amount: line.amount,
+            used_historical_cash_session: billingSession?.status === 'closed',
+            cash_business_date: billingSession ? getBusinessDateKey(billingSession.opened_at) : null,
           },
         });
       }
@@ -1813,6 +1933,8 @@ export const DataProvider: React.FC<{ children: ReactNode }> = ({ children }) =>
             payment_method: params.creditDeposit.method,
             amount: params.creditDeposit.amount,
             kind: 'client_credit_deposit',
+            used_historical_cash_session: billingSession?.status === 'closed',
+            cash_business_date: billingSession ? getBusinessDateKey(billingSession.opened_at) : null,
           },
         });
       }
@@ -1842,6 +1964,8 @@ export const DataProvider: React.FC<{ children: ReactNode }> = ({ children }) =>
         credit_used: creditUse,
         pending_amount: pendingAmount,
         credit_deposit: params.creditDeposit ?? null,
+        cash_session_id: billingSession?.id ?? null,
+        used_historical_cash_session: billingSession?.status === 'closed',
       },
     });
 
@@ -1853,7 +1977,13 @@ export const DataProvider: React.FC<{ children: ReactNode }> = ({ children }) =>
     id: string,
     paymentMethod: string,
     overrides?: Partial<Appointment>,
-    options?: { skipCommission?: boolean; commissionLines?: AppointmentServiceLine[]; skipTransaction?: boolean },
+    options?: {
+      skipCommission?: boolean;
+      commissionLines?: AppointmentServiceLine[];
+      skipTransaction?: boolean;
+      cashSessionId?: string | null;
+      movementDate?: string | null;
+    },
   ) => {
     if (!guardModify()) return null;
     if (!guardFinancialPermission(canCloseBill, 'Você não tem permissão para receber e encerrar comandas.')) return null;
@@ -1951,7 +2081,11 @@ export const DataProvider: React.FC<{ children: ReactNode }> = ({ children }) =>
       transactionId = persistedPaymentTx?.id;
     }
 
-    const billingSession = currentCashSession ?? (isAdminUser ? pendingCashSession : null);
+    const billingSession = getBillingTargetSession({
+      cashSessionId: options?.cashSessionId ?? null,
+      appointmentDate: options?.movementDate ?? appointment.start_time,
+      requireActiveCash: false,
+    });
     const billSettlementKinds = commissionLines
       .map((line) => resolvedCommissionMappings.get(`${line.service_id}:${line.professional_id}`)?.settlement_kind)
       .filter(Boolean) as CommissionSettlementKind[];
@@ -2042,6 +2176,8 @@ export const DataProvider: React.FC<{ children: ReactNode }> = ({ children }) =>
         metadata: {
           payment_method: paymentMethod,
           source: 'complete_appointment',
+          used_historical_cash_session: billingSession?.status === 'closed',
+          cash_business_date: billingSession ? getBusinessDateKey(billingSession.opened_at) : null,
         },
       });
     }
@@ -2059,6 +2195,8 @@ export const DataProvider: React.FC<{ children: ReactNode }> = ({ children }) =>
         generated_commissions: insertedCommissionRows.length,
         transaction_id: transactionId ?? null,
         skipped_transaction: options?.skipTransaction ?? false,
+        cash_session_id: billingSession?.id ?? null,
+        used_historical_cash_session: billingSession?.status === 'closed',
       },
     });
     if (wasCompletedNow) {
@@ -3067,7 +3205,7 @@ export const DataProvider: React.FC<{ children: ReactNode }> = ({ children }) =>
   return (
     <DataContext.Provider value={{
       clients, professionals, services, products, appointments,
-      cashSessions, transactions, commissions, currentCashSession, pendingCashSession, loading, cashLoading, transactionsLoading,
+      cashSessions, transactions, commissions, currentCashSession, pendingCashSession, selectedHistoricalCashSession, loading, cashLoading, transactionsLoading,
       ensureCashSessionState,
       refreshData,
       addClient, updateClient, deleteClient,
@@ -3077,7 +3215,7 @@ export const DataProvider: React.FC<{ children: ReactNode }> = ({ children }) =>
       addAppointment, updateAppointment, deleteAppointment, refundAppointment, completeAppointment,
       fetchAppointmentServices, saveAppointmentServices,
       fetchClientBalances, registerBillPayments,
-      openCashSession, closeCashSession, addTransaction, reverseTransaction,
+      openCashSession, closeCashSession, selectHistoricalCashSession, clearHistoricalCashSession, addTransaction, reverseTransaction,
       payCommission, payAllCommissions, addVoucher, reprocessPendingCommissions, previewReprocessPendingCommissions,
     }}>
       {children}

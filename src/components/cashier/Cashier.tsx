@@ -62,12 +62,14 @@ export function Cashier() {
   const {
     currentCashSession,
     pendingCashSession,
+    selectedHistoricalCashSession,
     transactions,
     professionals,
     cashLoading,
     transactionsLoading,
     openCashSession,
     closeCashSession,
+    clearHistoricalCashSession,
     addTransaction,
     addVoucher,
   } = useData();
@@ -441,6 +443,29 @@ export function Cashier() {
                 Solicite a um administrador ou financeiro para concluir a regularização.
               </p>
             )}
+          </div>
+        </Card>
+      ) : null}
+
+      {selectedHistoricalCashSession ? (
+        <Card className="p-6 border border-primary/20 bg-primary-soft/20 shadow-md">
+          <div className="flex flex-col gap-4 lg:flex-row lg:items-center lg:justify-between">
+            <div className="space-y-2">
+              <div className="flex items-center gap-2">
+                <RotateCcw className="w-5 h-5 text-primary" />
+                <h2 className="text-lg font-display font-semibold text-foreground">Regularização histórica ativa</h2>
+              </div>
+              <p className="text-sm text-muted-foreground">
+                Comandas antigas fechadas pelo administrador serão lançadas no caixa de{' '}
+                <strong>{new Date(selectedHistoricalCashSession.opened_at).toLocaleDateString('pt-BR')}</strong>.
+                O caixa do dia continua sendo o mesmo para todos os usuários com permissão.
+              </p>
+            </div>
+            {canPerformAdvancedFinancialOps ? (
+              <Button variant="outline" onClick={clearHistoricalCashSession}>
+                Encerrar regularização
+              </Button>
+            ) : null}
           </div>
         </Card>
       ) : null}
