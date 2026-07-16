@@ -39,6 +39,8 @@ export interface Professional {
   is_active: boolean;
   has_schedule: boolean;
   schedule_color?: string;
+  schedule_start_time?: string | null;
+  schedule_end_time?: string | null;
   works_cleaning?: boolean;
   cleaning_role?: string;
   cleaning_commission_type?: 'percent' | 'fixed' | 'mixed';
@@ -1318,16 +1320,24 @@ export const DataProvider: React.FC<{ children: ReactNode }> = ({ children }) =>
       referenceId?: string | null;
       referenceType?: string | null;
       amount?: number;
+      cashSessionId?: string | null;
     },
   ) => {
-    const targetSession = getCashOperationTargetSession({
-      allowPendingSession: true,
-      permissionMessage: 'Somente usuários financeiros podem estornar movimentos em caixas pendentes.',
-    });
+    const targetSession = options?.cashSessionId
+      ? getBillingTargetSession({
+          cashSessionId: options.cashSessionId,
+          requireActiveCash: false,
+        })
+      : getCashOperationTargetSession({
+          allowPendingSession: true,
+          permissionMessage: 'Somente usuários financeiros podem estornar movimentos em caixas pendentes.',
+        });
 
     if (!tenantId || !user?.id || !targetSession) {
       throw new Error('Abra o caixa antes de registrar o estorno.');
     }
+
+    const movementTimestamp = getSessionMovementTimestamp(targetSession);
 
     const reversalPayload = {
       cash_session_id: targetSession.id,
@@ -1341,6 +1351,7 @@ export const DataProvider: React.FC<{ children: ReactNode }> = ({ children }) =>
       reference_type: options?.referenceType ?? 'transaction_reversal',
       created_by: user.id,
       tenant_id: tenantId,
+      ...(movementTimestamp ? { created_at: movementTimestamp } : {}),
     };
 
     const { data, error } = await supabase
@@ -1646,55 +1657,61 @@ export const DataProvider: React.FC<{ children: ReactNode }> = ({ children }) =>
     const appointment = appointments.find(a => a.id === id);
     if (!appointment) return false;
 
-    const activeSession = getCashOperationTargetSession({
-      allowPendingSession: false,
-      permissionMessage: 'Existe um caixa pendente de data anterior. Regularize-o antes de registrar estornos.',
-    });
+    const historicalSession = selectedHistoricalCashSession;
+    if (historicalSession && !guardFinancialPermission(
+      canPerformAdvancedFinancialOps,
+      'Somente administradores ou usuários financeiros podem reabrir comandas em regularização histórica.',
+    )) return false;
+
+    const activeSession = historicalSession
+      ? getBillingTargetSession({
+          cashSessionId: historicalSession.id,
+          requireActiveCash: false,
+        })
+      : getCashOperationTargetSession({
+          allowPendingSession: false,
+          permissionMessage: 'Existe um caixa pendente de data anterior. Regularize-o antes de registrar estornos.',
+        });
 
     if (!activeSession) {
       toast.error('Abra o caixa antes de estornar e reabrir uma comanda.');
       return false;
     }
 
-    const { data: refundRows, error: reopenError } = await supabase
+    // Fazemos todas as validações antes de alterar o status. Isso evita que
+    // uma comissão já paga ou uma falha de leitura deixe a comanda parcialmente
+    // reaberta.
+    const { data: persistedAppointment, error: statusCheckError } = await supabase
       .from('appointments')
-      .update({ status: 'in_progress' })
+      .select('status')
       .eq('id', id)
       .eq('tenant_id', tenantId)
-      .eq('status', 'completed')
-      .select('id');
+      .maybeSingle();
 
-    if (reopenError) {
-      console.error('Erro ao reabrir a comanda:', reopenError);
-      toast.error(reopenError.message || 'Erro ao reabrir a comanda.');
+    if (statusCheckError || !persistedAppointment) {
+      console.error('Erro ao verificar status da comanda antes do estorno:', statusCheckError);
+      toast.error('Não foi possível confirmar o estorno. Verifique suas permissões e tente novamente.');
       return false;
     }
 
-    const wasReopenedNow = (refundRows?.length ?? 0) > 0;
-
-    if (!wasReopenedNow) {
-      const { data: persistedAppointment, error: statusCheckError } = await supabase
-        .from('appointments')
-        .select('status')
-        .eq('id', id)
-        .eq('tenant_id', tenantId)
-        .maybeSingle();
-
-      // Se a comanda não é mais visível (RLS bloqueou a leitura, por exemplo)
-      // não dá para presumir "já está aberta" — isso escondia bloqueios de
-      // permissão atrás de uma mensagem que não refletia a causa real.
-      if (statusCheckError || !persistedAppointment) {
-        console.error('Erro ao verificar status da comanda antes do estorno:', statusCheckError);
-        toast.error('Não foi possível confirmar o estorno. Verifique suas permissões e tente novamente.');
-        return false;
-      }
-      if (persistedAppointment.status !== 'completed') {
-        toast.warning('A comanda já está aberta ou não pode ser estornada neste status.');
-        return false;
-      }
+    if (persistedAppointment.status !== 'completed') {
+      toast.warning('A comanda já está aberta ou não pode ser estornada neste status.');
+      return false;
     }
 
-    const relatedCommissions = commissions.filter((commission) => commission.appointment_id === id);
+    const { data: relatedCommissionRows, error: commissionReadError } = await supabase
+      .from('commissions')
+      .select('*')
+      .eq('appointment_id', id)
+      .eq('tenant_id', tenantId);
+
+    if (commissionReadError) {
+      console.error('Erro ao carregar comissões da comanda:', commissionReadError);
+      toast.error('Não foi possível validar as comissões vinculadas antes do estorno.');
+      return false;
+    }
+
+    const relatedCommissions = (relatedCommissionRows as Commission[] | null) ?? [];
     const paidCommissions = relatedCommissions.filter((commission) => commission.status === 'paid');
     if (paidCommissions.length > 0) {
       toast.error('Estorne primeiro os pagamentos de comissão vinculados a esta comanda.');
@@ -1719,6 +1736,29 @@ export const DataProvider: React.FC<{ children: ReactNode }> = ({ children }) =>
 
     const activePaymentTransactions = (activePaymentRows as Transaction[] | null) ?? [];
 
+    const { data: refundRows, error: reopenError } = await supabase
+      .from('appointments')
+      .update({ status: 'in_progress' })
+      .eq('id', id)
+      .eq('tenant_id', tenantId)
+      .eq('status', 'completed')
+      .select('id');
+
+    if (reopenError) {
+      console.error('Erro ao reabrir a comanda:', reopenError);
+      toast.error(reopenError.message || 'Erro ao reabrir a comanda.');
+      return false;
+    }
+
+    const wasReopenedNow = (refundRows?.length ?? 0) > 0;
+
+    if (!wasReopenedNow) {
+      // Outra sessão pode ter reaberto a comanda entre o pré-voo e o UPDATE.
+      // Não seguimos com estornos nesse caso para evitar duplicidade.
+      toast.warning('A comanda foi alterada por outro usuário. Atualize a tela e tente novamente.');
+      return false;
+    }
+
     const { error: deleteCommissionError } = await supabase.from('commissions')
       .delete()
       .eq('appointment_id', id)
@@ -1740,6 +1780,7 @@ export const DataProvider: React.FC<{ children: ReactNode }> = ({ children }) =>
           referenceId: id,
           referenceType: 'refund',
           amount: Number(paymentTransaction.amount),
+          cashSessionId: activeSession.id,
         });
 
         insertedRefundTransactions.push(refundTx);
@@ -1785,6 +1826,8 @@ export const DataProvider: React.FC<{ children: ReactNode }> = ({ children }) =>
       metadata: {
         reason: 'full_refund',
         reversed_payment_count: activePaymentTransactions.length,
+        historical_cash_regularization: Boolean(historicalSession),
+        cash_business_date: getBusinessDateKey(activeSession.opened_at),
       },
     });
 
@@ -1798,11 +1841,15 @@ export const DataProvider: React.FC<{ children: ReactNode }> = ({ children }) =>
       afterState: buildAppointmentSnapshot({ ...appointment, status: 'in_progress' }),
       metadata: {
         reversed_payment_count: activePaymentTransactions.length,
+        historical_cash_regularization: Boolean(historicalSession),
+        cash_business_date: getBusinessDateKey(activeSession.opened_at),
       },
     });
 
     if (!deleteCommissionError) {
-      toast.success('Pagamento estornado e comanda reaberta com sucesso.');
+      toast.success(historicalSession
+        ? 'Pagamento estornado. A comanda foi reaberta para manutenção no caixa histórico.'
+        : 'Pagamento estornado e comanda reaberta com sucesso.');
     }
     return true;
   };

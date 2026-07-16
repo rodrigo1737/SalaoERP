@@ -14,6 +14,7 @@ import {
   AlertCircle,
   Banknote,
   Globe,
+  LockKeyhole,
 } from 'lucide-react';
 import { AppointmentDetailDialog } from './AppointmentDetailDialog';
 import { Card } from '@/components/ui/card';
@@ -126,6 +127,25 @@ const normalizeText = (value?: string | null) => {
     .toLowerCase();
 };
 
+const timeToMinutes = (value: string) => {
+  const [hour, minute] = value.split(':').map(Number);
+  return (hour * 60) + minute;
+};
+
+const formatTime = (minutes: number) => `${String(Math.floor(minutes / 60)).padStart(2, '0')}:${String(minutes % 60).padStart(2, '0')}`;
+
+const getProfessionalScheduleWindow = (professional: Professional, tenantStart: number, tenantEnd: number) => ({
+  start: professional.schedule_start_time?.slice(0, 5) || `${String(tenantStart).padStart(2, '0')}:00`,
+  end: professional.schedule_end_time?.slice(0, 5) || `${String(tenantEnd).padStart(2, '0')}:00`,
+});
+
+const dateAtTime = (date: Date, time: string) => {
+  const result = new Date(date);
+  const [hour, minute] = time.split(':').map(Number);
+  result.setHours(hour, minute, 0, 0);
+  return result;
+};
+
 export function Schedule() {
   const {
     clients,
@@ -151,14 +171,9 @@ export function Schedule() {
   const { settings: tenantSettings } = useTenantSettings();
   const navigate = useNavigate();
 
-  // ITEM 13: horários configuráveis; fallback para 8–20 se tenant não configurou ainda
+  // Horários globais continuam sendo o fallback para profissionais sem expediente individual.
   const workStart = tenantSettings?.working_hours_start ?? 8;
   const workEnd   = tenantSettings?.working_hours_end   ?? 20;
-  const timeSlots: string[] = [];
-  for (let hour = workStart; hour < workEnd; hour++) {
-    timeSlots.push(`${String(hour).padStart(2, '0')}:00`);
-    timeSlots.push(`${String(hour).padStart(2, '0')}:30`);
-  }
   const { registerSale, registerServiceConsumption } = useStock();
   const { userRole, currentProfessional, loading: authLoading, hasPermission, currentTenant, tenantId } = useAuth();
   const { toast } = useToast();
@@ -169,6 +184,8 @@ export function Schedule() {
   // Escopo da agenda: sem 'view_all_schedule' (e não-admin), o usuário só
   // enxerga a própria agenda. Fecha o vazamento de ver a agenda de todos.
   const canViewAllSchedules = isAdmin || hasPermission('view_all_schedule');
+  const canManageAllScheduleBlocks = isAdmin || hasPermission('edit_schedule') || hasPermission('manage_all_schedule_blocks');
+  const canManageOwnScheduleBlocks = canManageAllScheduleBlocks || (!!currentProfessional && hasPermission('manage_schedule_blocks'));
   const [scheduleScope, setScheduleScope] = useState<'own' | 'all'>('own');
   const effectiveScope: 'own' | 'all' = !canViewAllSchedules
     ? 'own'
@@ -181,7 +198,16 @@ export function Schedule() {
     ? selectedHistoricalCashSession?.id ?? null
     : null;
 
-  const scheduleProfessionals = professionals.filter(p => p.is_active && p.has_schedule);
+  const scheduleProfessionals = useMemo(
+    () => professionals.filter(p => p.is_active && p.has_schedule),
+    [professionals],
+  );
+  const timeSlots = useMemo(() => {
+    const windows = scheduleProfessionals.map((professional) => getProfessionalScheduleWindow(professional, workStart, workEnd));
+    const start = Math.min(timeToMinutes(`${String(workStart).padStart(2, '0')}:00`), ...windows.map((window) => timeToMinutes(window.start)));
+    const end = Math.max(timeToMinutes(`${String(workEnd).padStart(2, '0')}:00`), ...windows.map((window) => timeToMinutes(window.end)));
+    return Array.from({ length: Math.max(0, Math.ceil((end - start) / 30)) }, (_, index) => formatTime(start + (index * 30)));
+  }, [scheduleProfessionals, workStart, workEnd]);
 
   const [currentDate, setCurrentDate] = useState(new Date());
   const [columnCount, setColumnCount] = useState(5);
@@ -224,6 +250,13 @@ export function Schedule() {
   };
   const [scheduleLoading, setScheduleLoading] = useState(false);
   const [scheduleAppointmentsRaw, setScheduleAppointmentsRaw] = useState<Appointment[]>([]);
+  const [scheduleBlocks, setScheduleBlocks] = useState<Array<{ id: string; professional_id: string; starts_at: string; ends_at: string; reason: string }>>([]);
+  const [isBlockDialogOpen, setIsBlockDialogOpen] = useState(false);
+  const [blockProfessionalId, setBlockProfessionalId] = useState('');
+  const [blockStart, setBlockStart] = useState('');
+  const [blockEnd, setBlockEnd] = useState('');
+  const [blockReason, setBlockReason] = useState('');
+  const [isSubmittingBlock, setIsSubmittingBlock] = useState(false);
   const [serviceProfessionalLinks, setServiceProfessionalLinks] = useState<ServiceProfessional[]>([]);
   const [missingMappings, setMissingMappings] = useState<Array<{
     service_id: string;
@@ -297,17 +330,26 @@ export function Schedule() {
     [scheduleAppointmentsRaw, clientsById, professionalsById, servicesById],
   );
 
-  const baseVisibleProfessionals = canViewAllSchedules && effectiveScope === 'all'
-    ? scheduleProfessionals
-    : currentProfessional
-      // Restrito à própria agenda (profissional sem permissão de ver todas).
-      ? scheduleProfessionals.filter(p => p.id === currentProfessional.id)
-      // Não-admin sem vínculo e sem permissão de ver todas: nada a exibir.
-      : [];
-  const filteredVisibleProfessionals = selectedProfessionalIds.length > 0
-    ? baseVisibleProfessionals.filter(p => selectedProfessionalIds.includes(p.id))
-    : baseVisibleProfessionals;
-  const visibleProfessionals = filteredVisibleProfessionals.slice(0, columnCount);
+  const baseVisibleProfessionals = useMemo(() => (
+    canViewAllSchedules && effectiveScope === 'all'
+      ? scheduleProfessionals
+      : currentProfessional
+        ? scheduleProfessionals.filter(p => p.id === currentProfessional.id)
+        : []
+  ), [canViewAllSchedules, effectiveScope, scheduleProfessionals, currentProfessional]);
+  const filteredVisibleProfessionals = useMemo(() => (
+    selectedProfessionalIds.length > 0
+      ? baseVisibleProfessionals.filter(p => selectedProfessionalIds.includes(p.id))
+      : baseVisibleProfessionals
+  ), [selectedProfessionalIds, baseVisibleProfessionals]);
+  const visibleProfessionals = useMemo(
+    () => filteredVisibleProfessionals.slice(0, columnCount),
+    [filteredVisibleProfessionals, columnCount],
+  );
+  const visibleProfessionalIds = useMemo(
+    () => visibleProfessionals.map((professional) => professional.id),
+    [visibleProfessionals],
+  );
   const allProfessionalsSelected = selectedProfessionalIds.length === 0 || selectedProfessionalIds.length === baseVisibleProfessionals.length;
   const calendarMonthStart = new Date(currentDate.getFullYear(), currentDate.getMonth(), 1);
   const calendarStart = new Date(calendarMonthStart);
@@ -355,6 +397,26 @@ export function Schedule() {
 
       if (error) throw error;
       setScheduleAppointmentsRaw((data as Appointment[]) ?? []);
+
+      const dayStart = new Date(referenceDate);
+      dayStart.setHours(0, 0, 0, 0);
+      const dayEnd = new Date(dayStart);
+      dayEnd.setDate(dayEnd.getDate() + 1);
+      const blockProfessionalIds = visibleProfessionalIds;
+      if (blockProfessionalIds.length > 0) {
+        const { data: blocks, error: blocksError } = await (supabase as any)
+          .from('professional_schedule_blocks')
+          .select('id, professional_id, starts_at, ends_at, reason')
+          .eq('tenant_id', tenantId)
+          .eq('status', 'active')
+          .in('professional_id', blockProfessionalIds)
+          .lt('starts_at', dayEnd.toISOString())
+          .gt('ends_at', dayStart.toISOString());
+        if (blocksError) throw blocksError;
+        setScheduleBlocks(blocks ?? []);
+      } else {
+        setScheduleBlocks([]);
+      }
     } catch (error) {
       console.error('Erro ao carregar agenda semanal:', error);
       toast({
@@ -365,7 +427,7 @@ export function Schedule() {
     } finally {
       setScheduleLoading(false);
     }
-  }, [currentDate, isCleaningTenant, tenantId, toast, restrictToOwnProfessional, currentProfessional]);
+  }, [currentDate, isCleaningTenant, tenantId, toast, restrictToOwnProfessional, currentProfessional, visibleProfessionalIds]);
 
   useEffect(() => {
     if (!authLoading && isCleaningTenant) {
@@ -529,6 +591,112 @@ export function Schedule() {
     setIsNewAppointmentOpen(true);
   };
 
+  const getScheduleBlockForSlot = (time: string, professionalId: string) => {
+    const slotStart = dateAtTime(currentDate, time);
+    const slotEnd = new Date(slotStart.getTime() + 30 * 60 * 1000);
+    return scheduleBlocks.find((block) => (
+      block.professional_id === professionalId
+      && new Date(block.starts_at) < slotEnd
+      && new Date(block.ends_at) > slotStart
+    ));
+  };
+
+  const getProfessionalWindow = useCallback((professionalId: string) => {
+    const professional = professionalsById.get(professionalId);
+    return professional
+      ? getProfessionalScheduleWindow(professional, workStart, workEnd)
+      : { start: `${String(workStart).padStart(2, '0')}:00`, end: `${String(workEnd).padStart(2, '0')}:00` };
+  }, [professionalsById, workStart, workEnd]);
+
+  const isSlotWithinProfessionalHours = useCallback((time: string, professionalId: string, durationMinutes = 30) => {
+    const window = getProfessionalWindow(professionalId);
+    const slotMinutes = timeToMinutes(time);
+    return slotMinutes >= timeToMinutes(window.start)
+      && slotMinutes + durationMinutes <= timeToMinutes(window.end);
+  }, [getProfessionalWindow]);
+
+  const openScheduleBlockDialog = () => {
+    if (!canManageOwnScheduleBlocks || visibleProfessionals.length === 0) return;
+    const professionalId = canManageAllScheduleBlocks
+      ? visibleProfessionals[0].id
+      : currentProfessional?.id || visibleProfessionals[0].id;
+    const window = getProfessionalWindow(professionalId);
+    const start = Math.max(timeToMinutes(window.start), 8 * 60);
+    setBlockProfessionalId(professionalId);
+    setBlockStart(formatTime(start));
+    setBlockEnd(formatTime(Math.min(start + 60, timeToMinutes(window.end))));
+    setBlockReason('');
+    setIsBlockDialogOpen(true);
+  };
+
+  const handleCreateScheduleBlock = async () => {
+    if (!tenantId || !blockProfessionalId || !blockStart || !blockEnd || !blockReason.trim()) {
+      toast({ variant: 'destructive', title: 'Dados incompletos', description: 'Informe profissional, horário e motivo do bloqueio.' });
+      return;
+    }
+    if (!canManageAllScheduleBlocks && blockProfessionalId !== currentProfessional?.id) {
+      toast({ variant: 'destructive', title: 'Sem permissão', description: 'Você só pode bloquear a própria agenda.' });
+      return;
+    }
+    if (timeToMinutes(blockStart) >= timeToMinutes(blockEnd)) {
+      toast({ variant: 'destructive', title: 'Horário inválido', description: 'O fim deve ser maior que o início.' });
+      return;
+    }
+    if (!isSlotWithinProfessionalHours(blockStart, blockProfessionalId, timeToMinutes(blockEnd) - timeToMinutes(blockStart))) {
+      toast({ variant: 'destructive', title: 'Fora do expediente', description: 'O bloqueio precisa estar dentro do expediente do profissional.' });
+      return;
+    }
+
+    const startsAt = dateAtTime(currentDate, blockStart);
+    const endsAt = dateAtTime(currentDate, blockEnd);
+    const hasAppointment = dayAppointments.some((appointment) => (
+      appointment.professional_id === blockProfessionalId
+      && new Date(appointment.start_time) < endsAt
+      && new Date(appointment.end_time) > startsAt
+    ));
+    if (hasAppointment) {
+      toast({ variant: 'destructive', title: 'Horário já agendado', description: 'Não é possível bloquear um intervalo que já possui atendimento.' });
+      return;
+    }
+
+    setIsSubmittingBlock(true);
+    try {
+      const { error } = await (supabase as any)
+        .from('professional_schedule_blocks')
+        .insert({
+          tenant_id: tenantId,
+          professional_id: blockProfessionalId,
+          starts_at: startsAt.toISOString(),
+          ends_at: endsAt.toISOString(),
+          reason: blockReason.trim(),
+          status: 'active',
+        });
+      if (error) throw error;
+      toast({ title: 'Indisponibilidade registrada', description: 'O intervalo foi bloqueado na agenda.' });
+      setIsBlockDialogOpen(false);
+      await fetchScheduleAppointments(currentDate);
+    } catch (error: any) {
+      toast({ variant: 'destructive', title: 'Não foi possível bloquear o horário', description: error?.message || 'Tente novamente.' });
+    } finally {
+      setIsSubmittingBlock(false);
+    }
+  };
+
+  const handleCancelScheduleBlock = async (blockId: string) => {
+    if (!canManageOwnScheduleBlocks) return;
+    const { error } = await (supabase as any)
+      .from('professional_schedule_blocks')
+      .update({ status: 'cancelled' })
+      .eq('id', blockId)
+      .eq('tenant_id', tenantId);
+    if (error) {
+      toast({ variant: 'destructive', title: 'Erro ao liberar horário', description: error.message });
+      return;
+    }
+    toast({ title: 'Horário liberado' });
+    await fetchScheduleAppointments(currentDate);
+  };
+
   const canUseQuickService = isAddingService && !!newServiceName.trim();
   const canCreateAppointment = !!formClient && !!formTime && (formServices.length > 0 || canUseQuickService);
 
@@ -551,6 +719,11 @@ export function Schedule() {
     const totalMinutes = hour * 60 + minute + formServicesDuration;
     return `${String(Math.floor(totalMinutes / 60) % 24).padStart(2, '0')}:${String(totalMinutes % 60).padStart(2, '0')}`;
   })();
+  const appointmentTimeOptions = useMemo(() => {
+    const duration = formServicesDuration || (canUseQuickService ? Number(newServiceDuration) || 60 : 30);
+    if (!selectedSlot?.professionalId) return timeSlots;
+    return timeSlots.filter((time) => isSlotWithinProfessionalHours(time, selectedSlot.professionalId, duration));
+  }, [canUseQuickService, formServicesDuration, isSlotWithinProfessionalHours, newServiceDuration, selectedSlot?.professionalId, timeSlots]);
 
   const resetQuickServiceForm = () => {
     setIsAddingService(false);
@@ -1431,6 +1604,12 @@ export function Schedule() {
           <div className="flex flex-col gap-3 lg:flex-row lg:items-center lg:justify-between">
             <div className="flex items-center gap-2">
               <Button variant="outline" size="sm" onClick={goToToday}>Hoje</Button>
+              {canManageOwnScheduleBlocks && (
+                <Button variant="outline" size="sm" onClick={openScheduleBlockDialog}>
+                  <LockKeyhole className="mr-1.5 h-4 w-4" />
+                  Bloquear horário
+                </Button>
+              )}
               <Button variant="ghost" size="icon-sm" onClick={() => navigateDate('prev')} aria-label="Dia anterior">
                 <ChevronLeft className="w-4 h-4" />
               </Button>
@@ -1511,9 +1690,53 @@ export function Schedule() {
                             const occupyingAppointments = getAppointmentsForSlot(time, professional.id);
                             const appointmentsStartingNow = getAppointmentsStartingAt(time, professional.id);
                             const hasOccupyingAppointment = occupyingAppointments.length > 0;
+                            const withinProfessionalHours = isSlotWithinProfessionalHours(time, professional.id);
+                            const scheduleBlock = getScheduleBlockForSlot(time, professional.id);
 
                             // Check if any appointments that START at this time exist
                             const hasAppointmentsStarting = appointmentsStartingNow.length > 0;
+
+                            if (!withinProfessionalHours) {
+                              return (
+                                <div
+                                  key={professional.id}
+                                  className="border-l border-border/50 min-h-[48px] bg-muted/40"
+                                  title="Fora do expediente do profissional"
+                                />
+                              );
+                            }
+
+                            if (scheduleBlock && !hasOccupyingAppointment) {
+                              const isBlockStart = getTimeFromISO(scheduleBlock.starts_at) === time;
+                              return (
+                                <div
+                                  key={professional.id}
+                                  className="relative min-h-[48px] border-l border-warning/20 bg-warning/10"
+                                  title={scheduleBlock.reason}
+                                >
+                                  {isBlockStart && (
+                                    <div className="absolute inset-x-1 top-1 z-10 rounded-md border border-warning/30 bg-warning/10 px-2 py-1 text-[10px] text-foreground">
+                                      <div className="flex items-start justify-between gap-1">
+                                        <span className="flex min-w-0 items-center gap-1 truncate">
+                                          <LockKeyhole className="h-3 w-3 shrink-0 text-warning" />
+                                          <span className="truncate">{scheduleBlock.reason}</span>
+                                        </span>
+                                        {canManageOwnScheduleBlocks && (
+                                          <button
+                                            type="button"
+                                            className="shrink-0 text-muted-foreground hover:text-destructive"
+                                            onClick={() => void handleCancelScheduleBlock(scheduleBlock.id)}
+                                            aria-label="Liberar horário"
+                                          >
+                                            <X className="h-3 w-3" />
+                                          </button>
+                                        )}
+                                      </div>
+                                    </div>
+                                  )}
+                                </div>
+                              );
+                            }
 
                             // For slots that are occupied but appointment doesn't start here, show empty slot
                             if (hasOccupyingAppointment && !hasAppointmentsStarting) {
@@ -1620,6 +1843,59 @@ export function Schedule() {
         </div>
       </div>
 
+      {/* Professional unavailability dialog */}
+      <Dialog open={isBlockDialogOpen} onOpenChange={setIsBlockDialogOpen}>
+        <DialogContent className="sm:max-w-md">
+          <DialogHeader>
+            <DialogTitle>Bloquear horário</DialogTitle>
+            <DialogDescription>
+              Impede novos agendamentos para o profissional na data de {currentDate.toLocaleDateString('pt-BR')}.
+            </DialogDescription>
+          </DialogHeader>
+          <div className="space-y-4 py-4">
+            <div className="space-y-2">
+              <Label>Profissional</Label>
+              <Select value={blockProfessionalId} onValueChange={setBlockProfessionalId} disabled={!canManageAllScheduleBlocks}>
+                <SelectTrigger><SelectValue placeholder="Selecione" /></SelectTrigger>
+                <SelectContent>
+                  {visibleProfessionals.map((professional) => (
+                    <SelectItem key={professional.id} value={professional.id}>
+                      {professional.nickname || professional.name}
+                    </SelectItem>
+                  ))}
+                </SelectContent>
+              </Select>
+            </div>
+            <div className="grid grid-cols-2 gap-3">
+              <div className="space-y-2">
+                <Label>Início</Label>
+                <Input type="time" value={blockStart} onChange={(event) => setBlockStart(event.target.value)} />
+              </div>
+              <div className="space-y-2">
+                <Label>Fim</Label>
+                <Input type="time" value={blockEnd} onChange={(event) => setBlockEnd(event.target.value)} />
+              </div>
+            </div>
+            <div className="space-y-2">
+              <Label>Motivo</Label>
+              <Input
+                value={blockReason}
+                maxLength={300}
+                onChange={(event) => setBlockReason(event.target.value)}
+                placeholder="Ex.: compromisso pessoal"
+              />
+            </div>
+            <div className="flex justify-end gap-2">
+              <Button variant="outline" onClick={() => setIsBlockDialogOpen(false)}>Cancelar</Button>
+              <Button onClick={handleCreateScheduleBlock} disabled={isSubmittingBlock}>
+                <LockKeyhole className="mr-2 h-4 w-4" />
+                {isSubmittingBlock ? 'Salvando...' : 'Bloquear horário'}
+              </Button>
+            </div>
+          </div>
+        </DialogContent>
+      </Dialog>
+
       {/* New Appointment Dialog */}
       <Dialog open={isNewAppointmentOpen} onOpenChange={setIsNewAppointmentOpen}>
         <DialogContent className="sm:max-w-md">
@@ -1635,7 +1911,7 @@ export function Schedule() {
                   <SelectValue placeholder="Selecione o horário" />
                 </SelectTrigger>
                 <SelectContent>
-                  {timeSlots.map((time) => (
+                  {appointmentTimeOptions.map((time) => (
                     <SelectItem key={time} value={time}>{time}</SelectItem>
                   ))}
                 </SelectContent>
@@ -1828,12 +2104,22 @@ export function Schedule() {
         onOpenCloseBill={handleOpenCloseBill}
         onRefund={async () => {
           if (!selectedAppointment) return;
+          const isHistoricalMaintenance = Boolean(selectedHistoricalCashSession);
           const success = await refundAppointment(selectedAppointment.id);
           await fetchScheduleAppointments(currentDate);
           // Só fecha o diálogo se o estorno realmente aconteceu — antes
           // fechava mesmo em caso de erro/permissão negada, dando a
           // impressão de que o botão "não fazia nada".
-          if (success) setIsAppointmentDetailOpen(false);
+          if (success && isHistoricalMaintenance) {
+            // Mantém o mesmo diálogo aberto, agora editável, para que a
+            // comanda possa ser corrigida e fechada novamente no caixa em
+            // regularização, usando a data financeira histórica.
+            setSelectedAppointment((current) => current
+              ? { ...current, status: 'in_progress' }
+              : current);
+          } else if (success) {
+            setIsAppointmentDetailOpen(false);
+          }
         }}
         onDelete={async () => {
           if (!selectedAppointment) return;

@@ -758,15 +758,15 @@ export function AppointmentDetailDialog({
               </div>
             </div>
 
-            {/* Admin Actions */}
-            {isAdmin && (
+            {/* Admin/Finance Actions */}
+            {(isAdmin || canRefundBill) && (
               <div className="pt-3 border-t border-border space-y-2">
-                <p className="text-xs text-muted-foreground">Ações de Administrador:</p>
+                <p className="text-xs text-muted-foreground">Ações de Administrador/Financeiro:</p>
                 <div className="flex gap-2">
                   {appointment.status === 'completed' && canRefundBill && (
-                    <Button 
-                      size="sm" 
-                      variant="outline" 
+                    <Button
+                      size="sm"
+                      variant="outline"
                       className="text-warning border-warning hover:bg-warning/10"
                       onClick={onRefund}
                     >
@@ -774,15 +774,17 @@ export function AppointmentDetailDialog({
                       Estornar e Reabrir
                     </Button>
                   )}
-                  <Button 
-                    size="sm" 
-                    variant="outline" 
-                    className="text-destructive border-destructive hover:bg-destructive/10"
-                    onClick={onDelete}
-                  >
-                    <Trash2 className="w-4 h-4 mr-1" />
-                    Excluir
-                  </Button>
+                  {isAdmin && (
+                    <Button
+                      size="sm"
+                      variant="outline"
+                      className="text-destructive border-destructive hover:bg-destructive/10"
+                      onClick={onDelete}
+                    >
+                      <Trash2 className="w-4 h-4 mr-1" />
+                      Excluir
+                    </Button>
+                  )}
                 </div>
               </div>
             )}
