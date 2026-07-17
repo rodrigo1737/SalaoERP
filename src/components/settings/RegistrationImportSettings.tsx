@@ -4,6 +4,7 @@ import { AppointmentImportSettings } from './AppointmentImportSettings';
 import { ClientImportSettings } from './ClientImportSettings';
 import { FinancialMovementImportSettings } from './FinancialMovementImportSettings';
 import { LegacyHistoryImportSettings } from './LegacyHistoryImportSettings';
+import { LegacyReconciliationSettings } from './LegacyReconciliationSettings';
 import { ProductStockImportSettings } from './ProductStockImportSettings';
 import { ProfessionalImportSettings } from './ProfessionalImportSettings';
 import { ServiceImportSettings } from './ServiceImportSettings';
@@ -33,6 +34,7 @@ export function RegistrationImportSettings() {
           <TabsTrigger value="professionals">Profissionais</TabsTrigger>
           <TabsTrigger value="appointments">Agendamentos</TabsTrigger>
           <TabsTrigger value="history">Histórico/Comandas</TabsTrigger>
+          <TabsTrigger value="reconciliation">Conciliação 2026</TabsTrigger>
           <TabsTrigger value="stock">Estoque</TabsTrigger>
           <TabsTrigger value="financial">Movimentações</TabsTrigger>
         </TabsList>
@@ -55,6 +57,10 @@ export function RegistrationImportSettings() {
 
         <TabsContent value="history">
           <LegacyHistoryImportSettings />
+        </TabsContent>
+
+        <TabsContent value="reconciliation">
+          <LegacyReconciliationSettings />
         </TabsContent>
 
         <TabsContent value="stock">
