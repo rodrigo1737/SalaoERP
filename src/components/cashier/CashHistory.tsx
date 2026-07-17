@@ -88,6 +88,13 @@ const formatDateTime = (dateString?: string | null) => {
   });
 };
 
+const getBusinessDateKey = (value: string | Date) => new Intl.DateTimeFormat('en-CA', {
+  timeZone: 'America/Sao_Paulo',
+  year: 'numeric',
+  month: '2-digit',
+  day: '2-digit',
+}).format(new Date(value));
+
 const referenceTypeLabels: Record<string, string> = {
   appointment: 'Comanda',
   appointment_refunded: 'Comanda estornada',
@@ -166,6 +173,7 @@ export function CashHistory({ onBack }: CashHistoryProps) {
     commissions,
     currentCashSession,
     pendingCashSession,
+    reopenCurrentCashSession,
     selectedHistoricalCashSession,
     activeCashRegularization,
     startHistoricalCashRegularization,
@@ -183,6 +191,7 @@ export function CashHistory({ onBack }: CashHistoryProps) {
     || hasPermission('refund_bill')
     || hasPermission('reverse_financial_entries');
   const canRegularizeHistoricalCash = userRole === 'admin' || hasPermission('reverse_financial_entries');
+  const canReopenCurrentCash = userRole === 'admin' || hasPermission('manage_cash_flow');
 
   const [tab, setTab] = useState('sessions');
   const [dateFrom, setDateFrom] = useState(() => currentMonthRange().from);
@@ -198,6 +207,21 @@ export function CashHistory({ onBack }: CashHistoryProps) {
   const [closingBalance, setClosingBalance] = useState('');
   const [divergenceReason, setDivergenceReason] = useState('');
   const [regularizationActionLoading, setRegularizationActionLoading] = useState(false);
+  const [cashReopenLoading, setCashReopenLoading] = useState(false);
+
+  const isCurrentBusinessDaySession = (session: CashSession) => (
+    session.status === 'closed'
+    && getBusinessDateKey(session.opened_at) === getBusinessDateKey(new Date())
+  );
+
+  const handleReopenCurrentCash = async (session: CashSession) => {
+    setCashReopenLoading(true);
+    try {
+      await reopenCurrentCashSession(session.id);
+    } finally {
+      setCashReopenLoading(false);
+    }
+  };
 
   const historicalExpectedCash = useMemo(() => {
     if (!selectedHistoricalCashSession) return 0;
@@ -863,7 +887,21 @@ export function CashHistory({ onBack }: CashHistoryProps) {
                       </div>
                     </div>
 
-                    {canRegularizeHistoricalCash && session.status === 'closed' ? (
+                    {canReopenCurrentCash && !pendingCashSession && isCurrentBusinessDaySession(session) ? (
+                      <div className="flex flex-wrap items-center gap-3">
+                        <Button
+                          variant="outline"
+                          onClick={() => void handleReopenCurrentCash(session)}
+                          disabled={cashReopenLoading}
+                        >
+                          <RotateCcw className="mr-2 h-4 w-4" />
+                          {cashReopenLoading ? 'Reabrindo...' : 'Reabrir caixa do dia'}
+                        </Button>
+                        <span className="text-sm text-muted-foreground">
+                          Reabre este caixa como sessão normal, sem regularização histórica.
+                        </span>
+                      </div>
+                    ) : canRegularizeHistoricalCash && session.status === 'closed' ? (
                       <div className="flex flex-wrap items-center gap-3">
                         <Button
                           variant={selectedHistoricalCashSession?.id === session.id ? 'default' : 'outline'}

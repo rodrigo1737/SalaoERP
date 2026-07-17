@@ -285,6 +285,7 @@ type AppointmentEventType =
 type FinancialAuditAction =
   | 'cash_opened'
   | 'cash_closed'
+  | 'cash_reopened'
   | 'transaction_created'
   | 'transaction_reversed'
   | 'appointment_payment_registered'
@@ -364,6 +365,7 @@ interface DataContextType {
   }) => Promise<boolean>;
   // Cash
   openCashSession: (openingBalance: number) => Promise<CashSession | null>;
+  reopenCurrentCashSession: (sessionId: string) => Promise<boolean>;
   closeCashSession: (
     closingBalance: number,
     notes?: string,
@@ -2513,6 +2515,44 @@ export const DataProvider: React.FC<{ children: ReactNode }> = ({ children }) =>
     toast.success('Caixa fechado!');
   };
 
+  const reopenCurrentCashSession = async (sessionId: string): Promise<boolean> => {
+    if (!guardModify()) return false;
+    if (!guardFinancialPermission(canManageCashFlow, 'Você não tem permissão para reabrir o caixa do dia.')) return false;
+
+    const targetSession = cashSessions.find((session) => session.id === sessionId) ?? null;
+    if (!targetSession) {
+      toast.error('Não foi possível localizar o caixa selecionado.');
+      return false;
+    }
+    if (targetSession.status !== 'closed' || isSessionFromPreviousDay(targetSession)) {
+      toast.error('Somente o caixa fechado do dia corrente pode ser reaberto.');
+      return false;
+    }
+
+    const { data, error } = await (supabase as any).rpc('reopen_current_cash_session', {
+      _cash_session_id: sessionId,
+    });
+    if (error) {
+      console.error('Erro ao reabrir caixa do dia:', error);
+      toast.error(error.message || 'Não foi possível reabrir o caixa do dia.');
+      return false;
+    }
+
+    const reopenedSession = (data?.id ? data : data?.[0]) as CashSession | undefined;
+    if (!reopenedSession) {
+      toast.error('A reabertura não retornou um caixa válido.');
+      return false;
+    }
+
+    applyCashSessionsState([
+      reopenedSession,
+      ...cashSessions.filter((cashSession) => cashSession.id !== reopenedSession.id),
+    ]);
+    await refreshData(['cash']);
+    toast.success('Caixa do dia reaberto.');
+    return true;
+  };
+
   const addTransaction = async (transactionData: Omit<Transaction, 'id' | 'created_at'>) => {
     if (!guardModify()) return null;
     if (!guardFinancialPermission(canOperateCashSessions, 'Você não tem permissão para lançar entradas e saídas no caixa.')) return null;
@@ -3401,7 +3441,7 @@ export const DataProvider: React.FC<{ children: ReactNode }> = ({ children }) =>
       addAppointment, updateAppointment, deleteAppointment, refundAppointment, completeAppointment,
       fetchAppointmentServices, saveAppointmentServices,
       fetchClientBalances, registerBillPayments,
-      openCashSession, closeCashSession, selectHistoricalCashSession, clearHistoricalCashSession,
+      openCashSession, reopenCurrentCashSession, closeCashSession, selectHistoricalCashSession, clearHistoricalCashSession,
       startHistoricalCashRegularization, finishHistoricalCashRegularization, cancelHistoricalCashRegularization,
       addTransaction, reverseTransaction,
       payCommission, payAllCommissions, addVoucher, reprocessPendingCommissions, previewReprocessPendingCommissions,

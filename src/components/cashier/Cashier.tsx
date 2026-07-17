@@ -7,6 +7,7 @@ import {
   Clock,
   CreditCard,
   DollarSign,
+  RotateCcw,
   Smartphone,
   TrendingDown,
   TrendingUp,
@@ -62,12 +63,14 @@ export function Cashier() {
   const {
     currentCashSession,
     pendingCashSession,
+    cashSessions,
     selectedHistoricalCashSession,
     transactions,
     professionals,
     cashLoading,
     transactionsLoading,
     openCashSession,
+    reopenCurrentCashSession,
     closeCashSession,
     cancelHistoricalCashRegularization,
     addTransaction,
@@ -103,6 +106,26 @@ export function Cashier() {
   const [transactionPaymentMethod, setTransactionPaymentMethod] = useState('cash');
 
   const activeSession = currentCashSession ?? pendingCashSession ?? null;
+  const todayClosedCashSession = useMemo(() => {
+    const today = new Intl.DateTimeFormat('en-CA', {
+      timeZone: 'America/Sao_Paulo',
+      year: 'numeric',
+      month: '2-digit',
+      day: '2-digit',
+    }).format(new Date());
+
+    return cashSessions
+      .filter((session) => (
+        session.status === 'closed'
+        && new Intl.DateTimeFormat('en-CA', {
+          timeZone: 'America/Sao_Paulo',
+          year: 'numeric',
+          month: '2-digit',
+          day: '2-digit',
+        }).format(new Date(session.opened_at)) === today
+      ))
+      .sort((a, b) => new Date(b.opened_at).getTime() - new Date(a.opened_at).getTime())[0] ?? null;
+  }, [cashSessions]);
   const hasPendingSession = Boolean(pendingCashSession);
   const isPendingOnlyState = Boolean(pendingCashSession && !currentCashSession);
   const closeTargetSession = closeTargetSessionId
@@ -225,6 +248,16 @@ export function Cashier() {
       setOpeningBalance('');
     } catch (error) {
       toast({ variant: 'destructive', title: 'Erro', description: 'Não foi possível abrir o caixa.' });
+    } finally {
+      setIsSubmitting(false);
+    }
+  };
+
+  const handleReopenCurrentCash = async () => {
+    if (!todayClosedCashSession) return;
+    setIsSubmitting(true);
+    try {
+      await reopenCurrentCashSession(todayClosedCashSession.id);
     } finally {
       setIsSubmitting(false);
     }
@@ -375,10 +408,24 @@ export function Cashier() {
         <div className="flex flex-wrap gap-2">
           {!activeSession ? (
             cashLoading ? null : (
-              <Button onClick={() => setIsOpenDialogOpen(true)}>
-                <DollarSign className="w-4 h-4 mr-2" />
-                Abrir Caixa
-              </Button>
+              <>
+                {todayClosedCashSession && canManageCashFlow ? (
+                  <Button
+                    variant="outline"
+                    onClick={() => void handleReopenCurrentCash()}
+                    disabled={isSubmitting}
+                  >
+                    <RotateCcw className="w-4 h-4 mr-2" />
+                    {isSubmitting ? 'Reabrindo...' : 'Reabrir Caixa do Dia'}
+                  </Button>
+                ) : null}
+                {!todayClosedCashSession ? (
+                  <Button onClick={() => setIsOpenDialogOpen(true)} disabled={isSubmitting}>
+                    <DollarSign className="w-4 h-4 mr-2" />
+                    Abrir Caixa
+                  </Button>
+                ) : null}
+              </>
             )
           ) : isPendingOnlyState ? (
             canPerformAdvancedFinancialOps ? (
@@ -603,11 +650,29 @@ export function Cashier() {
         <Card className="p-12 border-0 shadow-lg text-center">
           <DollarSign className="w-16 h-16 mx-auto mb-4 text-muted-foreground opacity-50" />
           <h2 className="text-xl font-display font-semibold text-foreground mb-2">Caixa Fechado</h2>
-          <p className="text-muted-foreground mb-6">Abra o caixa para começar a registrar movimentações.</p>
-          <Button onClick={() => setIsOpenDialogOpen(true)}>
-            <DollarSign className="w-4 h-4 mr-2" />
-            Abrir Caixa
-          </Button>
+          <p className="text-muted-foreground mb-6">
+            {todayClosedCashSession
+              ? 'O caixa do dia foi fechado. Reabra-o para continuar registrando movimentações.'
+              : 'Abra o caixa para começar a registrar movimentações.'}
+          </p>
+          <div className="flex flex-wrap justify-center gap-2">
+            {todayClosedCashSession && canManageCashFlow ? (
+              <Button
+                variant="outline"
+                onClick={() => void handleReopenCurrentCash()}
+                disabled={isSubmitting}
+              >
+                <RotateCcw className="w-4 h-4 mr-2" />
+                {isSubmitting ? 'Reabrindo...' : 'Reabrir Caixa do Dia'}
+              </Button>
+            ) : null}
+            {!todayClosedCashSession ? (
+              <Button onClick={() => setIsOpenDialogOpen(true)} disabled={isSubmitting}>
+                <DollarSign className="w-4 h-4 mr-2" />
+                Abrir Caixa
+              </Button>
+            ) : null}
+          </div>
         </Card>
       )}
 
