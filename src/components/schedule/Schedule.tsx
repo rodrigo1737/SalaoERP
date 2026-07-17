@@ -41,7 +41,7 @@ import { Combobox } from '@/components/ui/combobox';
 import { Checkbox } from '@/components/ui/checkbox';
 import { Textarea } from '@/components/ui/textarea';
 import { useToast } from '@/hooks/use-toast';
-import { useData, Appointment, ServiceProfessional, BillPaymentLine, BillPaymentMethod } from '@/context/DataContext';
+import { useData, Appointment, ClientLedgerEntry, ServiceProfessional, BillPaymentLine, BillPaymentMethod } from '@/context/DataContext';
 import { useStock } from '@/context/StockContext';
 import { useAuth } from '@/contexts/AuthContext';
 import { useTenantSettings } from '@/contexts/TenantSettingsContext';
@@ -226,9 +226,14 @@ export function Schedule() {
   const [extraSameDayAppointments, setExtraSameDayAppointments] = useState<Appointment[]>([]);
   const [includedExtraIds, setIncludedExtraIds] = useState<string[]>([]);
   const [clientPendingTotal, setClientPendingTotal] = useState(0);
+  const [clientDebtEntries, setClientDebtEntries] = useState<ClientLedgerEntry[]>([]);
+  const [includePreviousDebts, setIncludePreviousDebts] = useState(true);
   const [clientCreditTotal, setClientCreditTotal] = useState(0);
   const [splitPayment, setSplitPayment] = useState(false);
   const [paymentLines, setPaymentLines] = useState<Array<{ method: BillPaymentMethod; amount: string }>>([]);
+  const [simplePaymentAmount, setSimplePaymentAmount] = useState('');
+  const [allowResidualDebt, setAllowResidualDebt] = useState(false);
+  const [billOperationId, setBillOperationId] = useState<string | null>(null);
   const [creditDepositAmount, setCreditDepositAmount] = useState('');
   const [creditDepositMethod, setCreditDepositMethod] = useState<'cash' | 'pix' | 'credit_card' | 'debit_card'>('cash');
   const [generateCommissionOnPending, setGenerateCommissionOnPending] = useState(true);
@@ -974,14 +979,25 @@ export function Schedule() {
     if (selectedAppointment?.client_id) {
       const balances = await fetchClientBalances(selectedAppointment.client_id);
       setClientPendingTotal(balances.pendingTotal);
+      setClientDebtEntries(balances.entries.filter((entry) =>
+        entry.entry_type === 'debt'
+        && entry.status === 'open'
+        && Number(entry.amount) - Number(entry.settled_amount ?? 0) > 0.009,
+      ));
+      setIncludePreviousDebts(balances.pendingTotal > 0.009);
       setClientCreditTotal(balances.creditTotal);
     } else {
       setClientPendingTotal(0);
+      setClientDebtEntries([]);
+      setIncludePreviousDebts(false);
       setClientCreditTotal(0);
     }
     setGenerateCommissionOnPending(true);
     setSplitPayment(false);
     setPaymentLines([]);
+    setSimplePaymentAmount('');
+    setAllowResidualDebt(false);
+    setBillOperationId(crypto.randomUUID());
     setCreditDepositAmount('');
     setCreditDepositMethod('cash');
 
@@ -1186,6 +1202,8 @@ export function Schedule() {
       );
       const extrasTotal = includedExtras.reduce((sum, appointment) => sum + (appointment.total_value || 0), 0);
       const totalValue = mainTotal + extrasTotal;
+      const previousDebtAmount = includePreviousDebts ? clientPendingTotal : 0;
+      const billingTotal = totalValue + previousDebtAmount;
 
       const paymentMethodMap: Record<string, string> = {
         pix: 'pix',
@@ -1195,23 +1213,48 @@ export function Schedule() {
         pending: 'other'
       };
 
-      // Linhas de pagamento: no modo dividido vêm da UI; no simples é uma
-      // única linha com o total.
+      // Linhas de pagamento: no modo dividido vêm da UI; no simples o valor
+      // informado pode ser menor e a diferença vira uma pendência somente
+      // quando o operador autoriza explicitamente.
       const singleMethodToLine: Record<string, BillPaymentMethod> = {
         cash: 'cash', pix: 'pix', credit: 'credit_card', debit: 'debit_card', pending: 'pending',
       };
+      const simpleAmount = simplePaymentAmount.trim() === '' ? billingTotal : Number(simplePaymentAmount);
+      if (!splitPayment && (!Number.isFinite(simpleAmount) || simpleAmount < 0)) {
+        toast({ variant: 'destructive', title: 'Valor inválido', description: 'Informe um valor de pagamento válido.' });
+        return;
+      }
+      if (!splitPayment && simpleAmount > billingTotal + 0.01) {
+        toast({ variant: 'destructive', title: 'Valor acima da cobrança', description: 'O valor recebido não pode ser maior que o total. Use crédito adicional para registrar excedente.' });
+        return;
+      }
+
+      const splitLines = paymentLines
+        .map((line) => ({ method: line.method, amount: parseFloat(line.amount) || 0 }))
+        .filter((line) => line.amount > 0.009);
+      const splitLinesSum = splitLines.reduce((sum, line) => sum + line.amount, 0);
       const resolvedLines: BillPaymentLine[] = splitPayment
-        ? paymentLines
-            .map((line) => ({ method: line.method, amount: parseFloat(line.amount) || 0 }))
-            .filter((line) => line.amount > 0.009)
-        : [{ method: singleMethodToLine[selectedPaymentMethod], amount: totalValue }];
+        ? [
+            ...splitLines,
+            ...(allowResidualDebt && billingTotal - splitLinesSum > 0.009
+              ? [{ method: 'pending' as const, amount: billingTotal - splitLinesSum }]
+              : []),
+          ]
+        : selectedPaymentMethod === 'pending'
+          ? [{ method: 'pending', amount: billingTotal }]
+          : [
+              { method: singleMethodToLine[selectedPaymentMethod], amount: Math.min(simpleAmount, billingTotal) },
+              ...(allowResidualDebt && billingTotal - simpleAmount > 0.009
+                ? [{ method: 'pending' as const, amount: billingTotal - simpleAmount }]
+                : []),
+            ].filter((line) => line.amount > 0.009);
 
       const linesSum = resolvedLines.reduce((s, line) => s + line.amount, 0);
-      if (splitPayment && Math.abs(linesSum - totalValue) > 0.01) {
+      if (linesSum > billingTotal + 0.01 || (linesSum < billingTotal - 0.01 && !allowResidualDebt)) {
         toast({
           variant: 'destructive',
           title: 'Valores não conferem',
-          description: `As formas de pagamento somam R$ ${linesSum.toFixed(2)}, mas o total da comanda é R$ ${totalValue.toFixed(2)}.`,
+          description: `As formas de pagamento somam R$ ${linesSum.toFixed(2)}, mas o total para cobrança é R$ ${billingTotal.toFixed(2)}. Divida o pagamento ou lance a diferença como pendência.`,
         });
         return;
       }
@@ -1240,6 +1283,19 @@ export function Schedule() {
       const fullyTransfer = commissionLines.length > 0
         && commissionLines.every((line) => settlementForLine(line) === 'transfer_receivable');
 
+      // O repasse integral não usa o caixa para recebimento. Se houver
+      // pendência/crédito, ainda precisamos registrar o razão do cliente; um
+      // recebimento real de dívida, por outro lado, exige caixa do salão.
+      if (fullyTransfer && includePreviousDebts && previousDebtAmount > 0.009
+        && resolvedLines.some((line) => line.method !== 'pending')) {
+        toast({
+          variant: 'destructive',
+          title: 'Repasse integral',
+          description: 'Uma comanda de repasse integral não pode baixar pendências no caixa do salão. Use uma forma pendente ou regularize a dívida em uma comanda do estabelecimento.',
+        });
+        return;
+      }
+
       let notes = selectedAppointment.notes || '';
       if (billItems.length > 0) {
         const itemsDesc = billItems.map(item =>
@@ -1253,22 +1309,39 @@ export function Schedule() {
         notes,
       });
 
-      // Registra os pagamentos (transações por método, pendência no razão,
-      // consumo de crédito e depósito) antes de finalizar os atendimentos.
-      if (!fullyTransfer) {
+      // A baixa é atômica: pagamentos, crédito, pendência residual e quitação
+      // FIFO das dívidas antigas ficam no mesmo caixa e na mesma transação.
+      const needsBillPaymentRegistration = !fullyTransfer
+        || resolvedLines.some((line) => line.method === 'pending' || line.method === 'client_credit')
+        || Boolean(creditDeposit);
+      if (needsBillPaymentRegistration) {
         const paymentsOk = await registerBillPayments({
           appointmentId: selectedAppointment.id,
           clientId: selectedAppointment.client_id ?? null,
           clientName: selectedAppointment.client?.name,
           lines: resolvedLines,
+          currentDue: totalValue,
+          includePreviousDebts,
+          idempotencyKey: billOperationId,
           creditDeposit,
-          cashSessionId: selectedHistoricalCashSessionId,
+          cashSessionId: selectedHistoricalCashSessionId
+            ?? cashState.currentCashSession?.id
+            ?? cashState.pendingCashSession?.id
+            ?? null,
           appointmentDate: selectedAppointment.start_time,
         });
         if (!paymentsOk) return;
       }
 
-      const skipCommission = pendingAmount > 0.009 && !generateCommissionOnPending;
+      const paidBeforeDebt = resolvedLines
+        .filter((line) => line.method !== 'pending')
+        .reduce((sum, line) => sum + line.amount, 0);
+      const estimatedOldDebtPaid = includePreviousDebts
+        ? Math.min(clientPendingTotal, paidBeforeDebt)
+        : 0;
+      const estimatedCurrentPaid = Math.max(0, paidBeforeDebt - estimatedOldDebtPaid);
+      const currentPendingAmount = Math.max(0, totalValue - estimatedCurrentPaid);
+      const skipCommission = currentPendingAmount > 0.009 && !generateCommissionOnPending;
 
       const moneyLines = resolvedLines.filter((line) => line.method !== 'pending' && line.method !== 'client_credit');
       const primaryMethod = splitPayment
@@ -1375,7 +1448,7 @@ export function Schedule() {
 
       toast({
         title: "Comanda fechada",
-        description: `R$ ${totalValue.toFixed(2)} - ${paymentSummary}${pendingAmount > 0.009 ? ` (R$ ${pendingAmount.toFixed(2)} pendente)` : ''}${includedExtras.length > 0 ? ` (${includedExtras.length + 1} agendamentos)` : ''}${billItems.length > 0 ? ` (+${billItems.length} item(s))` : ''}`
+        description: `R$ ${billingTotal.toFixed(2)} - ${paymentSummary}${pendingAmount > 0.009 ? ` (R$ ${pendingAmount.toFixed(2)} pendente)` : ''}${includedExtras.length > 0 ? ` (${includedExtras.length + 1} agendamentos)` : ''}${billItems.length > 0 ? ` (+${billItems.length} item(s))` : ''}`
       });
 
       setIsClosingBill(false);
@@ -1384,8 +1457,13 @@ export function Schedule() {
       setBillItems([]);
       setExtraSameDayAppointments([]);
       setIncludedExtraIds([]);
+      setClientDebtEntries([]);
+      setIncludePreviousDebts(false);
       setSplitPayment(false);
       setPaymentLines([]);
+      setSimplePaymentAmount('');
+      setAllowResidualDebt(false);
+      setBillOperationId(null);
       setCreditDepositAmount('');
     } catch (error) {
       console.error('Error closing bill:', error);
@@ -2141,13 +2219,38 @@ export function Schedule() {
           </DialogHeader>
           <div className="space-y-4 py-4">
             {clientPendingTotal > 0 && (
-              <div className="rounded-lg border border-warning/40 bg-warning-soft/40 p-3 text-sm">
-                <p className="font-medium text-warning">
-                  Cliente possui pendências anteriores: R$ {clientPendingTotal.toFixed(2)}
-                </p>
-                <p className="text-xs text-muted-foreground">
-                  Valores de comandas fechadas como "Pendente". Considere cobrar junto com esta comanda.
-                </p>
+              <div className="rounded-lg border border-warning/40 bg-warning-soft/40 p-3 text-sm space-y-2">
+                <div>
+                  <p className="font-medium text-warning">
+                    Pendências anteriores do cliente: R$ {clientPendingTotal.toFixed(2)}
+                  </p>
+                  <p className="text-xs text-muted-foreground">
+                    A cobrança será aplicada primeiro às pendências mais antigas e depois à comanda atual.
+                  </p>
+                </div>
+                <label className="flex items-center gap-2 cursor-pointer">
+                  <Checkbox
+                    checked={includePreviousDebts}
+                    disabled={isSubmittingBill}
+                    onCheckedChange={(checked) => setIncludePreviousDebts(Boolean(checked))}
+                  />
+                  <span className="font-medium">Cobrar pendências junto nesta comanda</span>
+                </label>
+                {includePreviousDebts && clientDebtEntries.length > 0 && (
+                  <div className="space-y-1 border-t border-warning/20 pt-2 text-xs text-muted-foreground">
+                    {clientDebtEntries.slice(0, 4).map((entry) => (
+                      <div key={entry.id} className="flex justify-between gap-2">
+                        <span className="truncate">
+                          {new Date(entry.created_at).toLocaleDateString('pt-BR')} • {entry.description || 'Pendência de comanda'}
+                        </span>
+                        <strong className="whitespace-nowrap text-foreground">
+                          R$ {(Number(entry.amount) - Number(entry.settled_amount ?? 0)).toFixed(2)}
+                        </strong>
+                      </div>
+                    ))}
+                    {clientDebtEntries.length > 4 && <span>+ {clientDebtEntries.length - 4} pendência(s)</span>}
+                  </div>
+                )}
               </div>
             )}
 
@@ -2222,7 +2325,7 @@ export function Schedule() {
                   })}
                 </div>
                 <div className="flex justify-between border-t border-primary/20 pt-2 text-sm">
-                  <span className="font-medium">Total da comanda</span>
+                  <span className="font-medium">Total da comanda atual</span>
                   <span className="font-bold text-primary">
                     R$ {(
                       (parseFloat(editValue) || selectedAppointment?.total_value || 0)
@@ -2241,10 +2344,18 @@ export function Schedule() {
                 + billItems.reduce((sum, item) => sum + item.total, 0)
                 + extraSameDayAppointments
                   .filter((extra) => includedExtraIds.includes(extra.id))
-                  .reduce((sum, extra) => sum + (extra.total_value || 0), 0);
+                  .reduce((sum, extra) => sum + (extra.total_value || 0), 0)
+                + (includePreviousDebts ? clientPendingTotal : 0);
               const allocated = paymentLines.reduce((sum, line) => sum + (parseFloat(line.amount) || 0), 0);
               const remaining = billTotal - allocated;
               const hasPendingLine = paymentLines.some((line) => line.method === 'pending' && (parseFloat(line.amount) || 0) > 0.009);
+              const simpleEntered = simplePaymentAmount.trim() === '' ? billTotal : Number(simplePaymentAmount);
+              const hasSimpleResidual = !splitPayment
+                && selectedPaymentMethod !== ''
+                && selectedPaymentMethod !== 'pending'
+                && Number.isFinite(simpleEntered)
+                && simpleEntered < billTotal - 0.009;
+              const hasPendingPayment = hasPendingLine || hasSimpleResidual || (!splitPayment && selectedPaymentMethod === 'pending');
               const splitMethodOptions: Array<{ value: BillPaymentMethod; label: string; disabled?: boolean }> = [
                 { value: 'cash', label: 'Dinheiro' },
                 { value: 'pix', label: 'PIX' },
@@ -2254,7 +2365,7 @@ export function Schedule() {
                 { value: 'pending', label: 'Pendente (fica devendo)' },
               ];
               const splitValid = paymentLines.some((line) => (parseFloat(line.amount) || 0) > 0.009)
-                && Math.abs(remaining) <= 0.01;
+                && (Math.abs(remaining) <= 0.01 || (allowResidualDebt && remaining > 0.01));
 
               return (
                 <>
@@ -2272,6 +2383,7 @@ export function Schedule() {
                           setSplitPayment(next);
                           setSelectedPaymentMethod('');
                           setPaymentLines(next ? [{ method: 'cash', amount: billTotal.toFixed(2) }] : []);
+                          setAllowResidualDebt(false);
                         }}
                       >
                         {splitPayment ? 'Voltar ao pagamento simples' : 'Dividir pagamento / usar crédito'}
@@ -2300,6 +2412,31 @@ export function Schedule() {
                           <AlertCircle className="w-5 h-5" />
                           <span className="text-xs">Pendente</span>
                         </Button>
+                        <div className="col-span-3 space-y-2 rounded-lg border border-border bg-secondary/20 p-3">
+                          <div className="flex items-center justify-between gap-3">
+                            <Label htmlFor="simple-payment-amount">Valor recebido</Label>
+                            <span className="text-xs text-muted-foreground">Cobrança: R$ {billTotal.toFixed(2)}</span>
+                          </div>
+                          <Input
+                            id="simple-payment-amount"
+                            type="number"
+                            min="0"
+                            step="0.01"
+                            placeholder={billTotal.toFixed(2)}
+                            value={simplePaymentAmount}
+                            onChange={(event) => setSimplePaymentAmount(event.target.value)}
+                          />
+                          {selectedPaymentMethod !== 'pending' && (
+                            <label className="flex items-center gap-2 cursor-pointer text-xs">
+                              <Checkbox
+                                checked={allowResidualDebt}
+                                disabled={isSubmittingBill}
+                                onCheckedChange={(checked) => setAllowResidualDebt(Boolean(checked))}
+                              />
+                              <span>Lançar a diferença automaticamente como pendência</span>
+                            </label>
+                          )}
+                        </div>
                       </div>
                     ) : (
                       <div className="space-y-2 rounded-lg border border-border p-3">
@@ -2353,10 +2490,23 @@ export function Schedule() {
                           <Plus className="w-3 h-3 mr-1" />Adicionar forma
                         </Button>
 
+                        <label className="flex items-center gap-2 rounded-lg border border-warning/30 bg-warning-soft/20 px-3 py-2 cursor-pointer text-xs">
+                          <Checkbox
+                            checked={allowResidualDebt}
+                            disabled={isSubmittingBill}
+                            onCheckedChange={(checked) => setAllowResidualDebt(Boolean(checked))}
+                          />
+                          <span>Lançar automaticamente o saldo que faltar como pendência do cliente</span>
+                        </label>
+
                         <div className="flex justify-between border-t pt-2 text-sm">
                           <span>Total: <strong>R$ {billTotal.toFixed(2)}</strong> • Alocado: <strong>R$ {allocated.toFixed(2)}</strong></span>
                           <span className={Math.abs(remaining) <= 0.01 ? 'text-success font-medium' : 'text-destructive font-medium'}>
-                            {Math.abs(remaining) <= 0.01 ? 'Valores conferem' : `Faltam R$ ${remaining.toFixed(2)}`}
+                            {Math.abs(remaining) <= 0.01
+                              ? 'Valores conferem'
+                              : remaining > 0
+                                ? `Faltam R$ ${remaining.toFixed(2)}`
+                                : `Excede R$ ${Math.abs(remaining).toFixed(2)}`}
                           </span>
                         </div>
 
@@ -2389,7 +2539,7 @@ export function Schedule() {
                       </div>
                     )}
 
-                    {((!splitPayment && selectedPaymentMethod === 'pending') || (splitPayment && hasPendingLine)) && (
+                    {hasPendingPayment && (
                       <div className="mt-2 space-y-2">
                         <p className="text-xs text-warning text-center">
                           O valor pendente ficará registrado como dívida do cliente

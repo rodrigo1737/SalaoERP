@@ -359,6 +359,9 @@ interface DataContextType {
     clientId?: string | null;
     clientName?: string;
     lines: BillPaymentLine[];
+    currentDue: number;
+    includePreviousDebts?: boolean;
+    idempotencyKey?: string | null;
     creditDeposit?: { method: 'cash' | 'pix' | 'credit_card' | 'debit_card'; amount: number } | null;
     cashSessionId?: string | null;
     appointmentDate?: string | null;
@@ -1971,176 +1974,72 @@ export const DataProvider: React.FC<{ children: ReactNode }> = ({ children }) =>
     clientId?: string | null;
     clientName?: string;
     lines: BillPaymentLine[];
+    currentDue: number;
+    includePreviousDebts?: boolean;
+    idempotencyKey?: string | null;
     creditDeposit?: { method: 'cash' | 'pix' | 'credit_card' | 'debit_card'; amount: number } | null;
     cashSessionId?: string | null;
     appointmentDate?: string | null;
   }): Promise<boolean> => {
     if (!tenantId) return false;
-    const billingSession = getBillingTargetSession({
-      cashSessionId: params.cashSessionId ?? null,
-      appointmentDate: params.appointmentDate ?? null,
-    });
-    const movementTimestamp = getSessionMovementTimestamp(billingSession);
-    const clientLabel = params.clientName ?? 'Cliente';
+    const { data: result, error } = await supabase.rpc('register_client_bill_payment' as never, {
+      _appointment_id: params.appointmentId,
+      _cash_session_id: params.cashSessionId ?? null,
+      _current_due: params.currentDue,
+      _include_previous_debts: params.includePreviousDebts ?? false,
+      _lines: params.lines,
+      _credit_deposit_amount: params.creditDeposit?.amount ?? 0,
+      _credit_deposit_method: params.creditDeposit?.method ?? null,
+      _idempotency_key: params.idempotencyKey ?? null,
+    } as never);
 
-    const moneyLines = params.lines.filter((line) =>
-      line.amount > 0.009 && (line.method === 'cash' || line.method === 'pix' || line.method === 'credit_card' || line.method === 'debit_card'));
-    const creditUse = params.lines.filter((line) => line.method === 'client_credit' && line.amount > 0.009)
-      .reduce((s, line) => s + line.amount, 0);
-    const pendingAmount = params.lines.filter((line) => line.method === 'pending' && line.amount > 0.009)
-      .reduce((s, line) => s + line.amount, 0);
-
-    if ((moneyLines.length > 0 || params.creditDeposit) && !billingSession) {
-      toast.error('Abra o caixa antes de receber pagamentos.');
+    if (error) {
+      console.error('Erro ao registrar pagamento atômico da comanda:', error);
+      toast.error(error.message || 'Não foi possível registrar o pagamento da comanda.');
       return false;
     }
 
-    // 1) Consumo de crédito primeiro (valida saldo antes de mexer no caixa).
-    if (creditUse > 0.009) {
-      if (!params.clientId) {
-        toast.error('Comanda sem cliente não pode usar crédito.');
-        return false;
-      }
-      const ok = await consumeClientCredit(params.clientId, creditUse);
-      if (!ok) return false;
-    }
+    const batch = (result ?? {}) as {
+      transaction_ids?: string[];
+      pending_total?: number;
+      previous_debt_settled?: number;
+      current_debt_created?: number;
+      idempotent_replay?: boolean;
+    };
 
-    // 2) Transações de caixa por método real.
-    for (const line of moneyLines) {
-      const { data: lineTx, error } = await supabase.from('transactions').insert({
-        cash_session_id: billingSession!.id,
-        type: 'income',
-        category: 'service',
-        description: `Comanda - ${clientLabel}`,
-        amount: line.amount,
-        payment_method: line.method,
-        reference_id: params.appointmentId,
-        reference_type: 'appointment',
-        created_by: user?.id,
-        tenant_id: tenantId,
-        ...(movementTimestamp ? { created_at: movementTimestamp } : {}),
-      }).select().single();
-      if (error) {
-        console.error('Erro ao registrar pagamento da comanda:', error);
-        toast.error('Erro ao registrar um dos pagamentos no caixa.');
-        return false;
-      }
-      // Otimista: evita depender do Realtime/recarga completa para aparecer.
-      if (lineTx) setTransactions(prev => [lineTx as Transaction, ...prev]);
-      if (lineTx) {
-        await recordFinancialAudit({
-          actionType: 'appointment_payment_registered',
-          entityType: 'transaction',
-          description: `Pagamento da comanda registrado via ${line.method}.`,
-          transactionId: (lineTx as Transaction).id,
-          cashSessionId: billingSession!.id,
-          appointmentId: params.appointmentId,
-          afterState: lineTx as unknown as Record<string, unknown>,
-          metadata: {
-            payment_method: line.method,
-            amount: line.amount,
-            used_historical_cash_session: billingSession?.status === 'closed',
-            cash_business_date: billingSession ? getBusinessDateKey(billingSession.opened_at) : null,
-          },
-        });
+    // A operação já foi confirmada no banco; atualiza apenas as linhas que
+    // foram criadas para que o caixa reflita o resultado sem recarga total.
+    const transactionIds = Array.isArray(batch.transaction_ids) ? batch.transaction_ids : [];
+    if (transactionIds.length > 0) {
+      const { data: newTransactions } = await supabase
+        .from('transactions')
+        .select('*')
+        .in('id', transactionIds)
+        .eq('tenant_id', tenantId);
+      if (newTransactions?.length) {
+        setTransactions((previous) => [
+          ...(newTransactions as Transaction[]),
+          ...previous.filter((transaction) => !transactionIds.includes(transaction.id)),
+        ]);
       }
     }
 
-    // 3) Parcela pendente vira dívida no razão do cliente.
-    if (pendingAmount > 0.009) {
-      if (!params.clientId) {
-        toast.error('Comanda sem cliente não pode ficar pendente.');
-        return false;
-      }
-      const { error } = await supabase.from('client_ledger_entries').insert({
-        tenant_id: tenantId,
-        client_id: params.clientId,
-        appointment_id: params.appointmentId,
-        entry_type: 'debt',
-        amount: pendingAmount,
-        description: 'Pendência de comanda',
-        created_by: user?.id ?? null,
+    if (!batch.idempotent_replay) {
+      await recordAppointmentEvent({
+        appointmentId: params.appointmentId,
+        eventType: 'payment_registered',
+        snapshot: appointments.find((appointment) => appointment.id === params.appointmentId) ?? { id: params.appointmentId },
+        metadata: {
+          paid_lines: params.lines,
+          credit_deposit: params.creditDeposit ?? null,
+          pending_amount: batch.pending_total ?? null,
+          previous_debt_settled: batch.previous_debt_settled ?? 0,
+          current_debt_created: batch.current_debt_created ?? 0,
+          cash_session_id: params.cashSessionId ?? null,
+          idempotent_replay: false,
+        },
       });
-      if (error) {
-        console.error('Erro ao registrar pendência do cliente:', error);
-        toast.error('Erro ao registrar a pendência do cliente.');
-        return false;
-      }
     }
-
-    // 4) Depósito de crédito (cliente deixou valor além da comanda).
-    if (params.creditDeposit && params.creditDeposit.amount > 0.009) {
-      if (!params.clientId) {
-        toast.error('Comanda sem cliente não pode receber crédito.');
-        return false;
-      }
-      const { data: depositTx, error: depositError } = await supabase.from('transactions').insert({
-        cash_session_id: billingSession!.id,
-        type: 'income',
-        category: 'Crédito de Cliente',
-        description: `Crédito deixado por ${clientLabel}`,
-        amount: params.creditDeposit.amount,
-        payment_method: params.creditDeposit.method,
-        reference_id: params.appointmentId,
-        reference_type: 'client_credit',
-        created_by: user?.id,
-        tenant_id: tenantId,
-        ...(movementTimestamp ? { created_at: movementTimestamp } : {}),
-      }).select().single();
-      if (depositError) {
-        console.error('Erro ao registrar crédito do cliente:', depositError);
-        toast.error('Erro ao registrar o crédito do cliente no caixa.');
-        return false;
-      }
-      if (depositTx) setTransactions(prev => [depositTx as Transaction, ...prev]);
-      if (depositTx) {
-        await recordFinancialAudit({
-          actionType: 'transaction_created',
-          entityType: 'transaction',
-          description: `Crédito do cliente registrado na comanda.`,
-          transactionId: (depositTx as Transaction).id,
-          cashSessionId: billingSession!.id,
-          appointmentId: params.appointmentId,
-          afterState: depositTx as unknown as Record<string, unknown>,
-          metadata: {
-            payment_method: params.creditDeposit.method,
-            amount: params.creditDeposit.amount,
-            kind: 'client_credit_deposit',
-            used_historical_cash_session: billingSession?.status === 'closed',
-            cash_business_date: billingSession ? getBusinessDateKey(billingSession.opened_at) : null,
-          },
-        });
-      }
-      const { error: ledgerError } = await supabase.from('client_ledger_entries').insert({
-        tenant_id: tenantId,
-        client_id: params.clientId,
-        appointment_id: params.appointmentId,
-        transaction_id: depositTx?.id ?? null,
-        entry_type: 'credit',
-        amount: params.creditDeposit.amount,
-        description: 'Crédito deixado na comanda',
-        created_by: user?.id ?? null,
-      });
-      if (ledgerError) {
-        console.error('Erro ao registrar crédito no razão:', ledgerError);
-        toast.error('O valor entrou no caixa, mas houve erro ao registrar o crédito. Verifique manualmente.');
-        return false;
-      }
-    }
-
-    await recordAppointmentEvent({
-      appointmentId: params.appointmentId,
-      eventType: 'payment_registered',
-      snapshot: appointments.find((appointment) => appointment.id === params.appointmentId) ?? { id: params.appointmentId },
-      metadata: {
-        paid_lines: moneyLines.map((line) => ({ method: line.method, amount: line.amount })),
-        credit_used: creditUse,
-        pending_amount: pendingAmount,
-        credit_deposit: params.creditDeposit ?? null,
-        cash_session_id: billingSession?.id ?? null,
-        used_historical_cash_session: billingSession?.status === 'closed',
-      },
-    });
 
     return true;
   };
@@ -2627,7 +2526,84 @@ export const DataProvider: React.FC<{ children: ReactNode }> = ({ children }) =>
     try {
       let reversalTransaction: Transaction;
 
-      if (originalTransaction.reference_type === 'appointment') {
+      if (originalTransaction.reference_type === 'client_ledger_settlement') {
+        const { data: settlement, error: settlementError } = await (supabase as any)
+          .from('client_ledger_settlements')
+          .select('*')
+          .eq('tenant_id', tenantId)
+          .eq('transaction_id', originalTransaction.id)
+          .eq('status', 'active')
+          .maybeSingle();
+
+        if (settlementError) throw settlementError;
+        if (!settlement) {
+          toast.error('A baixa da pendência vinculada não foi encontrada.');
+          return false;
+        }
+
+        const { data: ledgerEntry, error: ledgerReadError } = await supabase
+          .from('client_ledger_entries')
+          .select('*')
+          .eq('tenant_id', tenantId)
+          .eq('id', settlement.ledger_entry_id)
+          .maybeSingle();
+        if (ledgerReadError) throw ledgerReadError;
+        if (!ledgerEntry) {
+          toast.error('O lançamento da pendência vinculada não foi encontrado.');
+          return false;
+        }
+
+        const restoredSettledAmount = Math.max(0, Number(ledgerEntry.settled_amount ?? 0) - Number(settlement.amount));
+        const { error: ledgerRestoreError } = await supabase
+          .from('client_ledger_entries')
+          .update({
+            settled_amount: restoredSettledAmount,
+            status: 'open',
+            settled_at: null,
+          })
+          .eq('tenant_id', tenantId)
+          .eq('id', settlement.ledger_entry_id);
+        if (ledgerRestoreError) throw ledgerRestoreError;
+
+        reversalTransaction = await createReversalTransaction(originalTransaction, {
+          category: 'Estorno de baixa de pendência',
+          description: `Estorno de baixa de pendência: ${originalTransaction.description ?? 'Baixa de cliente'}`,
+          paymentMethod: originalTransaction.payment_method,
+          referenceId: settlement.appointment_id ?? originalTransaction.reference_id,
+          referenceType: 'client_ledger_settlement_reversal',
+        });
+
+        await markTransactionAsReversed(originalTransaction.id, reversalTransaction.id, reason);
+        const { error: settlementRestoreError } = await (supabase as any)
+          .from('client_ledger_settlements')
+          .update({
+            status: 'reversed',
+            reversed_at: new Date().toISOString(),
+            reversed_by: user?.id ?? null,
+            reversal_transaction_id: reversalTransaction.id,
+          })
+          .eq('tenant_id', tenantId)
+          .eq('id', settlement.id)
+          .eq('status', 'active');
+        if (settlementRestoreError) throw settlementRestoreError;
+
+        await recordFinancialAudit({
+          actionType: 'transaction_reversed',
+          entityType: 'transaction',
+          description: 'Baixa de pendência estornada e saldo do cliente restaurado.',
+          transactionId: originalTransaction.id,
+          cashSessionId: reversalTransaction.cash_session_id ?? originalTransaction.cash_session_id ?? targetSession.id,
+          appointmentId: settlement.appointment_id ?? originalTransaction.reference_id ?? null,
+          beforeState: originalTransaction as unknown as Record<string, unknown>,
+          afterState: {
+            reversed_at: new Date().toISOString(),
+            reversal_transaction_id: reversalTransaction.id,
+            restored_ledger_entry_id: settlement.ledger_entry_id,
+            restored_amount: settlement.amount,
+            reversal_reason: reason ?? null,
+          },
+        });
+      } else if (originalTransaction.reference_type === 'appointment') {
         const appointmentId = originalTransaction.reference_id;
         if (!appointmentId) {
           toast.error('A comanda vinculada não foi encontrada.');
