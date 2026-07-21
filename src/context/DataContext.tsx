@@ -7,7 +7,6 @@ import { isCleaningControlTenant } from '@/lib/tenantSegments';
 import {
   calculateSettlementAmount,
   CommissionSettlementKind,
-  DEFAULT_COMMISSION_SETTLEMENT_KIND,
   getSettlementDirection,
   getSettlementTransactionCategory,
   normalizeCommissionSettlementKind,
@@ -384,7 +383,7 @@ interface DataContextType {
   // Commissions
   payCommission: (id: string, paymentMethod: 'cash' | 'pix' | 'transfer', amount?: number) => Promise<void>;
   payAllCommissions: (professionalId: string, paymentMethod: 'cash' | 'pix' | 'transfer') => Promise<void>;
-  addVoucher: (professionalId: string, amount: number, description?: string) => Promise<void>;
+  addVoucher: (professionalId: string, amount: number, description?: string) => Promise<boolean>;
   reprocessPendingCommissions: (
     filters: { dateFrom: string; dateTo: string; professionalId?: string | null; includePaid?: boolean }
   ) => Promise<CommissionReprocessResult | null>;
@@ -3077,75 +3076,69 @@ export const DataProvider: React.FC<{ children: ReactNode }> = ({ children }) =>
       : `${pendingCommissions.length} comissões/vales liquidados!`);
   };
 
-  const addVoucher = async (professionalId: string, amount: number, description?: string) => {
-    if (!guardModify()) return;
-    if (!guardFinancialPermission(canOperateCashSessions, 'Você não tem permissão para registrar vales e adiantamentos.')) return;
+  const addVoucher = async (professionalId: string, amount: number, description?: string): Promise<boolean> => {
+    if (!guardModify()) return false;
+    if (!guardFinancialPermission(canOperateCashSessions, 'Você não tem permissão para registrar vales e adiantamentos.')) return false;
+    if (!Number.isFinite(amount) || amount <= 0) {
+      toast.error('Informe um valor de vale maior que zero.');
+      return false;
+    }
     const targetSession = getCashOperationTargetSession({
       allowPendingSession: true,
       permissionMessage: 'Somente usuários financeiros podem ajustar vales em caixas pendentes.',
     });
     if (!targetSession) {
       toast.error('Abra o caixa antes de registrar vales.');
-      return;
+      return false;
     }
     const professional = professionals.find(p => p.id === professionalId);
     const voucherDescription = description ?? `Vale para ${professional?.nickname ?? 'Profissional'}`;
     const movementTimestamp = getSessionMovementTimestamp(targetSession);
-    const { data: txData, error: txError } = await supabase
-      .from('transactions')
-      .insert({
-        cash_session_id: targetSession.id,
-        type: 'expense',
-        category: 'Vale',
-        description: voucherDescription,
-        amount,
-        payment_method: 'cash',
-        reference_id: professionalId,
-        reference_type: 'voucher',
-        created_by: user?.id,
-        tenant_id: tenantId,
-        ...(movementTimestamp ? { created_at: movementTimestamp } : {}),
-      })
-      .select()
-      .single();
-    if (txError) { toast.error('Erro ao registrar vale.'); return; }
-    // status 'pending' (não 'paid'): o vale é um débito em aberto que precisa
-    // ser abatido na próxima liquidação de comissões do profissional (Pagar
-    // Todas). Fica 'paid' só quando efetivamente netado contra uma comissão.
-    const { data: commissionRow, error: commError } = await supabase.from('commissions').insert({
-      professional_id: professionalId,
-      transaction_id: txData?.id,
-      cash_session_id: targetSession.id,
-      type: 'voucher',
-      base_value: amount,
-      commission_rate: 100,
-      commission_value: -amount,
-      settlement_kind: DEFAULT_COMMISSION_SETTLEMENT_KIND,
-      service_name_snapshot: 'Vale',
-      professional_name_snapshot: professional?.nickname ?? professional?.name ?? 'Profissional',
-      calculation_source: 'voucher',
-      status: 'pending',
-      tenant_id: tenantId,
-      ...(movementTimestamp ? { created_at: movementTimestamp } : {}),
-    }).select().single();
-    if (commError) { toast.error('Erro ao registrar vale nas comissões.'); return; }
-    // Otimista: evita recarregar todo o histórico financeiro do tenant.
-    setTransactions(prev => [txData as Transaction, ...prev]);
-    if (commissionRow) setCommissions(prev => [{ ...(commissionRow as Commission), professional }, ...prev]);
-    await recordFinancialAudit({
-      actionType: 'voucher_created',
-      entityType: 'transaction',
-      description: 'Vale registrado no caixa.',
-      transactionId: txData?.id,
-      cashSessionId: targetSession.id,
-      commissionId: commissionRow?.id ?? null,
-      afterState: txData as unknown as Record<string, unknown>,
-      metadata: {
-        professional_id: professionalId,
-        amount,
-      },
+    const idempotencyKey = `voucher-${Date.now()}-${Math.random().toString(36).slice(2)}`;
+    const { data: rpcData, error: rpcError } = await (supabase as any).rpc('register_voucher_atomic', {
+      _professional_id: professionalId,
+      _amount: amount,
+      _description: voucherDescription,
+      _cash_session_id: targetSession.id,
+      _movement_timestamp: movementTimestamp ?? null,
+      _idempotency_key: idempotencyKey,
     });
-    toast.success('Vale registrado!');
+
+    if (rpcError) {
+      console.error('Erro ao registrar vale de forma atomica:', rpcError);
+      toast.error(rpcError.message || 'Erro ao registrar vale e debitar a comissão.');
+      return false;
+    }
+
+    const result = (Array.isArray(rpcData) ? rpcData[0] : rpcData) as {
+      transaction_id?: string;
+      commission_id?: string;
+    } | null;
+    if (!result?.transaction_id || !result.commission_id) {
+      console.error('Resposta inesperada ao registrar vale:', rpcData);
+      await refreshData(['transactions', 'commissions']);
+      toast.error('O vale foi processado, mas a resposta não pôde ser confirmada. Confira o extrato antes de tentar novamente.');
+      return false;
+    }
+
+    const [{ data: txData, error: txFetchError }, { data: commissionRow, error: commFetchError }] = await Promise.all([
+      supabase.from('transactions').select('*').eq('id', result.transaction_id).maybeSingle(),
+      supabase.from('commissions').select('*').eq('id', result.commission_id).maybeSingle(),
+    ]);
+
+    if (txFetchError || commFetchError || !txData || !commissionRow) {
+      console.warn('Vale registrado, mas a atualização local será recarregada:', { txFetchError, commFetchError });
+      await refreshData(['transactions', 'commissions']);
+    } else {
+      setTransactions(prev => [txData as Transaction, ...prev.filter(t => t.id !== txData.id)]);
+      setCommissions(prev => [
+        { ...(commissionRow as Commission), professional },
+        ...prev.filter(c => c.id !== commissionRow.id),
+      ]);
+    }
+
+    toast.success('Vale registrado e vinculado à comissão!');
+    return true;
   };
 
   // Simulação: calcula o recálculo SEM gravar, para a tela mostrar diferença

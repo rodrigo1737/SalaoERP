@@ -323,7 +323,8 @@ export function Cashier() {
       if (isVoucherCategory) {
         // Vale: débito do profissional, sem forma de pagamento (não é uma
         // movimentação por método — o valor sai do caixa e abate a comissão).
-        await addVoucher(voucherProfessionalId, parseFloat(transactionAmount), transactionDescription || undefined);
+        const voucherSaved = await addVoucher(voucherProfessionalId, parseFloat(transactionAmount), transactionDescription || undefined);
+        if (!voucherSaved) return;
         toast({
           title: 'Vale registrado',
           description: `R$ ${parseFloat(transactionAmount).toFixed(2)} lançado como saída e debitado da comissão do profissional.`,

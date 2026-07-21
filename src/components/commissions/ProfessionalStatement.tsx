@@ -116,6 +116,11 @@ export function ProfessionalStatement() {
       const grossAttended = receivable.reduce((s, c) => s + Number(c.base_value || 0), 0);
       const professionalGrossValue = grossAttended - transferGenerated;
       const vouchersTotal = vouchers.reduce((s, c) => s + Math.abs(Number(c.commission_value)), 0);
+      const vouchersUnsettledTotal = vouchers.reduce((s, c) => {
+        const voucherValue = Math.abs(Number(c.commission_value));
+        const settledValue = Math.min(voucherValue, Math.abs(Number(c.settled_amount || 0)));
+        return s + Math.max(0, voucherValue - settledValue);
+      }, 0);
 
       return {
         professionalId: prof.id,
@@ -130,7 +135,7 @@ export function ProfessionalStatement() {
         transferPending,
         transferReceived,
         vouchers: vouchersTotal,
-        netToPay: commissionPending - vouchersTotal,
+        netToPay: commissionPending - vouchersUnsettledTotal,
         netToReceive: transferPending,
       };
     }).filter((r) =>
