@@ -117,7 +117,7 @@ interface ServiceProductItem {
 const DEFAULT_PAGE_SIZE: CadastroPageSize = 20;
 
 export function ServicesList() {
-  const { services, professionals, addService, updateService, deleteService, refreshData } = useStableData();
+  const { services, professionals, addService, updateService, deleteService } = useStableData();
   const { saveServiceProducts } = useStock();
   const { tenantId } = useAuth();
   const { toast } = useToast();
@@ -252,7 +252,7 @@ export function ServicesList() {
   };
 
   const handleSave = async () => {
-    if (!formName || !formCategory || !formPrice) return;
+    if (!formName || !formCategory || !formPrice || !tenantId) return;
 
     setIsSubmitting(true);
 
@@ -295,35 +295,61 @@ export function ServicesList() {
       // Save professional commissions
       const enabledCommissions = professionalCommissions.filter(pc => pc.enabled);
 
-      // Delete existing and insert new
-      await supabase
+      const { data: existingLinks, error: existingLinksError } = await supabase
         .from('service_professionals')
-        .delete()
+        .select('id, professional_id')
         .eq('service_id', serviceId)
         .eq('tenant_id', tenantId);
 
-      if (enabledCommissions.length > 0) {
-        const { error } = await supabase.from('service_professionals').insert(
-          enabledCommissions.map(pc => ({
-            service_id: serviceId,
-            professional_id: pc.professional_id,
-            commission_rate: parseFloat(pc.commission_rate),
-            assistant_commission_rate: parseFloat(pc.assistant_commission_rate),
-            duration_minutes: pc.duration_minutes ? parseInt(pc.duration_minutes) : null,
-            settlement_kind: pc.settlement_kind,
-            tenant_id: tenantId,
-          }))
-        );
+      if (existingLinksError) {
+        throw existingLinksError;
+      }
+
+      const persistedMap = new Map(
+        ((existingLinks as Array<{ id: string; professional_id: string }> | null) ?? []).map((row) => [row.professional_id, row.id]),
+      );
+
+      const enabledIds = new Set(enabledCommissions.map((pc) => pc.professional_id));
+      const toDelete = Array.from(persistedMap.entries())
+        .filter(([professionalId]) => !enabledIds.has(professionalId))
+        .map(([, id]) => id);
+
+      const toUpsert = enabledCommissions.map((pc) => ({
+        id: persistedMap.get(pc.professional_id),
+        service_id: serviceId,
+        professional_id: pc.professional_id,
+        commission_rate: parseFloat(pc.commission_rate) || 0,
+        assistant_commission_rate: parseFloat(pc.assistant_commission_rate) || 0,
+        duration_minutes: pc.duration_minutes ? parseInt(pc.duration_minutes) : null,
+        settlement_kind: pc.settlement_kind,
+        tenant_id: tenantId,
+      }));
+
+      if (toDelete.length > 0) {
+        const { error } = await supabase
+          .from('service_professionals')
+          .delete()
+          .in('id', toDelete)
+          .eq('tenant_id', tenantId);
 
         if (error) {
-          console.error('Error saving professional commissions:', error);
+          throw error;
+        }
+      }
+
+      if (toUpsert.length > 0) {
+        const { error } = await supabase
+          .from('service_professionals')
+          .upsert(toUpsert, { onConflict: 'service_id,professional_id' });
+
+        if (error) {
+          throw error;
         }
       }
 
       // Save service products (insumos)
       await saveServiceProducts(serviceId, serviceProductItems);
 
-      await refreshData();
       toast({ 
         title: editingService ? "Serviço atualizado" : "Serviço cadastrado", 
         description: editingService ? "Dados salvos com sucesso" : `${formName} foi adicionado` 

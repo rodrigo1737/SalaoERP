@@ -12,7 +12,7 @@ import {
 } from '@/components/ui/select';
 import { useData, Commission } from '@/context/DataContext';
 import { useAuth } from '@/contexts/AuthContext';
-import { isTransferReceivable } from '@/lib/commissionSettlement';
+import { normalizeCommissionSettlementKind } from '@/lib/commissionSettlement';
 
 const formatCurrency = (value: number) =>
   new Intl.NumberFormat('pt-BR', { style: 'currency', currency: 'BRL' }).format(value);
@@ -39,8 +39,9 @@ interface ProfessionalRow {
   transferPending: number;
   transferReceived: number;
   vouchers: number;
+  vouchersOutstanding: number;
   netToPay: number;      // salão deve ao profissional (comissão pendente − vales)
-  netToReceive: number;  // profissional deve ao salão (repasse pendente)
+  netToReceive: number;  // profissional deve ao salão (repasse pendente + vales)
 }
 
 const getTransferNetLabel = (value: number) => {
@@ -100,32 +101,37 @@ export function ProfessionalStatement() {
 
     return visibleProfessionals.map((prof) => {
       const items = byProfessional.get(prof.id) ?? [];
-      const services = items.filter((c) => c.type === 'service');
-      const payable = services.filter((c) => !isTransferReceivable(c.settlement_kind));
-      const receivable = services.filter((c) => isTransferReceivable(c.settlement_kind));
+      const services = items.filter((c) => c.type !== 'voucher');
+      const payable = services.filter((c) => normalizeCommissionSettlementKind(c.settlement_kind, prof.settlement_type) !== 'transfer_receivable');
+      const receivable = services.filter((c) => normalizeCommissionSettlementKind(c.settlement_kind, prof.settlement_type) === 'transfer_receivable');
       const vouchers = items.filter((c) => c.type === 'voucher');
 
-      const sum = (list: Commission[]) => list.reduce((s, c) => s + Number(c.commission_value), 0);
+      const settledAmount = (c: Commission) => Math.min(
+        Math.abs(Number(c.commission_value ?? 0)),
+        Math.abs(Number(c.settled_amount ?? (c.status === 'paid' ? c.commission_value : 0))),
+      );
+      const outstandingAmount = (c: Commission) => Math.max(
+        0,
+        Math.abs(Number(c.commission_value ?? 0)) - settledAmount(c),
+      );
+      const sum = (list: Commission[]) => list.reduce((s, c) => s + Math.abs(Number(c.commission_value)), 0);
 
       const commissionGenerated = sum(payable);
-      const commissionPending = sum(payable.filter((c) => c.status === 'pending'));
-      const commissionPaid = sum(payable.filter((c) => c.status === 'paid'));
+      const commissionPending = payable.reduce((s, c) => s + outstandingAmount(c), 0);
+      const commissionPaid = payable.reduce((s, c) => s + settledAmount(c), 0);
       const transferGenerated = sum(receivable);
-      const transferPending = sum(receivable.filter((c) => c.status === 'pending'));
-      const transferReceived = sum(receivable.filter((c) => c.status === 'paid'));
+      const transferPending = receivable.reduce((s, c) => s + outstandingAmount(c), 0);
+      const transferReceived = receivable.reduce((s, c) => s + settledAmount(c), 0);
       const grossAttended = receivable.reduce((s, c) => s + Number(c.base_value || 0), 0);
       const professionalGrossValue = grossAttended - transferGenerated;
       const vouchersTotal = vouchers.reduce((s, c) => s + Math.abs(Number(c.commission_value)), 0);
-      const vouchersUnsettledTotal = vouchers.reduce((s, c) => {
-        const voucherValue = Math.abs(Number(c.commission_value));
-        const settledValue = Math.min(voucherValue, Math.abs(Number(c.settled_amount || 0)));
-        return s + Math.max(0, voucherValue - settledValue);
-      }, 0);
+      const vouchersUnsettledTotal = vouchers.reduce((s, c) => s + outstandingAmount(c), 0);
+      const isTransfer = prof.settlement_type === 'transfer' || (receivable.length > 0 && payable.length === 0);
 
       return {
         professionalId: prof.id,
         name: prof.nickname || prof.name,
-        isTransfer: prof.settlement_type === 'transfer',
+        isTransfer,
         grossAttended,
         professionalGrossValue,
         commissionGenerated,
@@ -135,14 +141,15 @@ export function ProfessionalStatement() {
         transferPending,
         transferReceived,
         vouchers: vouchersTotal,
-        netToPay: commissionPending - vouchersUnsettledTotal,
-        netToReceive: transferPending,
+        vouchersOutstanding: vouchersUnsettledTotal,
+        netToPay: isTransfer ? 0 : commissionPending - vouchersUnsettledTotal,
+        netToReceive: isTransfer ? transferPending + vouchersUnsettledTotal : transferPending,
       };
     }).filter((r) =>
       ((isProfessionalScopedUser && currentProfessional?.id)
         ? r.professionalId === currentProfessional.id
         : (professionalFilter === 'all' || r.professionalId === professionalFilter))
-      && (r.commissionGenerated !== 0 || r.transferGenerated !== 0 || r.vouchers !== 0),
+      && (r.commissionGenerated !== 0 || r.transferGenerated !== 0 || r.vouchersOutstanding !== 0),
     );
   }, [canViewAll, currentProfessional, isProfessionalScopedUser, periodCommissions, professionals, professionalFilter]);
 
@@ -154,6 +161,7 @@ export function ProfessionalStatement() {
     netToPay: acc.netToPay + Math.max(0, r.netToPay),
     netToReceive: acc.netToReceive + r.netToReceive,
     vouchers: acc.vouchers + r.vouchers,
+    vouchersOutstanding: acc.vouchersOutstanding + r.vouchersOutstanding,
   }), {
     grossAttended: 0,
     professionalGrossValue: 0,
@@ -162,6 +170,7 @@ export function ProfessionalStatement() {
     netToPay: 0,
     netToReceive: 0,
     vouchers: 0,
+    vouchersOutstanding: 0,
   }), [rows]);
 
   const isTransferMode = rows.length > 0 && rows.every((row) => row.isTransfer);
@@ -219,8 +228,8 @@ export function ProfessionalStatement() {
             <p className="text-2xl font-bold text-success mt-1">{formatCurrency(totals.transferReceived)}</p>
           </Card>
           <Card className="p-4 border-0 shadow-md">
-            <div className="flex items-center gap-2 text-muted-foreground text-xs"><Ticket className="w-4 h-4" /> Vales no período</div>
-            <p className="text-2xl font-bold text-foreground mt-1">{formatCurrency(totals.vouchers)}</p>
+            <div className="flex items-center gap-2 text-muted-foreground text-xs"><Ticket className="w-4 h-4" /> Vales em aberto (somam ao repasse)</div>
+            <p className="text-2xl font-bold text-foreground mt-1">{formatCurrency(totals.vouchersOutstanding)}</p>
           </Card>
         </div>
       ) : (
@@ -234,8 +243,8 @@ export function ProfessionalStatement() {
             <p className="text-2xl font-bold text-success mt-1">{formatCurrency(totals.netToReceive)}</p>
           </Card>
           <Card className="p-4 border-0 shadow-md">
-            <div className="flex items-center gap-2 text-muted-foreground text-xs"><Ticket className="w-4 h-4" /> Vales no período</div>
-            <p className="text-2xl font-bold text-foreground mt-1">{formatCurrency(totals.vouchers)}</p>
+            <div className="flex items-center gap-2 text-muted-foreground text-xs"><Ticket className="w-4 h-4" /> Vales em aberto (abatimento)</div>
+            <p className="text-2xl font-bold text-foreground mt-1">{formatCurrency(totals.vouchersOutstanding)}</p>
           </Card>
         </div>
       )}
@@ -268,7 +277,7 @@ export function ProfessionalStatement() {
                       <th className="p-2 text-right font-medium">Recebido</th>
                     </>
                   )}
-                  <th className="p-2 text-right font-medium">Vales</th>
+                  <th className="p-2 text-right font-medium">Vales em aberto</th>
                   <th className="p-2 text-right font-medium">Saldo líquido</th>
                 </tr>
               </thead>
@@ -297,7 +306,11 @@ export function ProfessionalStatement() {
                           <td className="p-2 text-right text-success">{formatCurrency(r.transferReceived)}</td>
                         </>
                       )}
-                      <td className="p-2 text-right text-destructive">{r.vouchers > 0 ? `- ${formatCurrency(r.vouchers)}` : '—'}</td>
+                      <td className={`p-2 text-right ${r.isTransfer ? 'text-primary' : 'text-destructive'}`}>
+                        {r.vouchersOutstanding > 0.009
+                          ? `${r.isTransfer ? '+ ' : '- '}${formatCurrency(r.vouchersOutstanding)}`
+                          : '—'}
+                      </td>
                       <td className={`p-2 text-right font-bold ${net > 0.009 ? 'text-destructive' : net < -0.009 ? 'text-success' : 'text-muted-foreground'}`}>
                         {net > 0.009
                           ? `Pagar ${formatCurrency(net)}`
@@ -314,8 +327,8 @@ export function ProfessionalStatement() {
         )}
         <p className="text-xs text-muted-foreground mt-3">
           {isTransferMode
-            ? 'No modelo de repasse, o bruto atendido mostra o total dos serviços do período, o valor profissional mostra a parte que fica com o profissional e a parcela do estabelecimento mostra o valor devido ao salao. Repasses já recebidos e vales não entram no saldo em aberto.'
-            : 'Saldo líquido = comissão pendente − vales (a pagar ao profissional) ou repasse pendente (a receber do profissional). Comissões pagas e repasses recebidos não entram no saldo.'}
+            ? 'No modelo de repasse, o bruto atendido mostra o total dos serviços, a parcela do estabelecimento é o valor devido pelo profissional, e vales em aberto somam ao total a repassar. Repasses e vales já liquidados não entram no saldo.'
+            : 'Saldo líquido = comissão pendente − vales em aberto (a pagar ao profissional). Comissões pagas e repasses recebidos não entram no saldo.'}
         </p>
       </Card>
     </div>

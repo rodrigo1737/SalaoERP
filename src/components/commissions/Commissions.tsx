@@ -61,6 +61,8 @@ import {
 
 type PaymentMethod = 'cash' | 'pix' | 'transfer';
 
+const COMMISSION_SETTLEMENT_TOLERANCE = 0.009;
+
 interface PaymentDialogState {
   isOpen: boolean;
   type: 'single' | 'all';
@@ -68,6 +70,7 @@ interface PaymentDialogState {
   professionalId?: string;
   professionalName?: string;
   amount?: number;
+  voucherAmount?: number;
   count?: number;
   isTransfer?: boolean;
 }
@@ -210,32 +213,53 @@ export function Commissions() {
         : []
   ), [canViewAllCommissions, currentProfessional, professionals]);
 
-  // Group by professional using period-filtered commissions.
-  // Vale (commission_value negativo) fica 'pending' até ser netado num
-  // pagamento em lote — por isso totalPending já sai líquido (comissão menos
-  // vale ainda não abatido). totalVouchers é só informativo (todo vale já
-  // emitido no período, pago ou não), não é subtraído de novo em "total"
-  // para não contar o vale pendente duas vezes.
+  // Group by professional using period-filtered commissions. A vale remains
+  // outstanding until it is included in a settlement. Its direction depends
+  // on the professional model: it reduces a normal commission, but increases
+  // the amount the establishment recovers from a transfer professional.
+  const getOutstandingAmount = (commission: typeof commissions[number]) => Math.max(
+    0,
+    Math.abs(Number(commission.commission_value ?? 0))
+      - Math.abs(Number(
+        commission.settled_amount
+          ?? (commission.status === 'paid' ? commission.commission_value : 0),
+      )),
+  );
+
   const commissionsByProfessional = visibleProfessionals
     .filter(prof => professionalFilter === 'all' || prof.id === professionalFilter)
     .map(prof => {
     const profCommissions = periodFilteredCommissions.filter(c => c.professional_id === prof.id);
-    const pending = profCommissions.filter(c => c.status === 'pending');
     const serviceRows = profCommissions.filter(c => c.type !== 'voucher');
-    const totalPending = pending.reduce((sum, c) => sum + Number(c.commission_value), 0);
-    const totalPaid = profCommissions
-      .filter(c => c.status === 'paid' && c.type !== 'voucher')
-      .reduce((sum, c) => sum + Number(c.commission_value), 0);
-    const totalVouchers = profCommissions
-      .filter(c => c.type === 'voucher')
-      .reduce((sum, c) => sum + Math.abs(Number(c.commission_value)), 0);
+    const voucherRows = profCommissions.filter(c => c.type === 'voucher');
+    const serviceOutstanding = serviceRows.reduce((sum, c) => sum + getOutstandingAmount(c), 0);
+    const voucherOutstanding = voucherRows.reduce((sum, c) => sum + getOutstandingAmount(c), 0);
+    const serviceSettled = serviceRows.reduce((sum, c) => sum + Math.min(
+      Math.abs(Number(c.commission_value ?? 0)),
+      Math.abs(Number(c.settled_amount ?? (c.status === 'paid' ? c.commission_value : 0))),
+    ), 0);
+    const voucherSettled = voucherRows.reduce((sum, c) => sum + Math.min(
+      Math.abs(Number(c.commission_value ?? 0)),
+      Math.abs(Number(c.settled_amount ?? (c.status === 'paid' ? c.commission_value : 0))),
+    ), 0);
+    const settlementKind = normalizeCommissionSettlementKind(
+      serviceRows.find(c => c.settlement_kind)?.settlement_kind,
+      prof.settlement_type,
+    );
+    const isTransfer = settlementKind === 'transfer_receivable';
+    const totalPending = isTransfer
+      ? serviceOutstanding + voucherOutstanding
+      : Math.max(0, serviceOutstanding - voucherOutstanding);
+    const totalPaid = isTransfer ? serviceSettled + voucherSettled : serviceSettled;
+    const totalVouchers = voucherOutstanding;
     const grossAttended = serviceRows.reduce((sum, c) => sum + Number(c.base_value ?? 0), 0);
     const totalGenerated = serviceRows.reduce((sum, c) => sum + Number(c.commission_value), 0);
     const professionalGrossValue = grossAttended - totalGenerated;
 
     return {
       professional: prof,
-      pendingCount: pending.length,
+      isTransfer,
+      pendingCount: profCommissions.filter(c => getOutstandingAmount(c) > COMMISSION_SETTLEMENT_TOLERANCE).length,
       totalPending,
       totalPaid,
       totalVouchers,
@@ -255,14 +279,27 @@ export function Commissions() {
       commission.settlement_kind,
       professional?.settlement_type,
     );
-    const remaining = Math.max(0, Math.abs(Number(commission.commission_value)) - Math.abs(Number(commission.settled_amount ?? 0)));
+    const serviceRemaining = getOutstandingAmount(commission);
+    const voucherOutstanding = commissions
+      .filter((item) => item.professional_id === commission.professional_id
+        && item.type === 'voucher'
+        && item.status === 'pending')
+      .reduce((sum, item) => sum + getOutstandingAmount(item), 0);
+    const isTransfer = settlementKind === 'transfer_receivable';
+    const voucherAmount = isTransfer
+      ? voucherOutstanding
+      : Math.min(voucherOutstanding, serviceRemaining);
+    const remaining = isTransfer
+      ? serviceRemaining + voucherOutstanding
+      : Math.max(0, serviceRemaining - voucherAmount);
     setPaymentDialog({
       isOpen: true,
       type: 'single',
       commissionId,
       professionalName: professional?.nickname || 'Profissional',
       amount: remaining,
-      isTransfer: settlementKind === 'transfer_receivable',
+      voucherAmount,
+      isTransfer,
     });
     setSettleAmount(remaining.toFixed(2));
     setSelectedPaymentMethod('pix');
@@ -270,23 +307,21 @@ export function Commissions() {
 
   const openPayAllDialog = (professionalId: string) => {
     const professional = professionals.find(p => p.id === professionalId);
-    // Repasse não neta vale no mesmo lote (direção financeira oposta) —
-    // mesma regra aplicada em payAllCommissions no DataContext.
-    const isTransferProfessional = professional?.settlement_type === 'transfer';
     const profCommissions = commissions.filter(
       c => c.professional_id === professionalId
         && c.status === 'pending'
-        && (c.type !== 'voucher' || !isTransferProfessional)
     );
-    // Vale (negativo) abate do total, igual ao cálculo do backend.
-    const totalAmount = profCommissions.reduce((sum, c) => {
-      if (c.type === 'voucher') return sum + Number(c.commission_value);
-      return sum + Math.max(0, Math.abs(Number(c.commission_value)) - Math.abs(Number(c.settled_amount ?? 0)));
-    }, 0);
+    const serviceRows = profCommissions.filter(c => c.type !== 'voucher');
+    const voucherRows = profCommissions.filter(c => c.type === 'voucher');
+    const serviceOutstanding = serviceRows.reduce((sum, c) => sum + getOutstandingAmount(c), 0);
+    const voucherOutstanding = voucherRows.reduce((sum, c) => sum + getOutstandingAmount(c), 0);
     const settlementKind = normalizeCommissionSettlementKind(
-      profCommissions.find((c) => c.type !== 'voucher')?.settlement_kind,
+      serviceRows.find((c) => c.settlement_kind)?.settlement_kind,
       professional?.settlement_type,
     );
+    const totalAmount = settlementKind === 'transfer_receivable'
+      ? serviceOutstanding + voucherOutstanding
+      : Math.max(0, serviceOutstanding - voucherOutstanding);
 
     setPaymentDialog({
       isOpen: true,
@@ -294,6 +329,9 @@ export function Commissions() {
       professionalId,
       professionalName: professional?.nickname || 'Profissional',
       amount: totalAmount,
+      voucherAmount: settlementKind === 'transfer_receivable'
+        ? voucherOutstanding
+        : Math.min(voucherOutstanding, serviceOutstanding),
       count: profCommissions.length,
       isTransfer: settlementKind === 'transfer_receivable',
     });
@@ -416,9 +454,7 @@ export function Commissions() {
     });
   };
 
-  const totalPendingAll = periodFilteredCommissions
-    .filter(c => c.status === 'pending')
-    .reduce((sum, c) => sum + Number(c.commission_value), 0);
+  const totalPendingAll = commissionsByProfessional.reduce((sum, item) => sum + item.totalPending, 0);
 
   const getCommissionSettlementKind = (commission: typeof commissions[number]) => (
     normalizeCommissionSettlementKind(
@@ -588,13 +624,13 @@ export function Commissions() {
                     <p className="text-sm text-muted-foreground">{item.professional.name}</p>
                   </div>
                 </div>
-                {normalizeCommissionSettlementKind(undefined, item.professional.settlement_type) === 'transfer_receivable' && (
+                {item.isTransfer && (
                   <Badge variant="outline" className="border-primary/40 text-primary">Repasse</Badge>
                 )}
               </div>
 
               <div className="space-y-2 mb-4">
-                {normalizeCommissionSettlementKind(undefined, item.professional.settlement_type) === 'transfer_receivable' ? (
+                {item.isTransfer ? (
                   <>
                     <div className="flex items-center justify-between p-2 rounded-lg bg-secondary/40">
                       <div className="flex items-center gap-2">
@@ -632,13 +668,13 @@ export function Commissions() {
                         {formatCurrency(item.totalPaid)}
                       </p>
                     </div>
-                    <div className="flex items-center justify-between p-2 rounded-lg bg-destructive-soft">
+                    <div className="flex items-center justify-between p-2 rounded-lg bg-primary/5">
                       <div className="flex items-center gap-2">
-                        <Ticket className="w-4 h-4 text-destructive shrink-0" />
-                        <span className="text-xs text-muted-foreground">Vales</span>
+                        <Ticket className="w-4 h-4 text-primary shrink-0" />
+                        <span className="text-xs text-muted-foreground">Vales em aberto (somam ao repasse)</span>
                       </div>
-                      <p className="text-sm font-bold text-destructive">
-                        -{formatCurrency(item.totalVouchers)}
+                      <p className="text-sm font-bold text-primary">
+                        {formatCurrency(item.totalVouchers)}
                       </p>
                     </div>
                     <div className="flex items-center justify-between p-2 rounded-lg bg-primary/10 border border-primary/20">
@@ -680,7 +716,7 @@ export function Commissions() {
                     <div className="flex items-center justify-between p-2 rounded-lg bg-destructive-soft">
                       <div className="flex items-center gap-2">
                         <Ticket className="w-4 h-4 text-destructive shrink-0" />
-                        <span className="text-xs text-muted-foreground">Vales</span>
+                        <span className="text-xs text-muted-foreground">Vales em aberto (abatimento)</span>
                       </div>
                       <p className="text-sm font-bold text-destructive">
                         -{formatCurrency(item.totalVouchers)}
@@ -701,14 +737,14 @@ export function Commissions() {
                 )}
               </div>
 
-              {canSettleCommissions && item.pendingCount > 0 && item.totalPending > 0.009 && (
+              {canSettleCommissions && item.pendingCount > 0 && item.totalPending > COMMISSION_SETTLEMENT_TOLERANCE && (
                 <Button
                   className="w-full"
                   onClick={() => openPayAllDialog(item.professional.id)}
                   disabled={isSubmitting}
                 >
                   <DollarSign className="w-4 h-4 mr-2" />
-                  {`${getSettlementActionLabel(normalizeCommissionSettlementKind(undefined, item.professional.settlement_type))} Todos (${item.pendingCount})`}
+                  {`${getSettlementActionLabel(item.isTransfer ? 'transfer_receivable' : 'commission_payable')} Todos (${item.pendingCount})`}
                 </Button>
               )}
             </Card>
@@ -916,6 +952,13 @@ export function Commissions() {
             <div className="p-4 rounded-lg bg-primary/10 border border-primary/20">
               <p className="text-sm text-muted-foreground">{paymentDialog.type === 'single' ? 'Saldo a liquidar' : 'Valor total'}</p>
               <p className="text-2xl font-bold text-primary">{formatCurrency(paymentDialog.amount || 0)}</p>
+              {(paymentDialog.voucherAmount ?? 0) > COMMISSION_SETTLEMENT_TOLERANCE && (
+                <p className="mt-2 text-xs text-muted-foreground">
+                  {paymentDialog.isTransfer
+                    ? `Inclui ${formatCurrency(paymentDialog.voucherAmount ?? 0)} de vales em aberto, recuperados pelo estabelecimento.`
+                    : `Já considera o abatimento de ${formatCurrency(paymentDialog.voucherAmount ?? 0)} em vales em aberto.`}
+                </p>
+              )}
             </div>
 
             {paymentDialog.type === 'single' && (

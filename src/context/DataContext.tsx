@@ -12,6 +12,21 @@ import {
   normalizeCommissionSettlementKind,
 } from '@/lib/commissionSettlement';
 
+const COMMISSION_SETTLEMENT_TOLERANCE = 0.009;
+
+const getCommissionOutstandingAmount = (
+  commission: Pick<Commission, 'commission_value' | 'settled_amount' | 'status'>,
+) => (
+  Math.max(
+    0,
+    Math.abs(Number(commission.commission_value ?? 0))
+      - Math.abs(Number(
+        commission.settled_amount
+          ?? (('status' in commission && commission.status === 'paid') ? commission.commission_value : 0),
+      )),
+  )
+);
+
 export interface Client {
   id: string;
   name: string;
@@ -2524,6 +2539,58 @@ export const DataProvider: React.FC<{ children: ReactNode }> = ({ children }) =>
 
     try {
       let reversalTransaction: Transaction;
+      const restoreCommissionSettlements = async (sourceTransactionId: string, reversalTransactionId: string) => {
+        const { data: settlementRows, error: settlementReadError } = await (supabase as any)
+          .from('commission_settlements')
+          .select('*')
+          .eq('tenant_id', tenantId)
+          .eq('transaction_id', sourceTransactionId)
+          .eq('status', 'active');
+        if (settlementReadError) throw settlementReadError;
+        if (!settlementRows || settlementRows.length === 0) return false;
+
+        for (const settlement of settlementRows) {
+          const { data: commissionRow, error: commissionReadError } = await supabase
+            .from('commissions')
+            .select('id, commission_value, settled_amount, status')
+            .eq('tenant_id', tenantId)
+            .eq('id', settlement.commission_id)
+            .maybeSingle();
+          if (commissionReadError) throw commissionReadError;
+          if (!commissionRow) continue;
+
+          const restoredAmount = Math.max(
+            0,
+            Math.abs(Number(commissionRow.settled_amount ?? 0)) - Math.abs(Number(settlement.amount ?? 0)),
+          );
+          const fullySettled = restoredAmount >= Math.abs(Number(commissionRow.commission_value ?? 0)) - COMMISSION_SETTLEMENT_TOLERANCE;
+          const { error: commissionRestoreError } = await supabase
+            .from('commissions')
+            .update({
+              status: fullySettled ? 'paid' : 'pending',
+              settled_amount: restoredAmount,
+              paid_at: fullySettled ? undefined : null,
+              payment_method: fullySettled ? undefined : null,
+            })
+            .eq('tenant_id', tenantId)
+            .eq('id', settlement.commission_id);
+          if (commissionRestoreError) throw commissionRestoreError;
+
+          const { error: settlementRestoreError } = await (supabase as any)
+            .from('commission_settlements')
+            .update({
+              status: 'reversed',
+              reversed_at: new Date().toISOString(),
+              reversed_by: user?.id ?? null,
+              reversal_transaction_id: reversalTransactionId,
+            })
+            .eq('tenant_id', tenantId)
+            .eq('id', settlement.id)
+            .eq('status', 'active');
+          if (settlementRestoreError) throw settlementRestoreError;
+        }
+        return true;
+      };
 
       if (originalTransaction.reference_type === 'client_ledger_settlement') {
         const { data: settlement, error: settlementError } = await (supabase as any)
@@ -2734,14 +2801,6 @@ export const DataProvider: React.FC<{ children: ReactNode }> = ({ children }) =>
           return false;
         }
 
-        const { error: commissionError } = await supabase
-          .from('commissions')
-          .update({ status: 'pending', paid_at: null, transaction_id: null, payment_method: null })
-          .eq('id', commissionId)
-          .eq('tenant_id', tenantId);
-
-        if (commissionError) throw commissionError;
-
         reversalTransaction = await createReversalTransaction(originalTransaction, {
           category: 'Estorno de Comissão',
           description: `Estorno de pagamento de comissão: ${originalTransaction.description ?? 'Comissão'}`,
@@ -2749,6 +2808,16 @@ export const DataProvider: React.FC<{ children: ReactNode }> = ({ children }) =>
           referenceId: commissionId,
           referenceType: 'commission_reversal',
         });
+
+        const restoredBySettlement = await restoreCommissionSettlements(originalTransaction.id, reversalTransaction.id);
+        if (!restoredBySettlement) {
+          const { error: commissionError } = await supabase
+            .from('commissions')
+            .update({ status: 'pending', settled_amount: 0, paid_at: null, transaction_id: null, payment_method: null })
+            .eq('id', commissionId)
+            .eq('tenant_id', tenantId);
+          if (commissionError) throw commissionError;
+        }
 
         await markTransactionAsReversed(originalTransaction.id, reversalTransaction.id, reason);
         await recordFinancialAudit({
@@ -2766,14 +2835,6 @@ export const DataProvider: React.FC<{ children: ReactNode }> = ({ children }) =>
           },
         });
       } else if (originalTransaction.reference_type === 'commission_batch') {
-        const { error: commissionBatchError } = await supabase
-          .from('commissions')
-          .update({ status: 'pending', paid_at: null, transaction_id: null, payment_method: null })
-          .eq('tenant_id', tenantId)
-          .eq('transaction_id', originalTransaction.id);
-
-        if (commissionBatchError) throw commissionBatchError;
-
         reversalTransaction = await createReversalTransaction(originalTransaction, {
           category: 'Estorno de Comissões',
           description: `Estorno de pagamento em lote: ${originalTransaction.description ?? 'Comissões'}`,
@@ -2781,6 +2842,16 @@ export const DataProvider: React.FC<{ children: ReactNode }> = ({ children }) =>
           referenceId: originalTransaction.reference_id,
           referenceType: 'commission_batch_reversal',
         });
+
+        const restoredBySettlement = await restoreCommissionSettlements(originalTransaction.id, reversalTransaction.id);
+        if (!restoredBySettlement) {
+          const { error: commissionBatchError } = await supabase
+            .from('commissions')
+            .update({ status: 'pending', settled_amount: 0, paid_at: null, transaction_id: null, payment_method: null })
+            .eq('tenant_id', tenantId)
+            .eq('transaction_id', originalTransaction.id);
+          if (commissionBatchError) throw commissionBatchError;
+        }
 
         await markTransactionAsReversed(originalTransaction.id, reversalTransaction.id, reason);
         await recordFinancialAudit({
@@ -2797,6 +2868,18 @@ export const DataProvider: React.FC<{ children: ReactNode }> = ({ children }) =>
           },
         });
       } else if (originalTransaction.reference_type === 'voucher') {
+        const { data: voucherCommission, error: voucherReadError } = await supabase
+          .from('commissions')
+          .select('id, settled_amount')
+          .eq('tenant_id', tenantId)
+          .eq('transaction_id', originalTransaction.id)
+          .eq('type', 'voucher')
+          .maybeSingle();
+        if (voucherReadError) throw voucherReadError;
+        if (Number(voucherCommission?.settled_amount ?? 0) > COMMISSION_SETTLEMENT_TOLERANCE) {
+          toast.error('Este vale já foi abatido em comissão/repasse. Estorne primeiro a liquidação correspondente.');
+          return false;
+        }
         const { error: voucherDeleteError } = await supabase
           .from('commissions')
           .delete()
@@ -2875,95 +2958,273 @@ export const DataProvider: React.FC<{ children: ReactNode }> = ({ children }) =>
     }
     const commission = commissions.find(c => c.id === id);
     if (!commission) { toast.error('Comissão não encontrada.'); return; }
+    if (commission.type === 'voucher') {
+      toast.info('O vale já foi lançado como saída. A liquidação deve ocorrer junto da comissão ou do repasse.');
+      return;
+    }
     const professional = professionals.find(p => p.id === commission.professional_id);
     const settlementKind = normalizeCommissionSettlementKind(
       commission.settlement_kind,
       professional?.settlement_type,
     );
 
-    // Liquidação parcial: paga apenas o valor informado (limitado ao saldo).
-    const totalValue = Math.abs(Number(commission.commission_value));
-    const alreadySettled = Math.abs(Number(commission.settled_amount ?? 0));
-    const remaining = Math.max(0, totalValue - alreadySettled);
-    if (remaining <= 0.009) { toast.info('Esta comissão já está totalmente liquidada.'); return; }
-    const payAmount = amount && amount > 0 ? Math.min(amount, remaining) : remaining;
-    const newSettled = alreadySettled + payAmount;
-    const fullySettled = newSettled >= totalValue - 0.009;
-    const isPartial = !fullySettled;
+    const isTransfer = settlementKind === 'transfer_receivable';
+    const serviceTotal = Math.abs(Number(commission.commission_value));
+    const serviceSettled = Math.abs(Number(commission.settled_amount ?? 0));
+    const serviceOutstanding = Math.max(0, serviceTotal - serviceSettled);
+    if (serviceOutstanding <= COMMISSION_SETTLEMENT_TOLERANCE) {
+      toast.info('Esta comissão já está totalmente liquidada.');
+      return;
+    }
+
+    // Vales são componentes do mesmo acerto, nunca movimentos soltos:
+    // repasse recupera o vale como receita; comissão normal o abate do valor
+    // pago ao profissional.
+    const voucherRows = commissions.filter((item) =>
+      item.professional_id === commission.professional_id
+      && item.type === 'voucher'
+      && item.status === 'pending',
+    );
+    const voucherOutstanding = voucherRows.reduce(
+      (sum, item) => sum + getCommissionOutstandingAmount(item),
+      0,
+    );
+    const applicableVoucherAmount = Math.min(voucherOutstanding, serviceOutstanding);
+    const fullNetAmount = isTransfer
+      ? serviceOutstanding + voucherOutstanding
+      : Math.max(0, serviceOutstanding - applicableVoucherAmount);
+    const numericAmount = Number(amount);
+    const hasRequestedAmount = Number.isFinite(numericAmount) && numericAmount > COMMISSION_SETTLEMENT_TOLERANCE;
+    const isFullRequest = !hasRequestedAmount || numericAmount >= fullNetAmount - COMMISSION_SETTLEMENT_TOLERANCE;
+    const transactionAmount = isFullRequest
+      ? fullNetAmount
+      : Math.min(Math.max(0, numericAmount), fullNetAmount);
+    const servicePayAmount = isTransfer || !isFullRequest
+      ? Math.min(serviceOutstanding, transactionAmount)
+      : serviceOutstanding;
+    const voucherPayAmount = isTransfer
+      ? Math.min(voucherOutstanding, Math.max(0, transactionAmount - servicePayAmount))
+      : (isFullRequest ? applicableVoucherAmount : 0);
+    const isPartial = transactionAmount + COMMISSION_SETTLEMENT_TOLERANCE < fullNetAmount;
+    const allocations: Array<{
+      commission: Commission;
+      amount: number;
+      componentType: 'service' | 'voucher';
+      settlementKind: CommissionSettlementKind;
+    }> = [];
+
+    if (servicePayAmount > COMMISSION_SETTLEMENT_TOLERANCE) {
+      allocations.push({
+        commission,
+        amount: servicePayAmount,
+        componentType: 'service',
+        settlementKind,
+      });
+    }
+
+    let voucherBudget = voucherPayAmount;
+    for (const voucher of voucherRows) {
+      const outstanding = getCommissionOutstandingAmount(voucher);
+      const settledAmount = Math.min(outstanding, Math.max(0, voucherBudget));
+      if (settledAmount <= COMMISSION_SETTLEMENT_TOLERANCE) continue;
+      allocations.push({
+        commission: voucher,
+        amount: settledAmount,
+        componentType: 'voucher',
+        settlementKind: isTransfer ? 'transfer_receivable' : settlementKind,
+      });
+      voucherBudget -= settledAmount;
+      if (voucherBudget <= COMMISSION_SETTLEMENT_TOLERANCE) break;
+    }
+
+    if (allocations.length === 0) {
+      toast.info('Nenhum saldo disponível para liquidar neste acerto.');
+      return;
+    }
 
     const methodLabel = paymentMethod === 'cash' ? 'Dinheiro' : paymentMethod === 'pix' ? 'PIX' : 'Transferência';
     const movementTimestamp = getSessionMovementTimestamp(targetSession);
     const paidAt = movementTimestamp ?? new Date().toISOString();
-    const { data: txData, error: txError } = await supabase
-      .from('transactions')
-      .insert({
-        cash_session_id: targetSession.id,
-        type: getSettlementDirection(settlementKind),
-        category: getSettlementTransactionCategory(settlementKind),
-        description: `${settlementKind === 'transfer_receivable' ? 'Repasse' : 'Comissão'}${isPartial ? ' (parcial)' : ''} - ${commission.professional_name_snapshot ?? professional?.nickname ?? 'Profissional'} (${methodLabel})`,
-        amount: payAmount,
-        payment_method: paymentMethod === 'transfer' ? 'other' : paymentMethod,
-        reference_id: id,
-        reference_type: 'commission',
-        created_by: user?.id,
+    let txData: Transaction | null = null;
+    if (transactionAmount > COMMISSION_SETTLEMENT_TOLERANCE) {
+      const description = isTransfer
+        ? `Repasse${voucherPayAmount > COMMISSION_SETTLEMENT_TOLERANCE ? ' e recuperação de vales' : ''}${isPartial ? ' (parcial)' : ''}`
+        : `Comissão${voucherPayAmount > COMMISSION_SETTLEMENT_TOLERANCE ? ' líquida com abatimento de vale' : ''}${isPartial ? ' (parcial)' : ''}`;
+      const { data, error: txError } = await supabase
+        .from('transactions')
+        .insert({
+          cash_session_id: targetSession.id,
+          type: getSettlementDirection(settlementKind),
+          category: getSettlementTransactionCategory(settlementKind),
+          description: `${description} - ${commission.professional_name_snapshot ?? professional?.nickname ?? 'Profissional'} (${methodLabel})`,
+          amount: transactionAmount,
+          payment_method: paymentMethod === 'transfer' ? 'other' : paymentMethod,
+          reference_id: id,
+          reference_type: 'commission',
+          created_by: user?.id,
+          tenant_id: tenantId,
+          ...(movementTimestamp ? { created_at: movementTimestamp } : {}),
+        })
+        .select()
+        .single();
+      if (txError) {
+        toast.error(isTransfer ? 'Erro ao registrar recebimento no caixa.' : 'Erro ao registrar pagamento no caixa.');
+        return;
+      }
+      txData = data as Transaction;
+    }
+
+    const { data: settlementRows, error: settlementError } = await (supabase as any)
+      .from('commission_settlements')
+      .insert(allocations.map(({ commission: rowCommission, amount: rowAmount, componentType, settlementKind: rowKind }) => ({
         tenant_id: tenantId,
-        ...(movementTimestamp ? { created_at: movementTimestamp } : {}),
-      })
-      .select()
-      .single();
-    if (txError) { toast.error(settlementKind === 'transfer_receivable' ? 'Erro ao registrar recebimento no caixa.' : 'Erro ao registrar pagamento no caixa.'); return; }
+        commission_id: rowCommission.id,
+        amount: rowAmount,
+        payment_method: paymentMethod,
+        transaction_id: txData?.id ?? null,
+        settlement_kind: rowKind,
+        created_by: user?.id ?? null,
+        component_type: componentType,
+        status: 'active',
+      })))
+      .select('id, commission_id, amount, transaction_id, component_type');
+    if (settlementError) {
+      if (txData) {
+        const reversal = await createReversalTransaction(txData, {
+          category: 'Estorno de liquidação',
+          description: 'Estorno técnico por falha ao registrar a composição da liquidação.',
+          paymentMethod: txData.payment_method,
+          referenceId: id,
+          referenceType: 'commission_settlement_error',
+        });
+        await markTransactionAsReversed(txData.id, reversal.id, 'Falha ao registrar a composição da liquidação.');
+      }
+      toast.error('Não foi possível registrar a composição da liquidação. Nenhum valor foi baixado.');
+      return;
+    }
 
-    await supabase.from('commission_settlements').insert({
-      tenant_id: tenantId,
-      commission_id: id,
-      amount: payAmount,
-      payment_method: paymentMethod,
-      transaction_id: txData?.id,
-      settlement_kind: settlementKind,
-      created_by: user?.id ?? null,
-    });
+    const updatedCommissions = new Map<string, { status: 'pending' | 'paid'; settledAmount: number }>();
+    try {
+      for (const { commission: rowCommission, amount: rowAmount } of allocations) {
+        const rowTotal = Math.abs(Number(rowCommission.commission_value));
+        const nextSettled = Math.abs(Number(rowCommission.settled_amount ?? 0)) + rowAmount;
+        const fullySettled = nextSettled >= rowTotal - COMMISSION_SETTLEMENT_TOLERANCE;
+        const { error: updateError } = await supabase
+          .from('commissions')
+          .update({
+            status: fullySettled ? 'paid' : 'pending',
+            settled_amount: nextSettled,
+            paid_at: fullySettled ? paidAt : null,
+            payment_method: paymentMethod,
+          })
+          .eq('id', rowCommission.id)
+          .eq('tenant_id', tenantId);
+        if (updateError) throw updateError;
+        updatedCommissions.set(rowCommission.id, {
+          status: fullySettled ? 'paid' : 'pending',
+          settledAmount: nextSettled,
+        });
+      }
+    } catch (commissionUpdateError) {
+      console.error('Falha ao atualizar a composição da liquidação; iniciando rollback:', commissionUpdateError);
+      let rollbackCompleted = true;
+      try {
+        let reversal: Transaction | null = null;
+        if (txData) {
+          reversal = await createReversalTransaction(txData, {
+            category: 'Estorno de liquidação',
+            description: 'Estorno técnico por falha ao atualizar a composição da liquidação.',
+            paymentMethod: txData.payment_method,
+            referenceId: id,
+            referenceType: 'commission_settlement_error',
+          });
+          await markTransactionAsReversed(txData.id, reversal.id, 'Falha ao atualizar a composição da liquidação.');
+        }
 
-    await supabase.from('commissions').update({
-      status: fullySettled ? 'paid' : 'pending',
-      settled_amount: newSettled,
-      paid_at: fullySettled ? paidAt : null,
-      transaction_id: txData?.id,
-      payment_method: paymentMethod,
-    })
-      .eq('id', id)
-      .eq('tenant_id', tenantId);
-    setCommissions(prev => prev.map(c => c.id === id ? {
-      ...c,
-      status: fullySettled ? 'paid' : 'pending',
-      settled_amount: newSettled,
-      paid_at: fullySettled ? paidAt : undefined,
-      transaction_id: txData?.id,
-      payment_method: paymentMethod,
-    } : c));
-    setTransactions(prev => [txData as Transaction, ...prev]);
+        const settlementIds = ((settlementRows ?? []) as Array<{ id: string }>).map((row) => row.id);
+        if (settlementIds.length > 0) {
+          const { error: settlementRollbackError } = await (supabase as any)
+            .from('commission_settlements')
+            .update({
+              status: 'reversed',
+              reversed_at: new Date().toISOString(),
+              reversed_by: user?.id ?? null,
+              reversal_transaction_id: reversal?.id ?? null,
+            })
+            .eq('tenant_id', tenantId)
+            .in('id', settlementIds)
+            .eq('status', 'active');
+          if (settlementRollbackError) throw settlementRollbackError;
+        }
+
+        for (const { commission: rowCommission } of allocations) {
+          const original = commissions.find((item) => item.id === rowCommission.id);
+          if (!original) continue;
+          const { error: commissionRollbackError } = await supabase
+            .from('commissions')
+            .update({
+              status: original.status,
+              settled_amount: original.settled_amount ?? 0,
+              paid_at: original.paid_at ?? null,
+              payment_method: original.payment_method ?? null,
+            })
+            .eq('tenant_id', tenantId)
+            .eq('id', rowCommission.id);
+          if (commissionRollbackError) throw commissionRollbackError;
+        }
+      } catch (rollbackError) {
+        rollbackCompleted = false;
+        console.error('Não foi possível concluir o rollback da liquidação:', rollbackError);
+      }
+
+      toast.error(
+        rollbackCompleted
+          ? 'A liquidação falhou e foi estornada automaticamente. Nenhum valor foi baixado.'
+          : 'A liquidação não foi concluída e o estorno automático falhou. Verifique o financeiro antes de repetir.',
+      );
+      return;
+    }
+
+    setCommissions(prev => prev.map((item) => {
+      const updated = updatedCommissions.get(item.id);
+      return updated
+        ? {
+            ...item,
+            status: updated.status,
+            settled_amount: updated.settledAmount,
+            paid_at: updated.status === 'paid' ? paidAt : undefined,
+            payment_method: paymentMethod,
+          }
+        : item;
+    }));
+    if (txData) setTransactions(prev => [txData as Transaction, ...prev]);
     await recordFinancialAudit({
       actionType: 'commission_paid',
       entityType: 'commission',
-      description: `${settlementKind === 'transfer_receivable' ? 'Repasse recebido' : 'Comissão paga'}${isPartial ? ' parcialmente' : ''}.`,
+      description: `${isTransfer ? 'Repasse recebido' : 'Comissão paga'}${voucherPayAmount > COMMISSION_SETTLEMENT_TOLERANCE ? ' com acerto de vales' : ''}${isPartial ? ' parcialmente' : ''}.`,
       transactionId: txData?.id,
       cashSessionId: targetSession.id,
       commissionId: id,
       afterState: {
-        transaction_id: txData?.id,
-        amount: payAmount,
+        transaction_id: txData?.id ?? null,
+        amount: transactionAmount,
         payment_method: paymentMethod,
-        settled_amount: newSettled,
-        status: fullySettled ? 'paid' : 'pending',
+        settlement_kind: settlementKind,
+        allocations: allocations.map(({ commission: rowCommission, amount: rowAmount, componentType }) => ({
+          commission_id: rowCommission.id,
+          amount: rowAmount,
+          component_type: componentType,
+        })),
       },
     });
+
     if (isPartial) {
-      toast.success(`Liquidação parcial registrada. Saldo restante: ${new Intl.NumberFormat('pt-BR', { style: 'currency', currency: 'BRL' }).format(totalValue - newSettled)}.`);
+      toast.success(`Liquidação parcial registrada. Saldo líquido restante: ${new Intl.NumberFormat('pt-BR', { style: 'currency', currency: 'BRL' }).format(Math.max(0, fullNetAmount - transactionAmount))}.`);
     } else {
-      toast.success(settlementKind === 'transfer_receivable' ? 'Repasse recebido!' : 'Comissão paga!');
+      toast.success(isTransfer ? 'Repasse e vales registrados!' : 'Comissão e vales registrados!');
     }
   };
 
-  // ITEM 1: corrigido — inclui .neq('type', 'voucher') no UPDATE do banco
   const payAllCommissions = async (professionalId: string, paymentMethod: 'cash' | 'pix' | 'transfer') => {
     if (!guardModify()) return;
     if (!guardFinancialPermission(canPerformAdvancedFinancialOps, 'Somente usuários financeiros podem pagar comissões.')) return;
@@ -2976,104 +3237,240 @@ export const DataProvider: React.FC<{ children: ReactNode }> = ({ children }) =>
       return;
     }
     const professional = professionals.find(p => p.id === professionalId);
-    // Repasse (o profissional recebe do cliente e devolve ao salão) tem
-    // direção financeira oposta à do vale (o salão adiantou dinheiro ao
-    // profissional) — misturar os dois no mesmo lote inverteria o sinal
-    // incorretamente, então vale só é netado aqui para profissionais de
-    // comissão normal. Para repasse, o vale segue pendente à parte.
-    const isTransferProfessional = professional?.settlement_type === 'transfer';
     const pendingCommissions = commissions.filter(
-      c => c.professional_id === professionalId
-        && c.status === 'pending'
-        && (c.type !== 'voucher' || !isTransferProfessional)
+      c => c.professional_id === professionalId && c.status === 'pending',
     );
-    if (pendingCommissions.length === 0) { toast.info('Nenhuma comissão pendente para pagar.'); return; }
-    // Vale (commission_value negativo) abate diretamente do valor a pagar —
-    // é isso que fazia o vale "não debitar": antes ele era ignorado aqui.
-    const totalAmount = pendingCommissions.reduce((s, c) => {
-      if (c.type === 'voucher') return s + Number(c.commission_value);
-      return s + Math.max(0, Math.abs(Number(c.commission_value)) - Math.abs(Number(c.settled_amount ?? 0)));
-    }, 0);
-    if (totalAmount <= 0.009) {
-      toast.info('Os vales pendentes já cobrem (ou superam) a comissão deste profissional. Nada líquido a pagar no momento.');
+    const serviceRows = pendingCommissions.filter(c => c.type !== 'voucher');
+    const voucherRows = pendingCommissions.filter(c => c.type === 'voucher');
+    const serviceOutstanding = serviceRows.reduce((sum, c) => sum + getCommissionOutstandingAmount(c), 0);
+    const voucherOutstanding = voucherRows.reduce((sum, c) => sum + getCommissionOutstandingAmount(c), 0);
+    if (pendingCommissions.length === 0 || (serviceOutstanding <= COMMISSION_SETTLEMENT_TOLERANCE && voucherOutstanding <= COMMISSION_SETTLEMENT_TOLERANCE)) {
+      toast.info('Nenhuma comissão ou vale pendente para liquidar.');
       return;
     }
+
     const settlementKind = normalizeCommissionSettlementKind(
-      pendingCommissions.find((c) => c.type !== 'voucher')?.settlement_kind,
+      serviceRows[0]?.settlement_kind,
       professional?.settlement_type,
     );
+    const isTransfer = settlementKind === 'transfer_receivable';
+    // Repasse: o estabelecimento recebe a sua parcela e também recupera os
+    // vales que já foram antecipados ao profissional. Comissão normal: o
+    // vale reduz o pagamento líquido ao profissional, nunca vira receita.
+    const totalAmount = isTransfer
+      ? serviceOutstanding + voucherOutstanding
+      : Math.max(0, serviceOutstanding - voucherOutstanding);
+    const voucherApplied = isTransfer
+      ? voucherOutstanding
+      : Math.min(voucherOutstanding, serviceOutstanding);
+    let voucherBudget = voucherApplied;
+    const allocations = [
+      ...(isTransfer ? voucherRows : serviceRows),
+      ...(isTransfer ? serviceRows : voucherRows),
+    ].reduce<Array<{
+      commission: Commission;
+      amount: number;
+      componentType: 'service' | 'voucher';
+    }>>((result, commission) => {
+      const outstanding = getCommissionOutstandingAmount(commission);
+      const prior = result
+        .filter((item) => item.commission.id === commission.id)
+        .reduce((sum, item) => sum + item.amount, 0);
+      const available = Math.max(0, outstanding - prior);
+      const componentType = commission.type === 'voucher' ? 'voucher' : 'service';
+      const componentLimit = componentType === 'voucher' && !isTransfer
+        ? voucherBudget
+        : available;
+      const amount = Math.min(available, Math.max(0, componentLimit));
+      if (amount > COMMISSION_SETTLEMENT_TOLERANCE) {
+        result.push({ commission, amount, componentType });
+        if (componentType === 'voucher' && !isTransfer) voucherBudget -= amount;
+      }
+      return result;
+    }, []);
+
+    if (allocations.length === 0) {
+      toast.info('Os vales pendentes já cobrem a comissão deste profissional.');
+      return;
+    }
+
     const methodLabel = paymentMethod === 'cash' ? 'Dinheiro' : paymentMethod === 'pix' ? 'PIX' : 'Transferência';
     const movementTimestamp = getSessionMovementTimestamp(targetSession);
     const paidAt = movementTimestamp ?? new Date().toISOString();
-    const { data: txData, error: txError } = await supabase
-      .from('transactions')
-      .insert({
-        cash_session_id: targetSession.id,
-        type: getSettlementDirection(settlementKind),
-        category: getSettlementTransactionCategory(settlementKind),
-        description: `${settlementKind === 'transfer_receivable' ? 'Repasses' : 'Comissões'} (${pendingCommissions.length}x) - ${professional?.nickname ?? 'Profissional'} (${methodLabel})`,
-        amount: totalAmount,
-        payment_method: paymentMethod === 'transfer' ? 'other' : paymentMethod,
-        reference_id: professionalId,
-        reference_type: 'commission_batch',
-        created_by: user?.id,
-        tenant_id: tenantId,
-        ...(movementTimestamp ? { created_at: movementTimestamp } : {}),
-      })
-      .select()
-      .single();
-    if (txError) { toast.error(settlementKind === 'transfer_receivable' ? 'Erro ao registrar recebimento no caixa.' : 'Erro ao registrar pagamento no caixa.'); return; }
-    // Atualiza cada linha individualmente para gravar settled_amount correto
-    // por linha (vale e comissão têm magnitudes diferentes).
-    const updateResults = await Promise.all(pendingCommissions.map((c) => supabase
-      .from('commissions')
-      .update({
-        status: 'paid',
-        paid_at: paidAt,
-        transaction_id: txData?.id,
-        payment_method: paymentMethod,
-        settled_amount: Math.abs(Number(c.commission_value)),
-      })
-      .eq('id', c.id)
-      .eq('tenant_id', tenantId)
-      .then((result) => ({ id: c.id, error: result.error }))));
-
-    const failedIds = new Set(updateResults.filter((r) => r.error).map((r) => r.id));
-    if (failedIds.size > 0) {
-      console.error('Erro ao liquidar comissões/vales:', updateResults.filter((r) => r.error));
-      toast.warning(`${failedIds.size} item(ns) não foram liquidados corretamente. Verifique manualmente.`);
+    let txData: Transaction | null = null;
+    if (totalAmount > COMMISSION_SETTLEMENT_TOLERANCE) {
+      const { data, error: txError } = await supabase
+        .from('transactions')
+        .insert({
+          cash_session_id: targetSession.id,
+          type: getSettlementDirection(settlementKind),
+          category: getSettlementTransactionCategory(settlementKind),
+          description: `${isTransfer ? 'Repasses e recuperação de vales' : 'Comissões líquidas'} (${pendingCommissions.length}x) - ${professional?.nickname ?? 'Profissional'} (${methodLabel})`,
+          amount: totalAmount,
+          payment_method: paymentMethod === 'transfer' ? 'other' : paymentMethod,
+          reference_id: professionalId,
+          reference_type: 'commission_batch',
+          created_by: user?.id,
+          tenant_id: tenantId,
+          ...(movementTimestamp ? { created_at: movementTimestamp } : {}),
+        })
+        .select()
+        .single();
+      if (txError) {
+        toast.error(isTransfer ? 'Erro ao registrar recebimento no caixa.' : 'Erro ao registrar pagamento no caixa.');
+        return;
+      }
+      txData = data as Transaction;
     }
-    const settledIds = pendingCommissions.map((c) => c.id).filter((id) => !failedIds.has(id));
+
+    const { data: settlementRows, error: settlementError } = await (supabase as any)
+      .from('commission_settlements')
+      .insert(allocations.map(({ commission, amount, componentType }) => ({
+        tenant_id: tenantId,
+        commission_id: commission.id,
+        amount,
+        payment_method: paymentMethod,
+        transaction_id: txData?.id ?? null,
+        settlement_kind: componentType === 'voucher' && isTransfer
+          ? 'transfer_receivable'
+          : settlementKind,
+        component_type: componentType,
+        status: 'active',
+        created_by: user?.id ?? null,
+      })))
+      .select('id, commission_id, amount, transaction_id, component_type');
+    if (settlementError) {
+      if (txData) {
+        const reversal = await createReversalTransaction(txData, {
+          category: 'Estorno de liquidação',
+          description: 'Estorno técnico por falha ao registrar a composição da liquidação.',
+          paymentMethod: txData.payment_method,
+          referenceId: professionalId,
+          referenceType: 'commission_batch_settlement_error',
+        });
+        await markTransactionAsReversed(txData.id, reversal.id, 'Falha ao registrar a composição da liquidação.');
+      }
+      toast.error('Não foi possível registrar a composição da liquidação. Nenhum valor foi baixado.');
+      return;
+    }
+
+    const updatedCommissions = new Map<string, { status: 'pending' | 'paid'; settledAmount: number }>();
+    try {
+      for (const { commission, amount } of allocations) {
+        const nextSettled = Math.abs(Number(commission.settled_amount ?? 0)) + amount;
+        const fullySettled = nextSettled >= Math.abs(Number(commission.commission_value)) - COMMISSION_SETTLEMENT_TOLERANCE;
+        const { error: updateError } = await supabase
+          .from('commissions')
+          .update({
+            status: fullySettled ? 'paid' : 'pending',
+            paid_at: fullySettled ? paidAt : null,
+            payment_method: paymentMethod,
+            settled_amount: nextSettled,
+          })
+          .eq('id', commission.id)
+          .eq('tenant_id', tenantId);
+        if (updateError) throw updateError;
+        updatedCommissions.set(commission.id, {
+          status: fullySettled ? 'paid' : 'pending',
+          settledAmount: nextSettled,
+        });
+      }
+    } catch (updateError) {
+      console.error('Falha ao atualizar as comissões do lote; iniciando rollback:', updateError);
+      let rollbackCompleted = true;
+      try {
+        const settlementIds = ((settlementRows ?? []) as Array<{ id: string }>).map((row) => row.id);
+        if (settlementIds.length > 0) {
+          const { error: settlementRollbackError } = await (supabase as any)
+            .from('commission_settlements')
+            .update({
+              status: 'reversed',
+              reversed_at: new Date().toISOString(),
+              reversed_by: user?.id ?? null,
+            })
+            .eq('tenant_id', tenantId)
+            .in('id', settlementIds)
+            .eq('status', 'active');
+          if (settlementRollbackError) throw settlementRollbackError;
+        }
+
+        for (const { commission } of allocations) {
+          const original = commissions.find((item) => item.id === commission.id);
+          if (!original) continue;
+          const { error: commissionRollbackError } = await supabase
+            .from('commissions')
+            .update({
+              status: original.status,
+              settled_amount: original.settled_amount ?? 0,
+              paid_at: original.paid_at ?? null,
+              payment_method: original.payment_method ?? null,
+            })
+            .eq('tenant_id', tenantId)
+            .eq('id', commission.id);
+          if (commissionRollbackError) throw commissionRollbackError;
+        }
+
+        if (txData) {
+          const reversal = await createReversalTransaction(txData, {
+            category: 'Estorno de liquidação',
+            description: 'Estorno técnico por falha ao atualizar o lote de comissões.',
+            paymentMethod: txData.payment_method,
+            referenceId: professionalId,
+            referenceType: 'commission_batch_settlement_error',
+          });
+          await markTransactionAsReversed(txData.id, reversal.id, 'Falha ao atualizar o lote de comissões.');
+        }
+      } catch (rollbackError) {
+        rollbackCompleted = false;
+        console.error('Não foi possível concluir o rollback do lote de comissões:', rollbackError);
+      }
+
+      toast.error(
+        rollbackCompleted
+          ? 'A liquidação em lote falhou e foi estornada automaticamente. Nenhum valor foi baixado.'
+          : 'A liquidação em lote falhou e o estorno automático não foi concluído. Verifique o financeiro antes de repetir.',
+      );
+      return;
+    }
 
     setCommissions(prev => prev.map(c =>
-      settledIds.includes(c.id)
-        ? {
-            ...c,
-            status: 'paid',
-            paid_at: paidAt,
-            transaction_id: txData?.id,
-            payment_method: paymentMethod,
-            settled_amount: Math.abs(Number(c.commission_value)),
-          }
+      updatedCommissions.has(c.id)
+        ? (() => {
+            const updated = updatedCommissions.get(c.id)!;
+            return {
+              ...c,
+              status: updated.status,
+              paid_at: updated.status === 'paid' ? paidAt : undefined,
+              payment_method: paymentMethod,
+              settled_amount: updated.settledAmount,
+            };
+          })()
         : c
     ));
-    setTransactions(prev => [txData as Transaction, ...prev]);
+    if (txData) setTransactions(prev => [txData as Transaction, ...prev]);
     await recordFinancialAudit({
       actionType: 'commission_batch_paid',
       entityType: 'commission',
-      description: `${settlementKind === 'transfer_receivable' ? 'Lote de repasses recebido' : 'Lote de comissões/vales liquidado'}.`,
+      description: isTransfer
+        ? 'Lote de repasses recebido com recuperação de vales.'
+        : 'Lote de comissões liquidado com abatimento de vales.',
       transactionId: txData?.id,
       cashSessionId: targetSession.id,
       afterState: {
         professional_id: professionalId,
-        commission_count: settledIds.length,
+        commission_count: updatedCommissions.size,
         amount: totalAmount,
         payment_method: paymentMethod,
+        allocations: allocations.map(({ commission, amount, componentType }) => ({
+          commission_id: commission.id,
+          amount,
+          component_type: componentType,
+        })),
       },
     });
-    toast.success(settlementKind === 'transfer_receivable'
-      ? `${pendingCommissions.length} repasses recebidos!`
-      : `${pendingCommissions.length} comissões/vales liquidados!`);
+    toast.success(isTransfer
+      ? `${updatedCommissions.size} item(ns) de repasse/vale liquidados!`
+      : `${updatedCommissions.size} item(ns) de comissão/vale liquidados!`);
   };
 
   const addVoucher = async (professionalId: string, amount: number, description?: string): Promise<boolean> => {

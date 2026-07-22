@@ -130,6 +130,8 @@ export function ProfessionalsList() {
   const [formActive, setFormActive] = useState(true);
   const [formHasSchedule, setFormHasSchedule] = useState(true);
   const [formScheduleColor, setFormScheduleColor] = useState(DEFAULT_SCHEDULE_COLOR);
+  const [formScheduleStart, setFormScheduleStart] = useState('');
+  const [formScheduleEnd, setFormScheduleEnd] = useState('');
   const [formEmail, setFormEmail] = useState('');
   const [formPassword, setFormPassword] = useState('');
   const [createAccess, setCreateAccess] = useState(false);
@@ -168,6 +170,8 @@ export function ProfessionalsList() {
     setFormActive(true);
     setFormHasSchedule(true);
     setFormScheduleColor(DEFAULT_SCHEDULE_COLOR);
+    setFormScheduleStart('');
+    setFormScheduleEnd('');
     setFormEmail('');
     setFormPassword('');
     setCreateAccess(false);
@@ -197,6 +201,8 @@ export function ProfessionalsList() {
     setFormActive(professional.is_active);
     setFormHasSchedule(professional.has_schedule ?? true);
     setFormScheduleColor(professional.schedule_color || DEFAULT_SCHEDULE_COLOR);
+    setFormScheduleStart(professional.schedule_start_time?.slice(0, 5) || '');
+    setFormScheduleEnd(professional.schedule_end_time?.slice(0, 5) || '');
     setFormEmail(professional.email || '');
     setFormPassword('');
     setCreateAccess(false);
@@ -273,6 +279,14 @@ export function ProfessionalsList() {
 
   const handleSave = async () => {
     if (!formName || !formNickname) return;
+    if ((formScheduleStart && !formScheduleEnd) || (!formScheduleStart && formScheduleEnd)) {
+      toast({ variant: "destructive", title: "Horário incompleto", description: "Informe o início e o fim do expediente, ou deixe os dois campos vazios para herdar o horário do estabelecimento." });
+      return;
+    }
+    if (formScheduleStart && formScheduleEnd && formScheduleStart >= formScheduleEnd) {
+      toast({ variant: "destructive", title: "Horário inválido", description: "O fim do expediente deve ser maior que o início." });
+      return;
+    }
     if (createAccess && (!formEmail || !formPassword)) {
       toast({ variant: "destructive", title: "Erro", description: "Email e senha são obrigatórios para criar acesso" });
       return;
@@ -339,6 +353,8 @@ export function ProfessionalsList() {
           is_active: formActive,
           has_schedule: formHasSchedule,
           schedule_color: formScheduleColor,
+          schedule_start_time: formScheduleStart || null,
+          schedule_end_time: formScheduleEnd || null,
           photo_url: photoUrl || undefined,
         });
         toast({ title: "Profissional atualizado", description: "Dados salvos com sucesso" });
@@ -355,6 +371,8 @@ export function ProfessionalsList() {
           is_active: formActive,
           has_schedule: formHasSchedule,
           schedule_color: formScheduleColor,
+          schedule_start_time: formScheduleStart || null,
+          schedule_end_time: formScheduleEnd || null,
         });
 
         // Then upload photo if selected
@@ -767,6 +785,33 @@ export function ProfessionalsList() {
                     aria-label={`Selecionar cor ${color}`}
                   />
                 ))}
+              </div>
+            </div>
+
+            <div className="space-y-2">
+              <Label>Expediente individual</Label>
+              <p className="text-xs text-muted-foreground">
+                Opcional. Deixe vazio para usar o horário configurado para o estabelecimento.
+              </p>
+              <div className="grid grid-cols-2 gap-3">
+                <div className="space-y-1">
+                  <Label htmlFor="scheduleStart" className="text-xs">Início</Label>
+                  <Input
+                    id="scheduleStart"
+                    type="time"
+                    value={formScheduleStart}
+                    onChange={(event) => setFormScheduleStart(event.target.value)}
+                  />
+                </div>
+                <div className="space-y-1">
+                  <Label htmlFor="scheduleEnd" className="text-xs">Fim</Label>
+                  <Input
+                    id="scheduleEnd"
+                    type="time"
+                    value={formScheduleEnd}
+                    onChange={(event) => setFormScheduleEnd(event.target.value)}
+                  />
+                </div>
               </div>
             </div>
 

@@ -30,7 +30,9 @@ type PermissionId =
   | 'view_commissions'
   | 'manage_cash_flow'
   | 'view_financial_history'
-  | 'reverse_financial_entries';
+  | 'reverse_financial_entries'
+  | 'manage_schedule_blocks'
+  | 'manage_all_schedule_blocks';
 type NewAccessType = 'professional' | 'staff';
 type AdminTabId = 'accesses' | 'service-rules';
 
@@ -62,6 +64,8 @@ const PERMISSIONS: { id: PermissionId; label: string }[] = [
   { id: 'manage_cash_flow', label: 'Operar Caixa do Dia' },
   { id: 'view_financial_history', label: 'Visualizar Gestão Financeira' },
   { id: 'reverse_financial_entries', label: 'Estornos e Ajustes Financeiros' },
+  { id: 'manage_schedule_blocks', label: 'Bloquear a própria agenda' },
+  { id: 'manage_all_schedule_blocks', label: 'Bloquear agenda da equipe' },
 ];
 
 const ACCESS_PROFILES: { id: AccessPresetId; label: string; description: string; permissions: PermissionId[] }[] = [
@@ -69,13 +73,13 @@ const ACCESS_PROFILES: { id: AccessPresetId; label: string; description: string;
     id: 'reception',
     label: 'Recepção',
     description: 'Agenda completa, clientes, comandas e operação diária do caixa.',
-    permissions: ['view_schedule', 'view_all_schedule', 'edit_schedule', 'view_clients', 'close_bill', 'manage_cash_flow'],
+    permissions: ['view_schedule', 'view_all_schedule', 'edit_schedule', 'view_clients', 'close_bill', 'manage_cash_flow', 'manage_all_schedule_blocks'],
   },
   {
     id: 'professional',
     label: 'Profissional',
     description: 'Agenda própria e visualização das próprias comissões.',
-    permissions: ['view_schedule', 'view_commissions'],
+    permissions: ['view_schedule', 'view_commissions', 'manage_schedule_blocks'],
   },
   {
     id: 'financial',

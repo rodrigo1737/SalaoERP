@@ -37,6 +37,8 @@ type ProfessionalImportRow = {
   type: 'owner' | 'employee' | 'freelancer';
   specialty: string | null;
   has_schedule: boolean;
+  schedule_start_time: string | null;
+  schedule_end_time: string | null;
   duplicateKey: string;
   notes: string | null;
   created_at: string | null;
@@ -49,6 +51,17 @@ type ExistingProfessional = {
 
 const REQUIRED_HEADERS = ['Nome'];
 const DEFAULT_SCHEDULE_COLOR = '#EFF6FF';
+
+const parseScheduleTime = (value: unknown) => {
+  const text = asText(value);
+  if (!text) return null;
+  const match = text.match(/^(\d{1,2})[:h](\d{2})/i);
+  if (!match) return null;
+  const hour = Number(match[1]);
+  const minute = Number(match[2]);
+  if (hour > 23 || minute > 59) return null;
+  return `${String(hour).padStart(2, '0')}:${String(minute).padStart(2, '0')}`;
+};
 
 const mapProfessionalType = (cargo: string, accessGroup: string) => {
   const normalizedCargo = normalizeText(cargo);
@@ -107,6 +120,8 @@ const parseImportRows = (rows: RawRow[]) => {
     const nickname = asText(getField(row, 'Apelido')).replace(/\s+/g, ' ').trim() || name;
     const cargo = asText(getField(row, 'Cargo'));
     const accessGroup = asText(getField(row, 'Grupo de acesso'));
+    const scheduleStart = parseScheduleTime(getField(row, ['Horário início', 'Horario inicio', 'Início', 'Inicio', 'Hora início', 'Hora inicio']));
+    const scheduleEnd = parseScheduleTime(getField(row, ['Horário fim', 'Horario fim', 'Fim', 'Hora fim', 'Até', 'Ate']));
 
     if (!name) {
       invalidRows.push(index + 2);
@@ -127,6 +142,8 @@ const parseImportRows = (rows: RawRow[]) => {
       type: mapProfessionalType(cargo, accessGroup),
       specialty: mapSpecialty(cargo),
       has_schedule: hasSchedule(cargo, accessGroup),
+      schedule_start_time: scheduleStart,
+      schedule_end_time: scheduleEnd,
       duplicateKey,
       notes:
         buildNotes([
@@ -266,6 +283,8 @@ export function ProfessionalImportSettings() {
           type: row.type,
           specialty: row.specialty,
           has_schedule: row.has_schedule,
+          schedule_start_time: row.schedule_start_time,
+          schedule_end_time: row.schedule_end_time,
           schedule_color: DEFAULT_SCHEDULE_COLOR,
           commission_service: 0,
           commission_product: 0,

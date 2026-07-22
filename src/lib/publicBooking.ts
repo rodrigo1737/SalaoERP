@@ -16,6 +16,14 @@ export interface PublicBookingProfessional {
   professional_name: string;
   nickname: string | null;
   photo_url: string | null;
+  schedule_start_time: string | null;
+  schedule_end_time: string | null;
+}
+
+export interface PublicBookingProfessionalBlock {
+  professional_id: string;
+  starts_at: string;
+  ends_at: string;
 }
 
 export interface PublicBookingService {
@@ -47,6 +55,18 @@ export async function fetchPublicBookingProfessionals(slug: string) {
   const { data, error } = await supabase.rpc('get_public_booking_professionals', { _slug: slug });
   return {
     data: (data ?? []) as PublicBookingProfessional[],
+    error,
+  };
+}
+
+export async function fetchPublicBookingProfessionalBlocks(slug: string, startDate: string, endDate: string) {
+  const { data, error } = await (supabase as any).rpc('get_public_booking_professional_blocks', {
+    _slug: slug,
+    _start_date: startDate,
+    _end_date: endDate,
+  });
+  return {
+    data: (data ?? []) as PublicBookingProfessionalBlock[],
     error,
   };
 }

@@ -14,6 +14,7 @@ import { ptBR } from 'date-fns/locale';
 import { cn } from '@/lib/utils';
 import {
   fetchPublicBookingProfessionals,
+  fetchPublicBookingProfessionalBlocks,
   fetchPublicBookingServiceProfessionals,
   fetchPublicBookingServices,
   fetchPublicBookingTenant,
@@ -30,6 +31,8 @@ interface Professional {
   name: string;
   nickname: string;
   photo_url?: string;
+  schedule_start_time?: string | null;
+  schedule_end_time?: string | null;
 }
 
 interface Service {
@@ -69,6 +72,7 @@ const ClientBooking: React.FC = () => {
   const [professionals, setProfessionals] = useState<Professional[]>([]);
   const [serviceProfessionals, setServiceProfessionals] = useState<ServiceProfessional[]>([]);
   const [existingAppointments, setExistingAppointments] = useState<Appointment[]>([]);
+  const [scheduleBlocks, setScheduleBlocks] = useState<Array<{ professional_id: string; starts_at: string; ends_at: string }>>([]);
   const [workingHours, setWorkingHours] = useState({ start: 8, end: 20 });
   const [loading, setLoading] = useState(true);
   const [submitting, setSubmitting] = useState(false);
@@ -125,6 +129,8 @@ const ClientBooking: React.FC = () => {
           name: professional.professional_name,
           nickname: professional.nickname || professional.professional_name,
           photo_url: professional.photo_url || undefined,
+          schedule_start_time: professional.schedule_start_time,
+          schedule_end_time: professional.schedule_end_time,
         })));
       }
 
@@ -156,7 +162,17 @@ const ClientBooking: React.FC = () => {
     if (data) {
       setExistingAppointments(data);
     }
-  }, [selectedDate, tenant.id]);
+
+    const startDate = startOfDay(selectedDate);
+    const endDate = new Date(startDate);
+    endDate.setDate(endDate.getDate() + 1);
+    const { data: blocks } = await fetchPublicBookingProfessionalBlocks(
+      tenant.booking_slug || '',
+      startDate.toISOString(),
+      endDate.toISOString(),
+    );
+    setScheduleBlocks(blocks ?? []);
+  }, [selectedDate, tenant.booking_slug, tenant.id]);
 
   useEffect(() => {
     fetchAppointments();
@@ -195,22 +211,27 @@ const ClientBooking: React.FC = () => {
     if (!selectedDate || !selectedProfessional || !selectedService) return [];
 
     const slots: string[] = [];
-    const startHour = workingHours.start;
-    const endHour = workingHours.end;
+    const professionalStart = selectedProfessional.schedule_start_time || `${String(workingHours.start).padStart(2, '0')}:00`;
+    const professionalEnd = selectedProfessional.schedule_end_time || `${String(workingHours.end).padStart(2, '0')}:00`;
+    const [startHour, startMinute] = professionalStart.split(':').map(Number);
+    const [endHour, endMinute] = professionalEnd.split(':').map(Number);
+    const startMinutes = startHour * 60 + startMinute;
+    const endMinutes = endHour * 60 + endMinute;
     const slotInterval = 30; // 30 min intervals
 
     const now = new Date();
     const isSelectedToday = isToday(selectedDate);
 
-    for (let hour = startHour; hour < endHour; hour++) {
-      for (let minute = 0; minute < 60; minute += slotInterval) {
+    for (let slotMinutes = startMinutes; slotMinutes < endMinutes; slotMinutes += slotInterval) {
+        const hour = Math.floor(slotMinutes / 60);
+        const minute = slotMinutes % 60;
         const slotStart = setMinutes(setHours(selectedDate, hour), minute);
         const configuredDuration = serviceProfessionals.find(sp =>
           sp.service_id === selectedService.id && sp.professional_id === selectedProfessional.id
         )?.duration_minutes;
         const duration = configuredDuration || selectedService.duration_minutes;
         const slotEnd = addMinutes(slotStart, duration + (selectedService.break_time_minutes || 0));
-        const workdayEnd = setMinutes(setHours(selectedDate, endHour), 0);
+        const workdayEnd = setMinutes(setHours(selectedDate, endHour), endMinute);
 
         // Skip past times for today
         if ((isSelectedToday && isBefore(slotStart, now)) || slotEnd > workdayEnd) {
@@ -229,14 +250,20 @@ const ClientBooking: React.FC = () => {
           );
         });
 
-        if (!hasConflict) {
+        const hasBlock = scheduleBlocks.some((block) => {
+          if (block.professional_id !== selectedProfessional.id) return false;
+          const blockStart = parseISO(block.starts_at);
+          const blockEnd = parseISO(block.ends_at);
+          return slotStart < blockEnd && slotEnd > blockStart;
+        });
+
+        if (!hasConflict && !hasBlock) {
           slots.push(format(slotStart, 'HH:mm'));
         }
-      }
     }
 
     return slots;
-  }, [selectedDate, selectedProfessional, selectedService, existingAppointments, serviceProfessionals, workingHours]);
+  }, [selectedDate, selectedProfessional, selectedService, existingAppointments, scheduleBlocks, serviceProfessionals, workingHours]);
 
   const professionalsForSelectedService = useMemo(() => {
     if (!selectedService) return professionals;

@@ -731,6 +731,8 @@ export type Database = {
           phone: string | null
           photo_url: string | null
           schedule_color: string
+          schedule_end_time: string | null
+          schedule_start_time: string | null
           settlement_type: string
           specialty: string | null
           tenant_id: string | null
@@ -752,6 +754,8 @@ export type Database = {
           phone?: string | null
           photo_url?: string | null
           schedule_color?: string
+          schedule_end_time?: string | null
+          schedule_start_time?: string | null
           settlement_type?: string
           specialty?: string | null
           tenant_id?: string | null
@@ -773,6 +777,8 @@ export type Database = {
           phone?: string | null
           photo_url?: string | null
           schedule_color?: string
+          schedule_end_time?: string | null
+          schedule_start_time?: string | null
           settlement_type?: string
           specialty?: string | null
           tenant_id?: string | null
@@ -1527,6 +1533,8 @@ export type Database = {
         | "view_financial_history"
         | "reverse_financial_entries"
         | "view_all_schedule"
+        | "manage_schedule_blocks"
+        | "manage_all_schedule_blocks"
       service_price_type: "fixed" | "variable" | "starting_at"
       tenant_status: "active" | "readonly" | "blocked"
     }
@@ -1669,6 +1677,8 @@ export const Constants = {
         "view_financial_history",
         "reverse_financial_entries",
         "view_all_schedule",
+        "manage_schedule_blocks",
+        "manage_all_schedule_blocks",
       ],
       service_price_type: ["fixed", "variable", "starting_at"],
       tenant_status: ["active", "readonly", "blocked"],
