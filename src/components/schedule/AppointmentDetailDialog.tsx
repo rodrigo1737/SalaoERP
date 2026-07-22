@@ -102,6 +102,7 @@ interface AppointmentDetailDialogProps {
     start_time: string;
     end_time: string;
     notes: string;
+    is_fit_in?: boolean;
     additionalServices?: Array<{
       professional_id: string;
       service_id: string;
@@ -365,8 +366,9 @@ export function AppointmentDetailDialog({
       // Only check same professional
       if (apt.professional_id !== professionalId) return false;
       
-      // Skip cancelled appointments
-      if (apt.status === 'cancelled') return false;
+      // Apenas atendimentos ativos ocupam a agenda. Cancelados e concluídos
+      // não devem impedir uma manutenção ou novo horário.
+      if (!['pre_scheduled', 'scheduled', 'confirmed', 'in_progress'].includes(apt.status)) return false;
       
       const aptStart = new Date(apt.start_time);
       const aptEnd = new Date(apt.end_time);
@@ -435,6 +437,7 @@ export function AppointmentDetailDialog({
       start_time: newStartTime.toISOString(),
       end_time: mainEndTime.toISOString(),
       notes,
+      is_fit_in: appointment.is_fit_in ?? false,
       additionalServices,
     };
     
@@ -459,7 +462,7 @@ export function AppointmentDetailDialog({
 
   const handleConfirmOverlap = () => {
     if (pendingSaveData) {
-      onSave(pendingSaveData);
+      onSave({ ...pendingSaveData, is_fit_in: true });
       
       // Also update status if changed
       if (selectedStatus !== appointment?.status) {

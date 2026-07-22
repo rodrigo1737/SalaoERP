@@ -4,6 +4,7 @@ import { supabase } from '@/integrations/supabase/client';
 import { useAuth } from '@/contexts/AuthContext';
 import { toast } from 'sonner';
 import { isCleaningControlTenant } from '@/lib/tenantSegments';
+import { getSupabaseErrorMessage } from '@/lib/supabaseErrors';
 import {
   calculateSettlementAmount,
   CommissionSettlementKind,
@@ -125,6 +126,7 @@ export interface Appointment {
   total_value?: number;
   booking_source?: 'admin' | 'online';
   client_user_id?: string;
+  is_fit_in?: boolean;
   created_at: string;
   // Joined data
   client?: Client;
@@ -350,7 +352,7 @@ interface DataContextType {
   updateProductStock: (id: string, newQuantity: number, reason?: string) => Promise<void>;
   // Appointments
   addAppointment: (appointment: Omit<Appointment, 'id' | 'created_at'>) => Promise<Appointment | null>;
-  updateAppointment: (id: string, data: Partial<Appointment>) => Promise<void>;
+  updateAppointment: (id: string, data: Partial<Appointment>) => Promise<boolean>;
   deleteAppointment: (id: string) => Promise<void>;
   refundAppointment: (id: string) => Promise<boolean>;
   completeAppointment: (
@@ -1594,11 +1596,16 @@ export const DataProvider: React.FC<{ children: ReactNode }> = ({ children }) =>
         status: appointmentData.status,
         notes: appointmentData.notes,
         total_value: appointmentData.total_value,
+        is_fit_in: appointmentData.is_fit_in ?? false,
         tenant_id: tenantId,
       })
       .select()
       .single();
-    if (error) { toast.error('Erro ao criar agendamento.'); return null; }
+    if (error) {
+      const message = await getSupabaseErrorMessage(error, undefined, 'Não foi possível criar o agendamento.');
+      toast.error('Erro ao criar agendamento', { description: message });
+      return null;
+    }
     const joined = joinAppointments([data as Appointment], clients, professionals, services)[0];
     setAppointments(prev => [joined, ...prev]);
     await recordAppointmentEvent({
@@ -1615,7 +1622,7 @@ export const DataProvider: React.FC<{ children: ReactNode }> = ({ children }) =>
   };
 
   const updateAppointment = async (id: string, data: Partial<Appointment>) => {
-    if (!guardModify()) return;
+    if (!guardModify()) return false;
     const previousAppointment = appointments.find((appointment) => appointment.id === id) ?? null;
     const updateData: Record<string, unknown> = {};
     if (data.status !== undefined)          updateData.status = data.status;
@@ -1625,8 +1632,13 @@ export const DataProvider: React.FC<{ children: ReactNode }> = ({ children }) =>
     if (data.start_time !== undefined)      updateData.start_time = data.start_time;
     if (data.professional_id !== undefined) updateData.professional_id = data.professional_id;
     if (data.service_id !== undefined)      updateData.service_id = data.service_id;
+    if (data.is_fit_in !== undefined)       updateData.is_fit_in = data.is_fit_in;
     const { error } = await supabase.from('appointments').update(updateData).eq('id', id).eq('tenant_id', tenantId);
-    if (error) { toast.error('Erro ao atualizar agendamento.'); return; }
+    if (error) {
+      const message = await getSupabaseErrorMessage(error, undefined, 'Não foi possível atualizar o agendamento.');
+      toast.error('Erro ao atualizar agendamento', { description: message });
+      return false;
+    }
     const nextAppointment = previousAppointment ? { ...previousAppointment, ...data } : { id, ...data };
     setAppointments(prev => prev.map(a => {
       if (a.id !== id) return a;
@@ -1645,6 +1657,7 @@ export const DataProvider: React.FC<{ children: ReactNode }> = ({ children }) =>
         after: buildAppointmentSnapshot(nextAppointment as Partial<Appointment>),
       },
     });
+    return true;
   };
 
   // ITEM 4: não deleta comissões manualmente — FK ON DELETE SET NULL já trata isso

@@ -15,6 +15,7 @@ import {
   Banknote,
   Globe,
   LockKeyhole,
+  AlertTriangle,
 } from 'lucide-react';
 import { AppointmentDetailDialog } from './AppointmentDetailDialog';
 import { Card } from '@/components/ui/card';
@@ -28,6 +29,16 @@ import {
   DialogTitle,
   DialogDescription,
 } from '@/components/ui/dialog';
+import {
+  AlertDialog,
+  AlertDialogAction,
+  AlertDialogCancel,
+  AlertDialogContent,
+  AlertDialogDescription,
+  AlertDialogFooter,
+  AlertDialogHeader,
+  AlertDialogTitle,
+} from '@/components/ui/alert-dialog';
 import { Label } from '@/components/ui/label';
 import { Input } from '@/components/ui/input';
 import {
@@ -146,6 +157,28 @@ const dateAtTime = (date: Date, time: string) => {
   return result;
 };
 
+type PendingNewAppointment = {
+  draft: {
+    client_id: string;
+    professional_id: string;
+    service_id: string;
+    start_time: string;
+    end_time: string;
+    status: Appointment['status'];
+    notes: string;
+    total_value: number;
+  };
+  lines: Array<{
+    service_id: string;
+    professional_id: string;
+    start_time: string;
+    end_time: string;
+    value: number;
+  }>;
+  clientName: string;
+  conflicts: Appointment[];
+};
+
 export function Schedule() {
   const {
     clients,
@@ -215,6 +248,7 @@ export function Schedule() {
   const [selectedProfessionalIds, setSelectedProfessionalIds] = useState<string[]>([]);
   const [selectedSlot, setSelectedSlot] = useState<{ time: string; professionalId: string } | null>(null);
   const [selectedAppointment, setSelectedAppointment] = useState<Appointment | null>(null);
+  const [pendingFitInAppointment, setPendingFitInAppointment] = useState<PendingNewAppointment | null>(null);
   const [isNewAppointmentOpen, setIsNewAppointmentOpen] = useState(false);
   const [isAppointmentDetailOpen, setIsAppointmentDetailOpen] = useState(false);
   const [isClosingBill, setIsClosingBill] = useState(false);
@@ -805,6 +839,37 @@ export function Schedule() {
     await createQuickService();
   };
 
+  const persistNewAppointment = async (pending: PendingNewAppointment, isFitIn: boolean) => {
+    const created = await addAppointment({
+      ...pending.draft,
+      is_fit_in: isFitIn,
+    });
+
+    // A criação pode ser rejeitada pelo banco por expediente, bloqueio,
+    // permissão ou conflito. Não grave linhas adicionais nesse caso.
+    if (!created) return false;
+
+    if (pending.lines.length > 1) {
+      try {
+        await saveAppointmentServices(created.id, pending.lines);
+      } catch {
+        toast({ variant: 'destructive', title: 'Erro', description: 'Agendamento criado, mas houve falha ao salvar os serviços adicionais.' });
+        return false;
+      }
+    }
+
+    await fetchScheduleAppointments(currentDate);
+    toast({
+      title: 'Agendamento criado',
+      description: pending.lines.length > 1
+        ? `${pending.clientName} às ${getTimeFromISO(pending.draft.start_time)} — ${pending.lines.length} serviços`
+        : `${pending.clientName} às ${getTimeFromISO(pending.draft.start_time)}${isFitIn ? ' — encaixe confirmado' : ''}`,
+    });
+    setPendingFitInAppointment(null);
+    setIsNewAppointmentOpen(false);
+    return true;
+  };
+
   const handleCreateAppointment = async () => {
     if (!canEditSchedule) return;
     if (!selectedSlot || !formClient || !formTime) return;
@@ -868,7 +933,7 @@ export function Schedule() {
     const lastLine = lines[lines.length - 1];
     const summedValue = lines.reduce((sum, line) => sum + (line.value || 0), 0);
 
-    const created = await addAppointment({
+    const draft = {
       client_id: client.id,
       professional_id: professional.id,
       service_id: firstLine.service_id,
@@ -877,31 +942,49 @@ export function Schedule() {
       status: 'scheduled',
       notes: formNotes,
       total_value: summedValue,
-    });
+    } satisfies PendingNewAppointment['draft'];
 
-    if (created && lines.length > 1) {
-      try {
-        await saveAppointmentServices(created.id, lines);
-      } catch {
-        toast({ variant: 'destructive', title: 'Erro', description: 'Agendamento criado, mas houve falha ao salvar os serviços adicionais.' });
-      }
+    const startsAt = new Date(firstLine.start_time);
+    const endsAt = new Date(lastLine.end_time);
+    const blocking = scheduleBlocks.find((block) => (
+      block.professional_id === professional.id
+      && new Date(block.starts_at) < endsAt
+      && new Date(block.ends_at) > startsAt
+    ));
+
+    if (blocking) {
+      toast({
+        variant: 'destructive',
+        title: 'Horário indisponível',
+        description: blocking.reason
+          ? `O profissional está indisponível: ${blocking.reason}`
+          : 'Existe uma indisponibilidade cadastrada neste horário.',
+      });
+      return;
     }
 
-    await fetchScheduleAppointments(currentDate);
+    const activeStatuses = ['pre_scheduled', 'scheduled', 'confirmed', 'in_progress'];
+    const conflicts = dayAppointments.filter((appointment) => (
+      appointment.professional_id === professional.id
+      && activeStatuses.includes(appointment.status)
+      && new Date(appointment.start_time) < endsAt
+      && new Date(appointment.end_time) > startsAt
+    ));
 
-    toast({
-      title: "Agendamento criado",
-      description: lines.length > 1
-        ? `${client.name} às ${formTime} — ${lines.length} serviços até ${formServicesEndTime}`
-        : `${client.name} às ${formTime}`,
-    });
-    setIsNewAppointmentOpen(false);
+    const pending = { draft, lines, clientName: client.name, conflicts } satisfies PendingNewAppointment;
+    if (conflicts.length > 0) {
+      setPendingFitInAppointment(pending);
+      return;
+    }
+
+    await persistNewAppointment(pending, false);
   };
 
   const handleUpdateStatus = async (newStatus: Appointment['status']) => {
     if (!canEditSchedule) return;
     if (!selectedAppointment) return;
-    await updateAppointment(selectedAppointment.id, { status: newStatus, total_value: parseFloat(editValue) || selectedAppointment.total_value });
+    const updated = await updateAppointment(selectedAppointment.id, { status: newStatus, total_value: parseFloat(editValue) || selectedAppointment.total_value });
+    if (!updated) return;
     await fetchScheduleAppointments(currentDate);
     setSelectedAppointment({ ...selectedAppointment, status: newStatus });
   };
@@ -1304,10 +1387,11 @@ export function Schedule() {
         notes = `${notes} [Adicionais: ${itemsDesc}]`.trim();
       }
 
-      await updateAppointment(selectedAppointment.id, {
+      const appointmentUpdated = await updateAppointment(selectedAppointment.id, {
         total_value: mainTotal,
         notes,
       });
+      if (!appointmentUpdated) return;
 
       // A baixa é atômica: pagamentos, crédito, pendência residual e quitação
       // FIFO das dívidas antigas ficam no mesmo caixa e na mesma transação.
@@ -1974,6 +2058,53 @@ export function Schedule() {
         </DialogContent>
       </Dialog>
 
+      <AlertDialog
+        open={Boolean(pendingFitInAppointment)}
+        onOpenChange={(open) => {
+          if (!open) setPendingFitInAppointment(null);
+        }}
+      >
+        <AlertDialogContent>
+          <AlertDialogHeader>
+            <AlertDialogTitle className="flex items-center gap-2">
+              <AlertTriangle className="h-5 w-5 text-warning" />
+              Confirmar encaixe
+            </AlertDialogTitle>
+            <AlertDialogDescription>
+              Já existe atendimento para este profissional no intervalo selecionado.
+              O encaixe ficará registrado e será exibido sobreposto na agenda.
+            </AlertDialogDescription>
+          </AlertDialogHeader>
+          {pendingFitInAppointment && (
+            <div className="rounded-lg border bg-muted/30 p-3 text-sm space-y-2">
+              <p className="font-medium text-foreground">{pendingFitInAppointment.clientName}</p>
+              <p className="text-muted-foreground">
+                {getTimeFromISO(pendingFitInAppointment.draft.start_time)} até {getTimeFromISO(pendingFitInAppointment.draft.end_time)}
+              </p>
+              <div className="space-y-1 text-muted-foreground">
+                {pendingFitInAppointment.conflicts.map((conflict) => (
+                  <p key={conflict.id}>
+                    • {getTimeFromISO(conflict.start_time)} até {getTimeFromISO(conflict.end_time)} — {conflict.client?.name || 'Cliente'}
+                  </p>
+                ))}
+              </div>
+            </div>
+          )}
+          <AlertDialogFooter>
+            <AlertDialogCancel>Cancelar</AlertDialogCancel>
+            <AlertDialogAction
+              onClick={() => {
+                if (pendingFitInAppointment) {
+                  void persistNewAppointment(pendingFitInAppointment, true);
+                }
+              }}
+            >
+              Confirmar encaixe
+            </AlertDialogAction>
+          </AlertDialogFooter>
+        </AlertDialogContent>
+      </AlertDialog>
+
       {/* New Appointment Dialog */}
       <Dialog open={isNewAppointmentOpen} onOpenChange={setIsNewAppointmentOpen}>
         <DialogContent className="sm:max-w-md">
@@ -2153,14 +2284,16 @@ export function Schedule() {
 
           // O card guarda o 1º serviço + total somado; as linhas ficam na tabela
           // appointment_services (só grava linhas extras quando há mais de uma).
-          await updateAppointment(selectedAppointment.id, {
+          const updated = await updateAppointment(selectedAppointment.id, {
             total_value: summedValue,
             professional_id: data.professional_id,
             service_id: data.service_id,
             start_time: data.start_time,
             end_time: lastLine.end_time,
             notes: data.notes,
+            is_fit_in: data.is_fit_in ?? selectedAppointment.is_fit_in ?? false,
           });
+          if (!updated) return;
 
           try {
             await saveAppointmentServices(

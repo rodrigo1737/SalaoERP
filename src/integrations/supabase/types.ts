@@ -70,6 +70,7 @@ export type Database = {
           deleted_at: string | null
           end_time: string
           id: string
+          is_fit_in: boolean
           notes: string | null
           professional_id: string | null
           service_id: string | null
@@ -86,6 +87,7 @@ export type Database = {
           deleted_at?: string | null
           end_time: string
           id?: string
+          is_fit_in?: boolean
           notes?: string | null
           professional_id?: string | null
           service_id?: string | null
@@ -102,6 +104,7 @@ export type Database = {
           deleted_at?: string | null
           end_time?: string
           id?: string
+          is_fit_in?: boolean
           notes?: string | null
           professional_id?: string | null
           service_id?: string | null
