@@ -1387,19 +1387,17 @@ export function Schedule() {
         notes = `${notes} [Adicionais: ${itemsDesc}]`.trim();
       }
 
-      const appointmentUpdated = await updateAppointment(selectedAppointment.id, {
-        total_value: mainTotal,
-        notes,
-      });
-      if (!appointmentUpdated) return;
-
       // A baixa é atômica: pagamentos, crédito, pendência residual e quitação
       // FIFO das dívidas antigas ficam no mesmo caixa e na mesma transação.
       const needsBillPaymentRegistration = !fullyTransfer
         || resolvedLines.some((line) => line.method === 'pending' || line.method === 'client_credit')
         || Boolean(creditDeposit);
+      const resolvedCashSessionId = selectedHistoricalCashSessionId
+        ?? cashState.currentCashSession?.id
+        ?? cashState.pendingCashSession?.id
+        ?? null;
       if (needsBillPaymentRegistration) {
-        const paymentsOk = await registerBillPayments({
+        const paymentResult = await registerBillPayments({
           appointmentId: selectedAppointment.id,
           clientId: selectedAppointment.client_id ?? null,
           clientName: selectedAppointment.client?.name,
@@ -1408,13 +1406,10 @@ export function Schedule() {
           includePreviousDebts,
           idempotencyKey: billOperationId,
           creditDeposit,
-          cashSessionId: selectedHistoricalCashSessionId
-            ?? cashState.currentCashSession?.id
-            ?? cashState.pendingCashSession?.id
-            ?? null,
+          cashSessionId: resolvedCashSessionId,
           appointmentDate: selectedAppointment.start_time,
         });
-        if (!paymentsOk) return;
+        if (!paymentResult) return;
       }
 
       const paidBeforeDebt = resolvedLines
@@ -1439,7 +1434,7 @@ export function Schedule() {
         skipCommission,
         commissionLines: commissionLines.length > 0 ? commissionLines : undefined,
         skipTransaction: !fullyTransfer,
-        cashSessionId: selectedHistoricalCashSessionId,
+        cashSessionId: resolvedCashSessionId,
         movementDate: selectedAppointment.start_time,
       });
 
@@ -1448,7 +1443,7 @@ export function Schedule() {
       const mainIsTransfer = selectedAppointment.professional_id
         ? professionalsById.get(selectedAppointment.professional_id)?.settlement_type === 'transfer'
         : false;
-      if (fullyTransfer && !transactionId && !mainIsTransfer && selectedAppointment.status !== 'completed') {
+      if (!transactionId && !mainIsTransfer && selectedAppointment.status !== 'completed') {
         toast({
           variant: "destructive",
           title: "Falha ao fechar comanda",
@@ -1468,7 +1463,7 @@ export function Schedule() {
             {
               skipCommission,
               skipTransaction: !fullyTransfer,
-              cashSessionId: selectedHistoricalCashSessionId,
+              cashSessionId: resolvedCashSessionId,
               movementDate: extra.start_time,
             },
           );

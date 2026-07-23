@@ -180,6 +180,24 @@ export interface BillPaymentLine {
   amount: number;
 }
 
+export interface BillPaymentRegistrationResult {
+  appointment_id?: string;
+  cash_session_id?: string | null;
+  total_due?: number;
+  current_due?: number;
+  previous_debt_total?: number;
+  previous_debt_settled?: number;
+  current_paid?: number;
+  current_debt_created?: number;
+  paid_total?: number;
+  pending_total?: number;
+  credit_used?: number;
+  credit_deposit?: number;
+  transaction_ids?: string[];
+  settlement_ids?: string[];
+  idempotent_replay?: boolean;
+}
+
 export interface CashSession {
   id: string;
   opened_at: string;
@@ -381,7 +399,7 @@ interface DataContextType {
     creditDeposit?: { method: 'cash' | 'pix' | 'credit_card' | 'debit_card'; amount: number } | null;
     cashSessionId?: string | null;
     appointmentDate?: string | null;
-  }) => Promise<boolean>;
+  }) => Promise<BillPaymentRegistrationResult | null>;
   // Cash
   openCashSession: (openingBalance: number) => Promise<CashSession | null>;
   reopenCurrentCashSession: (sessionId: string) => Promise<boolean>;
@@ -2007,8 +2025,8 @@ export const DataProvider: React.FC<{ children: ReactNode }> = ({ children }) =>
     creditDeposit?: { method: 'cash' | 'pix' | 'credit_card' | 'debit_card'; amount: number } | null;
     cashSessionId?: string | null;
     appointmentDate?: string | null;
-  }): Promise<boolean> => {
-    if (!tenantId) return false;
+  }): Promise<BillPaymentRegistrationResult | null> => {
+    if (!tenantId) return null;
     const { data: result, error } = await supabase.rpc('register_client_bill_payment' as never, {
       _appointment_id: params.appointmentId,
       _cash_session_id: params.cashSessionId ?? null,
@@ -2023,16 +2041,10 @@ export const DataProvider: React.FC<{ children: ReactNode }> = ({ children }) =>
     if (error) {
       console.error('Erro ao registrar pagamento atômico da comanda:', error);
       toast.error(error.message || 'Não foi possível registrar o pagamento da comanda.');
-      return false;
+      return null;
     }
 
-    const batch = (result ?? {}) as {
-      transaction_ids?: string[];
-      pending_total?: number;
-      previous_debt_settled?: number;
-      current_debt_created?: number;
-      idempotent_replay?: boolean;
-    };
+    const batch = (result ?? {}) as BillPaymentRegistrationResult;
 
     // A operação já foi confirmada no banco; atualiza apenas as linhas que
     // foram criadas para que o caixa reflita o resultado sem recarga total.
@@ -2068,7 +2080,7 @@ export const DataProvider: React.FC<{ children: ReactNode }> = ({ children }) =>
       });
     }
 
-    return true;
+    return batch;
   };
 
   // ITEM 3: completeAppointment com tratamento de erros e rollback parcial
@@ -2167,7 +2179,22 @@ export const DataProvider: React.FC<{ children: ReactNode }> = ({ children }) =>
       .select('id');
     if (apptError) { toast.error('Erro ao finalizar atendimento.'); return null; }
 
-    const wasCompletedNow = (completedRows?.length ?? 0) > 0;
+    let wasCompletedNow = (completedRows?.length ?? 0) > 0;
+    if (!wasCompletedNow && existingAppointment.status !== 'completed') {
+      const { data: persistedAppointment } = await supabase
+        .from('appointments')
+        .select('id, status')
+        .eq('id', id)
+        .eq('tenant_id', tenantId)
+        .maybeSingle();
+
+      if (persistedAppointment?.status === 'completed') {
+        wasCompletedNow = false;
+      } else {
+        toast.error('Não foi possível confirmar a finalização da comanda. Recarregue a agenda e tente novamente.');
+        return null;
+      }
+    }
 
     setAppointments(prev => prev.map(a => a.id === id ? { ...a, ...overrides, status: 'completed' } : a));
 
@@ -2258,7 +2285,8 @@ export const DataProvider: React.FC<{ children: ReactNode }> = ({ children }) =>
         }).select().single();
 
         if (commError) {
-          toast.warning('Atendimento finalizado, mas houve erro ao registrar comissão. Verifique manualmente.');
+          console.error('Erro ao registrar comissão da comanda:', commError);
+          toast.warning('Comanda finalizada, mas a comissão não foi registrada. Verifique a amarração e rode o reprocessamento do período.');
         } else if (commissionRow) {
           insertedCommissionRows.push({ ...(commissionRow as Commission), professional });
         }
@@ -2306,7 +2334,7 @@ export const DataProvider: React.FC<{ children: ReactNode }> = ({ children }) =>
     if (wasCompletedNow) {
       toast.success('Atendimento finalizado!');
     }
-    return transactionId ?? null;
+    return transactionId ?? id;
   };
 
   // ── CASH ACTIONS ────────────────────────────────────────────────────────
