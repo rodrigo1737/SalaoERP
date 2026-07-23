@@ -61,7 +61,7 @@ import { cn } from '@/lib/utils';
 import { BillItemsEditor, BillItem } from './BillItemsEditor';
 import { useNavigate } from 'react-router-dom';
 import { isCleaningControlTenant } from '@/lib/tenantSegments';
-import { getAvailableServicesForProfessional, getServiceDurationForProfessional, isServiceAvailableForProfessional } from '@/lib/serviceProfessionalAvailability';
+import { getAvailableServicesForProfessional, getServiceDurationForProfessional } from '@/lib/serviceProfessionalAvailability';
 import {
   COMMISSION_SETTLEMENT_OPTIONS,
   CommissionSettlementKind,
@@ -399,17 +399,37 @@ export function Schedule() {
       ? scheduleProfessionals.filter((professional) => professional.id === currentProfessional.id)
       : visibleProfessionals;
   }, [canViewAllSchedules, currentProfessional, scheduleProfessionals, visibleProfessionals]);
+  const linkedProfessionalIdsByService = useMemo(() => {
+    const map = new Map<string, Set<string>>();
+    serviceProfessionalLinks.forEach((link) => {
+      if (!link.service_id || !link.professional_id) return;
+      const current = map.get(link.service_id) ?? new Set<string>();
+      current.add(link.professional_id);
+      map.set(link.service_id, current);
+    });
+    return map;
+  }, [serviceProfessionalLinks]);
+  const isServiceExplicitlyLinkedToProfessional = useCallback((professionalId: string | null | undefined, serviceId: string | null | undefined) => {
+    if (!serviceId || !professionalId) return false;
+    const linkedProfessionalIds = linkedProfessionalIdsByService.get(serviceId);
+    if (!linkedProfessionalIds || linkedProfessionalIds.size === 0) return true;
+    return linkedProfessionalIds.has(professionalId);
+  }, [linkedProfessionalIdsByService]);
+  const hasExplicitProfessionalBinding = useCallback((serviceId: string | null | undefined) => {
+    if (!serviceId) return false;
+    return (linkedProfessionalIdsByService.get(serviceId)?.size ?? 0) > 0;
+  }, [linkedProfessionalIdsByService]);
   const getProfessionalsForService = useCallback((serviceId: string) => {
     if (!serviceId) return selectableAppointmentProfessionals;
+    const linkedProfessionalIds = linkedProfessionalIdsByService.get(serviceId);
+    if (!linkedProfessionalIds || linkedProfessionalIds.size === 0) return selectableAppointmentProfessionals;
     return selectableAppointmentProfessionals.filter((professional) =>
-      isServiceAvailableForProfessional(serviceProfessionalLinks, professional.id, serviceId));
-  }, [selectableAppointmentProfessionals, serviceProfessionalLinks]);
+      linkedProfessionalIds.has(professional.id));
+  }, [linkedProfessionalIdsByService, selectableAppointmentProfessionals]);
   const getDefaultProfessionalForService = useCallback((serviceId: string) => {
     const options = getProfessionalsForService(serviceId);
-    const preferredId = selectedSlot?.professionalId || currentProfessional?.id || '';
-    if (preferredId && options.some((professional) => professional.id === preferredId)) return preferredId;
-    return options[0]?.id || '';
-  }, [currentProfessional?.id, getProfessionalsForService, selectedSlot?.professionalId]);
+    return options.length === 1 ? options[0].id : '';
+  }, [getProfessionalsForService]);
   const allProfessionalsSelected = selectedProfessionalIds.length === 0 || selectedProfessionalIds.length === baseVisibleProfessionals.length;
   const calendarMonthStart = new Date(currentDate.getFullYear(), currentDate.getMonth(), 1);
   const calendarStart = new Date(calendarMonthStart);
@@ -508,14 +528,10 @@ export function Schedule() {
   useEffect(() => {
     setFormServiceRows((previous) => previous.map((row) => {
       if (!row.serviceId || !row.professionalId) return row;
-      if (isServiceAvailableForProfessional(serviceProfessionalLinks, row.professionalId, row.serviceId)) return row;
-
-      const fallbackProfessionalId = getDefaultProfessionalForService(row.serviceId);
-      return fallbackProfessionalId && fallbackProfessionalId !== row.professionalId
-        ? { ...row, professionalId: fallbackProfessionalId }
-        : row;
+      if (isServiceExplicitlyLinkedToProfessional(row.professionalId, row.serviceId)) return row;
+      return { ...row, professionalId: getDefaultProfessionalForService(row.serviceId) };
     }));
-  }, [getDefaultProfessionalForService, serviceProfessionalLinks]);
+  }, [getDefaultProfessionalForService, isServiceExplicitlyLinkedToProfessional]);
 
   const navigateDate = (direction: 'prev' | 'next') => {
     const newDate = new Date(currentDate);
@@ -937,14 +953,14 @@ export function Schedule() {
     }
 
     const unavailableRow = serviceRows.find((row) =>
-      !isServiceAvailableForProfessional(serviceProfessionalLinks, row.professionalId, row.serviceId));
+      !isServiceExplicitlyLinkedToProfessional(row.professionalId, row.serviceId));
     if (unavailableRow) {
       const service = servicesById.get(unavailableRow.serviceId);
       const professional = professionalsById.get(unavailableRow.professionalId);
       toast({
         variant: 'destructive',
         title: 'Serviço não permitido',
-        description: `${professional?.nickname || professional?.name || 'Profissional'} não está habilitado para ${service?.name || 'este serviço'}.`,
+        description: `${professional?.nickname || professional?.name || 'Profissional'} não está habilitado para ${service?.name || 'este serviço'}. Ajuste o vínculo em Serviços x Profissionais.`,
       });
       return;
     }
@@ -2281,7 +2297,7 @@ export function Schedule() {
                             }}
                           >
                             <SelectTrigger className="h-9">
-                              <SelectValue placeholder="Profissional" />
+                              <SelectValue placeholder="Escolha o profissional" />
                             </SelectTrigger>
                             <SelectContent>
                               {professionalOptions.map((professional) => (
@@ -2298,6 +2314,16 @@ export function Schedule() {
                         {professionalOptions.length === 0 && (
                           <p className="text-xs text-destructive">
                             Nenhum profissional habilitado para este serviço.
+                          </p>
+                        )}
+                        {professionalOptions.length > 1 && !row.professionalId && (
+                          <p className="text-xs text-amber-700">
+                            Escolha quem vai executar este serviço.
+                          </p>
+                        )}
+                        {!hasExplicitProfessionalBinding(row.serviceId) && (
+                          <p className="text-xs text-muted-foreground">
+                            Serviço sem vínculo definido. Ao escolher o profissional, a regra de comissão pode ser confirmada no fechamento.
                           </p>
                         )}
                       </div>
@@ -2333,7 +2359,8 @@ export function Schedule() {
                   onValueChange={(value) => {
                     if (!value) return;
                     const professionalId = getDefaultProfessionalForService(value);
-                    if (!professionalId) {
+                    const professionalOptions = getProfessionalsForService(value);
+                    if (professionalOptions.length === 0) {
                       toast({
                         variant: 'destructive',
                         title: 'Serviço sem profissional',
@@ -2346,6 +2373,14 @@ export function Schedule() {
                       ...previous,
                       { id: crypto.randomUUID(), serviceId: value, professionalId },
                     ]);
+                    if (professionalOptions.length > 1 || !hasExplicitProfessionalBinding(value)) {
+                      toast({
+                        title: 'Escolha o profissional',
+                        description: hasExplicitProfessionalBinding(value)
+                          ? 'Este serviço possui mais de um profissional habilitado.'
+                          : 'Este serviço ainda não possui vínculo definido.',
+                      });
+                    }
                     setFormService('');
                   }}
                   placeholder={formServiceRows.length > 0 ? 'Adicionar outro serviço...' : 'Selecione'}
