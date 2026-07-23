@@ -52,7 +52,7 @@ import { Combobox } from '@/components/ui/combobox';
 import { Checkbox } from '@/components/ui/checkbox';
 import { Textarea } from '@/components/ui/textarea';
 import { useToast } from '@/hooks/use-toast';
-import { useData, Appointment, ClientLedgerEntry, ServiceProfessional, BillPaymentLine, BillPaymentMethod } from '@/context/DataContext';
+import { useData, Appointment, ClientLedgerEntry, ServiceProfessional, BillPaymentLine, BillPaymentMethod, Professional } from '@/context/DataContext';
 import { useStock } from '@/context/StockContext';
 import { useAuth } from '@/contexts/AuthContext';
 import { useTenantSettings } from '@/contexts/TenantSettingsContext';
@@ -177,6 +177,12 @@ type PendingNewAppointment = {
   }>;
   clientName: string;
   conflicts: Appointment[];
+};
+
+type NewAppointmentServiceRow = {
+  id: string;
+  serviceId: string;
+  professionalId: string;
 };
 
 export function Schedule() {
@@ -310,7 +316,7 @@ export function Schedule() {
 
   const [formClient, setFormClient] = useState('');
   const [formService, setFormService] = useState('');
-  const [formServices, setFormServices] = useState<string[]>([]);
+  const [formServiceRows, setFormServiceRows] = useState<NewAppointmentServiceRow[]>([]);
   const [formNotes, setFormNotes] = useState('');
   const [formTime, setFormTime] = useState('');
   const [newClientName, setNewClientName] = useState('');
@@ -350,13 +356,11 @@ export function Schedule() {
     () => clients.map((client) => ({ value: client.id, label: client.name, sublabel: client.phone || undefined })),
     [clients],
   );
-  const availableSlotServices = useMemo(() => {
-    if (!selectedSlot?.professionalId) return services;
-    return getAvailableServicesForProfessional(services, serviceProfessionalLinks, selectedSlot.professionalId);
-  }, [selectedSlot?.professionalId, serviceProfessionalLinks, services]);
   const serviceOptions = useMemo(
-    () => availableSlotServices.map((service) => ({ value: service.id, label: service.name, sublabel: `R$ ${service.default_price.toFixed(2)}` })),
-    [availableSlotServices],
+    () => services
+      .filter((service) => service.is_active)
+      .map((service) => ({ value: service.id, label: service.name, sublabel: `R$ ${service.default_price.toFixed(2)}` })),
+    [services],
   );
 
   const scheduleAppointments = useMemo(
@@ -389,6 +393,23 @@ export function Schedule() {
     () => visibleProfessionals.map((professional) => professional.id),
     [visibleProfessionals],
   );
+  const selectableAppointmentProfessionals = useMemo(() => {
+    if (canViewAllSchedules) return scheduleProfessionals;
+    return currentProfessional
+      ? scheduleProfessionals.filter((professional) => professional.id === currentProfessional.id)
+      : visibleProfessionals;
+  }, [canViewAllSchedules, currentProfessional, scheduleProfessionals, visibleProfessionals]);
+  const getProfessionalsForService = useCallback((serviceId: string) => {
+    if (!serviceId) return selectableAppointmentProfessionals;
+    return selectableAppointmentProfessionals.filter((professional) =>
+      isServiceAvailableForProfessional(serviceProfessionalLinks, professional.id, serviceId));
+  }, [selectableAppointmentProfessionals, serviceProfessionalLinks]);
+  const getDefaultProfessionalForService = useCallback((serviceId: string) => {
+    const options = getProfessionalsForService(serviceId);
+    const preferredId = selectedSlot?.professionalId || currentProfessional?.id || '';
+    if (preferredId && options.some((professional) => professional.id === preferredId)) return preferredId;
+    return options[0]?.id || '';
+  }, [currentProfessional?.id, getProfessionalsForService, selectedSlot?.professionalId]);
   const allProfessionalsSelected = selectedProfessionalIds.length === 0 || selectedProfessionalIds.length === baseVisibleProfessionals.length;
   const calendarMonthStart = new Date(currentDate.getFullYear(), currentDate.getMonth(), 1);
   const calendarStart = new Date(calendarMonthStart);
@@ -485,16 +506,16 @@ export function Schedule() {
   }, [fetchServiceLinks]);
 
   useEffect(() => {
-    if (!selectedSlot?.professionalId || !formService) return;
-    if (isServiceAvailableForProfessional(serviceProfessionalLinks, selectedSlot.professionalId, formService)) return;
-    setFormService('');
-  }, [formService, selectedSlot?.professionalId, serviceProfessionalLinks]);
+    setFormServiceRows((previous) => previous.map((row) => {
+      if (!row.serviceId || !row.professionalId) return row;
+      if (isServiceAvailableForProfessional(serviceProfessionalLinks, row.professionalId, row.serviceId)) return row;
 
-  useEffect(() => {
-    if (!selectedSlot?.professionalId) return;
-    setFormServices((previous) => previous.filter((serviceId) =>
-      isServiceAvailableForProfessional(serviceProfessionalLinks, selectedSlot.professionalId, serviceId)));
-  }, [selectedSlot?.professionalId, serviceProfessionalLinks]);
+      const fallbackProfessionalId = getDefaultProfessionalForService(row.serviceId);
+      return fallbackProfessionalId && fallbackProfessionalId !== row.professionalId
+        ? { ...row, professionalId: fallbackProfessionalId }
+        : row;
+    }));
+  }, [getDefaultProfessionalForService, serviceProfessionalLinks]);
 
   const navigateDate = (direction: 'prev' | 'next') => {
     const newDate = new Date(currentDate);
@@ -622,7 +643,7 @@ export function Schedule() {
     setSelectedSlot({ time, professionalId });
     setFormClient('');
     setFormService('');
-    setFormServices([]);
+    setFormServiceRows([]);
     setFormNotes('');
     setFormTime(time);
     setIsAddingClient(false);
@@ -737,21 +758,26 @@ export function Schedule() {
   };
 
   const canUseQuickService = isAddingService && !!newServiceName.trim();
-  const canCreateAppointment = !!formClient && !!formTime && (formServices.length > 0 || canUseQuickService);
+  const hasCompleteServiceRows = formServiceRows.length > 0
+    && formServiceRows.every((row) => row.serviceId && row.professionalId);
+  const canCreateAppointment = !!formClient && !!formTime && (hasCompleteServiceRows || canUseQuickService);
 
-  const resolveServiceDuration = (serviceId: string) => {
+  const resolveServiceDuration = (serviceId: string, professionalId?: string) => {
     const service = servicesById.get(serviceId);
     if (!service) return 0;
-    if (!selectedSlot?.professionalId) return service.duration_minutes;
+    if (!professionalId) return service.duration_minutes;
     return getServiceDurationForProfessional(
       services,
       serviceProfessionalLinks,
-      selectedSlot.professionalId,
+      professionalId,
       serviceId,
     ) ?? service.duration_minutes;
   };
 
-  const formServicesDuration = formServices.reduce((sum, serviceId) => sum + resolveServiceDuration(serviceId), 0);
+  const formServicesDuration = formServiceRows.reduce(
+    (sum, row) => sum + resolveServiceDuration(row.serviceId, row.professionalId),
+    0,
+  );
   const formServicesEndTime = (() => {
     if (!formTime || formServicesDuration === 0) return '';
     const [hour, minute] = formTime.split(':').map(Number);
@@ -760,9 +786,10 @@ export function Schedule() {
   })();
   const appointmentTimeOptions = useMemo(() => {
     const duration = formServicesDuration || (canUseQuickService ? Number(newServiceDuration) || 60 : 30);
-    if (!selectedSlot?.professionalId) return timeSlots;
-    return timeSlots.filter((time) => isSlotWithinProfessionalHours(time, selectedSlot.professionalId, duration));
-  }, [canUseQuickService, formServicesDuration, isSlotWithinProfessionalHours, newServiceDuration, selectedSlot?.professionalId, timeSlots]);
+    const primaryProfessionalId = formServiceRows[0]?.professionalId || selectedSlot?.professionalId;
+    if (!primaryProfessionalId) return timeSlots;
+    return timeSlots.filter((time) => isSlotWithinProfessionalHours(time, primaryProfessionalId, duration));
+  }, [canUseQuickService, formServiceRows, formServicesDuration, isSlotWithinProfessionalHours, newServiceDuration, selectedSlot?.professionalId, timeSlots]);
 
   const resetQuickServiceForm = () => {
     setIsAddingService(false);
@@ -774,6 +801,15 @@ export function Schedule() {
 
   const createQuickService = async () => {
     if (!newServiceName.trim()) return null;
+    const professionalId = selectedSlot?.professionalId || currentProfessional?.id || selectableAppointmentProfessionals[0]?.id || '';
+    if (!professionalId) {
+      toast({
+        variant: 'destructive',
+        title: 'Selecione um profissional',
+        description: 'Não foi possível definir o profissional para este serviço.',
+      });
+      return null;
+    }
 
     const service = await addService({
       name: newServiceName.trim(),
@@ -790,11 +826,11 @@ export function Schedule() {
     });
 
     if (service) {
-      if (selectedSlot?.professionalId && tenantId) {
-        const professional = professionalsById.get(selectedSlot.professionalId);
+      if (professionalId && tenantId) {
+        const professional = professionalsById.get(professionalId);
         const { error } = await supabase.from('service_professionals').insert({
           service_id: service.id,
-          professional_id: selectedSlot.professionalId,
+          professional_id: professionalId,
           commission_rate: professional?.commission_service ?? 50,
           assistant_commission_rate: 0,
           settlement_kind: normalizeCommissionSettlementKind(undefined, professional?.settlement_type),
@@ -808,7 +844,7 @@ export function Schedule() {
             {
               id: crypto.randomUUID(),
               service_id: service.id,
-              professional_id: selectedSlot.professionalId,
+              professional_id: professionalId,
               commission_rate: professional?.commission_service ?? 50,
               assistant_commission_rate: 0,
               settlement_kind: normalizeCommissionSettlementKind(undefined, professional?.settlement_type),
@@ -828,7 +864,10 @@ export function Schedule() {
         }
       }
 
-      setFormServices((previous) => previous.includes(service.id) ? previous : [...previous, service.id]);
+      setFormServiceRows((previous) => [
+        ...previous,
+        { id: crypto.randomUUID(), serviceId: service.id, professionalId },
+      ]);
       resetQuickServiceForm();
     }
 
@@ -849,11 +888,11 @@ export function Schedule() {
     // permissão ou conflito. Não grave linhas adicionais nesse caso.
     if (!created) return false;
 
-    if (pending.lines.length > 1) {
+    if (pending.lines.length > 0) {
       try {
         await saveAppointmentServices(created.id, pending.lines);
       } catch {
-        toast({ variant: 'destructive', title: 'Erro', description: 'Agendamento criado, mas houve falha ao salvar os serviços adicionais.' });
+        toast({ variant: 'destructive', title: 'Erro', description: 'Agendamento criado, mas houve falha ao salvar os serviços.' });
         return false;
       }
     }
@@ -875,29 +914,37 @@ export function Schedule() {
     if (!selectedSlot || !formClient || !formTime) return;
 
     const client = clientsById.get(formClient);
-    const professional = professionalsById.get(selectedSlot.professionalId);
-    if (!client || !professional) return;
+    if (!client) return;
 
-    let serviceIds = [...formServices];
-    if (serviceIds.length === 0 && canUseQuickService) {
+    let serviceRows = [...formServiceRows];
+    if (serviceRows.length === 0 && canUseQuickService) {
       const quickService = await createQuickService();
-      if (quickService) serviceIds = [quickService.id];
+      const professionalId = selectedSlot?.professionalId || currentProfessional?.id || selectableAppointmentProfessionals[0]?.id || '';
+      if (quickService && professionalId) {
+        serviceRows = [{ id: crypto.randomUUID(), serviceId: quickService.id, professionalId }];
+      }
     }
-    if (serviceIds.length === 0) return;
+    if (serviceRows.length === 0) return;
 
-    const selectedServices = serviceIds.flatMap((serviceId) => {
-      const service = servicesById.get(serviceId);
-      return service ? [service] : [];
-    });
+    const incompleteRow = serviceRows.find((row) => !row.serviceId || !row.professionalId);
+    if (incompleteRow) {
+      toast({
+        variant: 'destructive',
+        title: 'Dados incompletos',
+        description: 'Informe o serviço e o profissional de todas as linhas.',
+      });
+      return;
+    }
 
-    const unavailableService = selectedServices.find(
-      (service) => !isServiceAvailableForProfessional(serviceProfessionalLinks, professional.id, service.id),
-    );
-    if (unavailableService) {
+    const unavailableRow = serviceRows.find((row) =>
+      !isServiceAvailableForProfessional(serviceProfessionalLinks, row.professionalId, row.serviceId));
+    if (unavailableRow) {
+      const service = servicesById.get(unavailableRow.serviceId);
+      const professional = professionalsById.get(unavailableRow.professionalId);
       toast({
         variant: 'destructive',
         title: 'Serviço não permitido',
-        description: `${professional.nickname} não está habilitado para ${unavailableService.name}.`,
+        description: `${professional?.nickname || professional?.name || 'Profissional'} não está habilitado para ${service?.name || 'este serviço'}.`,
       });
       return;
     }
@@ -909,13 +956,22 @@ export function Schedule() {
     let cursor = new Date(currentDate);
     cursor.setHours(hour, minute, 0, 0);
 
-    const lines = selectedServices.map((service) => {
+    let scheduleValidationMessage = '';
+    const lines = serviceRows.flatMap((row) => {
+      const service = servicesById.get(row.serviceId);
+      const professional = professionalsById.get(row.professionalId);
+      if (!service || !professional) return [];
       const resolvedDuration = getServiceDurationForProfessional(
         services,
         serviceProfessionalLinks,
         professional.id,
         service.id,
       ) ?? service.duration_minutes;
+      const rowStartText = `${String(cursor.getHours()).padStart(2, '0')}:${String(cursor.getMinutes()).padStart(2, '0')}`;
+      if (!isSlotWithinProfessionalHours(rowStartText, professional.id, resolvedDuration)) {
+        scheduleValidationMessage = `${professional.nickname || professional.name} atende ate ${getProfessionalWindow(professional.id).end}. Ajuste o horario ou o profissional.`;
+        return [];
+      }
       const startTime = new Date(cursor);
       const endTime = new Date(startTime);
       endTime.setMinutes(endTime.getMinutes() + resolvedDuration);
@@ -929,13 +985,24 @@ export function Schedule() {
       };
     });
 
+    if (scheduleValidationMessage) {
+      toast({
+        variant: 'destructive',
+        title: 'Fora do expediente',
+        description: scheduleValidationMessage,
+      });
+      return;
+    }
+
+    if (lines.length === 0) return;
+
     const firstLine = lines[0];
     const lastLine = lines[lines.length - 1];
     const summedValue = lines.reduce((sum, line) => sum + (line.value || 0), 0);
 
     const draft = {
       client_id: client.id,
-      professional_id: professional.id,
+      professional_id: firstLine.professional_id,
       service_id: firstLine.service_id,
       start_time: firstLine.start_time,
       end_time: lastLine.end_time,
@@ -944,32 +1011,43 @@ export function Schedule() {
       total_value: summedValue,
     } satisfies PendingNewAppointment['draft'];
 
-    const startsAt = new Date(firstLine.start_time);
-    const endsAt = new Date(lastLine.end_time);
-    const blocking = scheduleBlocks.find((block) => (
-      block.professional_id === professional.id
-      && new Date(block.starts_at) < endsAt
-      && new Date(block.ends_at) > startsAt
-    ));
+    const blocking = lines.find((line) => scheduleBlocks.some((block) => (
+      block.professional_id === line.professional_id
+      && new Date(block.starts_at) < new Date(line.end_time)
+      && new Date(block.ends_at) > new Date(line.start_time)
+    )));
 
     if (blocking) {
+      const block = scheduleBlocks.find((candidate) => (
+        candidate.professional_id === blocking.professional_id
+        && new Date(candidate.starts_at) < new Date(blocking.end_time)
+        && new Date(candidate.ends_at) > new Date(blocking.start_time)
+      ));
       toast({
         variant: 'destructive',
         title: 'Horário indisponível',
-        description: blocking.reason
-          ? `O profissional está indisponível: ${blocking.reason}`
+        description: block?.reason
+          ? `O profissional está indisponível: ${block.reason}`
           : 'Existe uma indisponibilidade cadastrada neste horário.',
       });
       return;
     }
 
     const activeStatuses = ['pre_scheduled', 'scheduled', 'confirmed', 'in_progress'];
-    const conflicts = dayAppointments.filter((appointment) => (
-      appointment.professional_id === professional.id
-      && activeStatuses.includes(appointment.status)
-      && new Date(appointment.start_time) < endsAt
-      && new Date(appointment.end_time) > startsAt
-    ));
+    const conflictMap = new Map<string, Appointment>();
+    lines.forEach((line) => {
+      dayAppointments.forEach((appointment) => {
+        if (
+          appointment.professional_id === line.professional_id
+          && activeStatuses.includes(appointment.status)
+          && new Date(appointment.start_time) < new Date(line.end_time)
+          && new Date(appointment.end_time) > new Date(line.start_time)
+        ) {
+          conflictMap.set(appointment.id, appointment);
+        }
+      });
+    });
+    const conflicts = Array.from(conflictMap.values());
 
     const pending = { draft, lines, clientName: client.name, conflicts } satisfies PendingNewAppointment;
     if (conflicts.length > 0) {
@@ -1895,9 +1973,20 @@ export function Schedule() {
                               );
                             }
 
-                            // For slots that are occupied but appointment doesn't start here, show empty slot
+                            // Horário ocupado por um atendimento que começou antes:
+                            // ainda pode receber encaixe sem abrir o card existente.
                             if (hasOccupyingAppointment && !hasAppointmentsStarting) {
-                              return <div key={professional.id} className="border-l border-border/50 relative min-h-[48px]" />;
+                              return (
+                                <div
+                                  key={professional.id}
+                                  className={cn(
+                                    "border-l border-border/50 relative min-h-[48px]",
+                                    canEditSchedule && "hover:bg-primary/5 cursor-pointer transition-colors",
+                                  )}
+                                  onClick={() => canEditSchedule && handleSlotClick(time, professional.id)}
+                                  title={canEditSchedule ? 'Novo encaixe' : undefined}
+                                />
+                              );
                             }
 
                             return (
@@ -2066,7 +2155,7 @@ export function Schedule() {
               Confirmar encaixe
             </AlertDialogTitle>
             <AlertDialogDescription>
-              Já existe atendimento para este profissional no intervalo selecionado.
+              Já existe atendimento para um ou mais profissionais no intervalo selecionado.
               O encaixe ficará registrado e será exibido sobreposto na agenda.
             </AlertDialogDescription>
           </AlertDialogHeader>
@@ -2079,7 +2168,7 @@ export function Schedule() {
               <div className="space-y-1 text-muted-foreground">
                 {pendingFitInAppointment.conflicts.map((conflict) => (
                   <p key={conflict.id}>
-                    • {getTimeFromISO(conflict.start_time)} até {getTimeFromISO(conflict.end_time)} — {conflict.client?.name || 'Cliente'}
+                    • {conflict.professional?.nickname || conflict.professional?.name || 'Profissional'}: {getTimeFromISO(conflict.start_time)} até {getTimeFromISO(conflict.end_time)} — {conflict.client?.name || 'Cliente'}
                   </p>
                 ))}
               </div>
@@ -2163,26 +2252,54 @@ export function Schedule() {
                   </Button>
                 )}
               </div>
-              {formServices.length > 0 && (
-                <div className="space-y-1">
-                  {formServices.map((serviceId, index) => {
-                    const service = servicesById.get(serviceId);
+              {formServiceRows.length > 0 && (
+                <div className="space-y-2">
+                  {formServiceRows.map((row, index) => {
+                    const service = servicesById.get(row.serviceId);
                     if (!service) return null;
+                    const professionalOptions = getProfessionalsForService(row.serviceId);
                     return (
-                      <div key={serviceId} className="flex items-center justify-between rounded-md bg-secondary/40 px-3 py-2 text-sm">
-                        <span className="truncate">{index + 1}. {service.name}</span>
-                        <div className="flex items-center gap-2 shrink-0">
-                          <span className="text-xs text-muted-foreground">{resolveServiceDuration(serviceId)} min</span>
+                      <div key={row.id} className="rounded-md bg-secondary/40 px-3 py-2 text-sm space-y-2">
+                        <div className="flex items-center justify-between gap-2">
+                          <span className="truncate font-medium">{index + 1}. {service.name}</span>
                           <Button
                             type="button"
                             variant="ghost"
                             size="sm"
                             className="h-6 w-6 p-0"
-                            onClick={() => setFormServices((previous) => previous.filter((id) => id !== serviceId))}
+                            onClick={() => setFormServiceRows((previous) => previous.filter((item) => item.id !== row.id))}
                           >
                             <X className="w-3 h-3" />
                           </Button>
                         </div>
+                        <div className="grid grid-cols-[1fr_auto] gap-2">
+                          <Select
+                            value={row.professionalId}
+                            onValueChange={(professionalId) => {
+                              setFormServiceRows((previous) => previous.map((item) =>
+                                item.id === row.id ? { ...item, professionalId } : item));
+                            }}
+                          >
+                            <SelectTrigger className="h-9">
+                              <SelectValue placeholder="Profissional" />
+                            </SelectTrigger>
+                            <SelectContent>
+                              {professionalOptions.map((professional) => (
+                                <SelectItem key={professional.id} value={professional.id}>
+                                  {professional.nickname || professional.name}
+                                </SelectItem>
+                              ))}
+                            </SelectContent>
+                          </Select>
+                          <div className="flex h-9 min-w-16 items-center justify-end rounded-md border bg-background px-2 text-xs text-muted-foreground">
+                            {resolveServiceDuration(row.serviceId, row.professionalId)} min
+                          </div>
+                        </div>
+                        {professionalOptions.length === 0 && (
+                          <p className="text-xs text-destructive">
+                            Nenhum profissional habilitado para este serviço.
+                          </p>
+                        )}
                       </div>
                     );
                   })}
@@ -2215,10 +2332,23 @@ export function Schedule() {
                   value={formService}
                   onValueChange={(value) => {
                     if (!value) return;
-                    setFormServices((previous) => previous.includes(value) ? previous : [...previous, value]);
+                    const professionalId = getDefaultProfessionalForService(value);
+                    if (!professionalId) {
+                      toast({
+                        variant: 'destructive',
+                        title: 'Serviço sem profissional',
+                        description: 'Vincule este serviço a um profissional antes de agendar.',
+                      });
+                      setFormService('');
+                      return;
+                    }
+                    setFormServiceRows((previous) => [
+                      ...previous,
+                      { id: crypto.randomUUID(), serviceId: value, professionalId },
+                    ]);
                     setFormService('');
                   }}
-                  placeholder={formServices.length > 0 ? 'Adicionar outro serviço...' : 'Selecione'}
+                  placeholder={formServiceRows.length > 0 ? 'Adicionar outro serviço...' : 'Selecione'}
                   searchPlaceholder="Buscar serviço..."
                   emptyMessage="Nenhum serviço encontrado."
                   maxVisibleOptions={80}
@@ -2277,8 +2407,8 @@ export function Schedule() {
           const lastLine = allLines[allLines.length - 1];
           const summedValue = allLines.reduce((sum, line) => sum + (line.value || 0), 0);
 
-          // O card guarda o 1º serviço + total somado; as linhas ficam na tabela
-          // appointment_services (só grava linhas extras quando há mais de uma).
+          // O card guarda o 1º serviço + total somado; todas as linhas ficam em
+          // appointment_services para a comanda e comissões lerem a mesma origem.
           const updated = await updateAppointment(selectedAppointment.id, {
             total_value: summedValue,
             professional_id: data.professional_id,
@@ -2293,7 +2423,7 @@ export function Schedule() {
           try {
             await saveAppointmentServices(
               selectedAppointment.id,
-              allLines.length > 1 ? allLines : [],
+              allLines,
             );
           } catch {
             toast({ variant: 'destructive', title: 'Erro', description: 'Não foi possível salvar todos os serviços do agendamento.' });

@@ -379,6 +379,27 @@ export function AppointmentDetailDialog({
     });
   };
 
+  const checkRowsForConflicts = (rows: ServiceRow[]): Appointment[] => {
+    const conflictMap = new Map<string, Appointment>();
+
+    rows.forEach((row) => {
+      if (!row.professionalId || !row.startTime || !row.endTime) return;
+      const [startH, startM] = row.startTime.split(':').map(Number);
+      const [endH, endM] = row.endTime.split(':').map(Number);
+      const start = new Date(selectedDate);
+      start.setHours(startH, startM, 0, 0);
+      const end = new Date(selectedDate);
+      end.setHours(endH, endM, 0, 0);
+      if (end.getTime() <= start.getTime()) return;
+
+      checkForConflicts(row.professionalId, start, end).forEach((conflict) => {
+        conflictMap.set(conflict.id, conflict);
+      });
+    });
+
+    return Array.from(conflictMap.values());
+  };
+
   const handleSave = () => {
     if (!appointment || serviceRows.length === 0) return;
     
@@ -413,10 +434,9 @@ export function AppointmentDetailDialog({
       return { start, end };
     };
 
-    // O agendamento principal guarda o serviço da 1ª linha; cada serviço
-    // adicional vira um agendamento-irmão (mesmo cliente/dia) para não perder
-    // dados — o modelo guarda um serviço por agendamento e a comanda unificada
-    // reagrupa todos na cobrança.
+    // O card principal guarda a 1ª linha; todas as linhas são persistidas em
+    // appointment_services para agenda, comanda, financeiro e comissão lerem a
+    // mesma origem.
     const { start: newStartTime, end: mainEndTime } = buildRowTimes(mainRow);
 
     const additionalServices = serviceRows.slice(1).map((row) => {
@@ -441,8 +461,7 @@ export function AppointmentDetailDialog({
       additionalServices,
     };
     
-    // Check for conflicts
-    const conflicts = checkForConflicts(mainRow.professionalId, newStartTime, mainEndTime);
+    const conflicts = checkRowsForConflicts(serviceRows);
     
     if (conflicts.length > 0) {
       // Store pending save data and show confirmation dialog
