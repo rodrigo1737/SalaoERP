@@ -185,6 +185,13 @@ type NewAppointmentServiceRow = {
   professionalId: string;
 };
 
+type AppointmentLayout = {
+  lane: number;
+  laneCount: number;
+  leftPercent: number;
+  widthPercent: number;
+};
+
 export function Schedule() {
   const {
     clients,
@@ -634,6 +641,83 @@ export function Schedule() {
     return map;
   }, [appointmentMatchesSearch, dayAppointments]);
 
+  const appointmentLayouts = useMemo(() => {
+    const layouts = new Map<string, AppointmentLayout>();
+    const byProfessional = new Map<string, Appointment[]>();
+
+    dayAppointments.forEach((appointment) => {
+      if (!appointment.professional_id || !appointmentMatchesSearch(appointment)) return;
+
+      const current = byProfessional.get(appointment.professional_id);
+      if (current) {
+        current.push(appointment);
+      } else {
+        byProfessional.set(appointment.professional_id, [appointment]);
+      }
+    });
+
+    byProfessional.forEach((professionalAppointments) => {
+      const ordered = [...professionalAppointments].sort((first, second) => {
+        const firstStart = new Date(first.start_time).getTime();
+        const secondStart = new Date(second.start_time).getTime();
+        if (firstStart !== secondStart) return firstStart - secondStart;
+        return new Date(first.end_time).getTime() - new Date(second.end_time).getTime();
+      });
+
+      const groups: Appointment[][] = [];
+      let currentGroup: Appointment[] = [];
+      let currentGroupEnd = 0;
+
+      ordered.forEach((appointment) => {
+        const start = new Date(appointment.start_time).getTime();
+        const end = new Date(appointment.end_time).getTime();
+
+        if (currentGroup.length === 0 || start < currentGroupEnd) {
+          currentGroup.push(appointment);
+          currentGroupEnd = Math.max(currentGroupEnd, end);
+          return;
+        }
+
+        groups.push(currentGroup);
+        currentGroup = [appointment];
+        currentGroupEnd = end;
+      });
+
+      if (currentGroup.length > 0) {
+        groups.push(currentGroup);
+      }
+
+      groups.forEach((group) => {
+        const laneEndTimes: number[] = [];
+        const laneByAppointment = new Map<string, number>();
+
+        group.forEach((appointment) => {
+          const start = new Date(appointment.start_time).getTime();
+          const end = new Date(appointment.end_time).getTime();
+          const reusableLane = laneEndTimes.findIndex((laneEnd) => laneEnd <= start);
+          const lane = reusableLane >= 0 ? reusableLane : laneEndTimes.length;
+
+          laneEndTimes[lane] = end;
+          laneByAppointment.set(appointment.id, lane);
+        });
+
+        const laneCount = Math.max(1, laneEndTimes.length);
+        const widthPercent = 100 / laneCount;
+
+        laneByAppointment.forEach((lane, appointmentId) => {
+          layouts.set(appointmentId, {
+            lane,
+            laneCount,
+            leftPercent: lane * widthPercent,
+            widthPercent,
+          });
+        });
+      });
+    });
+
+    return layouts;
+  }, [appointmentMatchesSearch, dayAppointments]);
+
   const getAppointmentForSlot = (time: string, professionalId: string): Appointment | undefined => {
     return appointmentsStartingBySlot.get(`${professionalId}:${time}`)?.[0];
   };
@@ -646,6 +730,15 @@ export function Schedule() {
   // Get appointments that START at a specific time (for rendering the card)
   const getAppointmentsStartingAt = (time: string, professionalId: string): Appointment[] => {
     return appointmentsStartingBySlot.get(`${professionalId}:${time}`) ?? [];
+  };
+
+  const getAppointmentLayout = (appointment: Appointment): AppointmentLayout => {
+    return appointmentLayouts.get(appointment.id) ?? {
+      lane: 0,
+      laneCount: 1,
+      leftPercent: 0,
+      widthPercent: 100,
+    };
   };
 
   const isSlotOccupied = (time: string, professionalId: string): Appointment | undefined => {
@@ -2030,17 +2123,19 @@ export function Schedule() {
 
                                 {hasAppointmentsStarting && (
                                   <div className="absolute top-0 left-0 right-4 flex">
-                                    {appointmentsStartingNow.map((appointment, aptIndex) => {
+                                    {appointmentsStartingNow.map((appointment) => {
                                       const slotCount = getSlotHeight(appointment);
-                                      const cardWidthPercent = 100 / appointmentsStartingNow.length;
+                                      const layout = getAppointmentLayout(appointment);
 
                                       return (
                                         <motion.div
                                           key={appointment.id}
                                           initial={{ opacity: 0, scale: 0.95 }}
                                           animate={{ opacity: 1, scale: 1 }}
+                                          transition={{ duration: 0.18, ease: 'easeOut' }}
                                           className={cn(
-                                            "rounded-lg p-2 cursor-pointer z-10 shadow-sm border transition-all hover:shadow-md m-0.5",
+                                            "rounded-lg p-2 cursor-pointer z-10 shadow-sm border transition-all duration-200 hover:z-30 hover:shadow-md hover:-translate-y-0.5 m-0.5",
+                                            appointment.is_fit_in && "ring-1 ring-primary/30 border-primary/40",
                                             (appointment.status as string) === 'pre_scheduled' && "bg-orange-100 border-orange-400 border-dashed border-2 animate-pulse",
                                             appointment.status === 'scheduled' && "bg-info-soft border-info/30",
                                             appointment.status === 'confirmed' && "bg-success-soft border-success/30",
@@ -2050,9 +2145,9 @@ export function Schedule() {
                                           )}
                                           style={{
                                             height: `calc(${slotCount * 48}px - 4px)`,
-                                            width: `calc(${cardWidthPercent}% - 4px)`,
+                                            width: `calc(${layout.widthPercent}% - 4px)`,
                                             position: 'absolute',
-                                            left: `calc(${aptIndex * cardWidthPercent}% + 2px)`,
+                                            left: `calc(${layout.leftPercent}% + 2px)`,
                                             top: '2px'
                                           }}
                                           onClick={(e) => {
@@ -2071,6 +2166,11 @@ export function Schedule() {
                                               <div className="flex-1 min-w-0">
                                                 <div className="flex items-start justify-between gap-1">
                                                   <p className="text-xs font-medium text-foreground truncate flex-1">{appointment.client?.name}</p>
+                                                  {appointment.is_fit_in && (
+                                                    <span className="text-[8px] font-medium bg-primary/10 text-primary px-1 py-0.5 rounded shrink-0" title="Encaixe">
+                                                      Encaixe
+                                                    </span>
+                                                  )}
                                                   {appointment.booking_source === 'online' && (
                                                     <span className="flex items-center gap-0.5 text-[8px] font-medium bg-primary/10 text-primary px-1 py-0.5 rounded shrink-0" title="Agendamento online">
                                                       <Globe className="w-2 h-2" />
@@ -2172,7 +2272,7 @@ export function Schedule() {
             </AlertDialogTitle>
             <AlertDialogDescription>
               Já existe atendimento para um ou mais profissionais no intervalo selecionado.
-              O encaixe ficará registrado e será exibido sobreposto na agenda.
+              O encaixe ficará registrado e será exibido lado a lado no horário reservado.
             </AlertDialogDescription>
           </AlertDialogHeader>
           {pendingFitInAppointment && (
