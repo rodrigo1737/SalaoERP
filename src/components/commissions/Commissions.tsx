@@ -260,13 +260,14 @@ export function Commissions() {
       professional: prof,
       isTransfer,
       pendingCount: profCommissions.filter(c => getOutstandingAmount(c) > COMMISSION_SETTLEMENT_TOLERANCE).length,
+      serviceOutstanding,
       totalPending,
       totalPaid,
       totalVouchers,
       grossAttended,
       professionalGrossValue,
       totalGenerated,
-      total: totalPending + totalPaid,
+      total: totalPending,
     };
   }).filter(p => p.pendingCount > 0 || p.totalPaid > 0 || p.totalVouchers > 0);
 
@@ -656,7 +657,7 @@ export function Commissions() {
                         <span className="text-xs text-muted-foreground">Repasse pendente ao estabelecimento</span>
                       </div>
                       <p className="text-sm font-bold text-warning">
-                        {formatCurrency(item.totalPending)}
+                        {formatCurrency(item.serviceOutstanding)}
                       </p>
                     </div>
                     <div className="flex items-center justify-between p-2 rounded-lg bg-success-soft">
@@ -695,11 +696,11 @@ export function Commissions() {
                       <div className="flex items-center gap-2">
                         <Clock className="w-4 h-4 text-warning shrink-0" />
                         <span className="text-xs text-muted-foreground">
-                          {getSettlementPendingLabel(normalizeCommissionSettlementKind(undefined, item.professional.settlement_type))}
+                          Comissão bruta pendente
                         </span>
                       </div>
                       <p className="text-sm font-bold text-warning">
-                        {formatCurrency(item.totalPending)}
+                        {formatCurrency(item.serviceOutstanding)}
                       </p>
                     </div>
                     <div className="flex items-center justify-between p-2 rounded-lg bg-success-soft">

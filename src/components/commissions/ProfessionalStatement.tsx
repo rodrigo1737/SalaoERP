@@ -142,7 +142,7 @@ export function ProfessionalStatement() {
         transferReceived,
         vouchers: vouchersTotal,
         vouchersOutstanding: vouchersUnsettledTotal,
-        netToPay: isTransfer ? 0 : commissionPending - vouchersUnsettledTotal,
+        netToPay: isTransfer ? 0 : Math.max(0, commissionPending - vouchersUnsettledTotal),
         netToReceive: isTransfer ? transferPending + vouchersUnsettledTotal : transferPending,
       };
     }).filter((r) =>
