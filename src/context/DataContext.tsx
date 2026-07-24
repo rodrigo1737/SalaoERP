@@ -596,6 +596,53 @@ export const DataProvider: React.FC<{ children: ReactNode }> = ({ children }) =>
     return rows;
   };
 
+  // Paginação por cursor (keyset) para as listagens grandes (histórico inteiro
+  // de agendamentos/transações/comissões). A paginação por OFFSET profundo
+  // (fetchAllPages acima) fazia páginas de OFFSET alto varrerem todas as linhas
+  // anteriores sob a RLS (várias funções por linha), estourando o
+  // statement_timeout do Postgres (erro 57014 → HTTP 500) conforme a base
+  // crescia. Aqui cada página lê no máximo SUPABASE_PAGE_SIZE linhas a partir
+  // do último cursor, sem OFFSET — o custo por página é constante.
+  //
+  // O cursor é composto (orderColumn, id). Como o id é único, o par forma uma
+  // ordem total: a paginação é completa e não duplica nem perde nenhuma linha,
+  // mesmo quando várias linhas compartilham o mesmo timestamp (ex.: comissões
+  // lançadas no mesmo instante). Isso é essencial para não afetar os totais de
+  // caixa e comissão. queryFactory deve devolver a query base SEM .order().
+  const fetchAllPagesKeyset = async <T extends { id: string }>(
+    queryFactory: () => any,
+    orderColumn: string,
+  ): Promise<T[]> => {
+    const rows: T[] = [];
+    let cursor: { value: unknown; id: string } | null = null;
+
+    while (true) {
+      let query = queryFactory()
+        .order(orderColumn, { ascending: false })
+        .order('id', { ascending: false })
+        .limit(SUPABASE_PAGE_SIZE);
+
+      if (cursor) {
+        // Próxima página: orderColumn < cursor, OU (orderColumn = cursor E id < cursor.id).
+        query = query.or(
+          `${orderColumn}.lt.${cursor.value},and(${orderColumn}.eq.${cursor.value},id.lt.${cursor.id})`,
+        );
+      }
+
+      const { data, error } = await query;
+      if (error) throw error;
+
+      const page = (data as T[]) ?? [];
+      rows.push(...page);
+
+      if (page.length < SUPABASE_PAGE_SIZE) break;
+      const last = page[page.length - 1] as T & Record<string, unknown>;
+      cursor = { value: last[orderColumn], id: last.id };
+    }
+
+    return rows;
+  };
+
   // ── fetch helpers (ITEM 8: date filter; ITEM 9: join via supabase) ──
   const fetchClients = async () => {
     if (!tenantId) return [];
@@ -648,13 +695,14 @@ export const DataProvider: React.FC<{ children: ReactNode }> = ({ children }) =>
 
   const fetchAppointments = async () => {
     if (!tenantId) return [];
-    return fetchAllPages<Appointment>(() =>
-      supabase
-        .from('appointments')
-        .select('*')
-        .eq('tenant_id', tenantId)
-        .is('deleted_at', null)
-        .order('start_time', { ascending: false }),
+    return fetchAllPagesKeyset<Appointment>(
+      () =>
+        supabase
+          .from('appointments')
+          .select('*')
+          .eq('tenant_id', tenantId)
+          .is('deleted_at', null),
+      'start_time',
     );
   };
 
@@ -688,23 +736,25 @@ export const DataProvider: React.FC<{ children: ReactNode }> = ({ children }) =>
 
   const fetchTransactions = async () => {
     if (!tenantId) return [];
-    return fetchAllPages<Transaction>(() =>
-      supabase
-        .from('transactions')
-        .select('*')
-        .eq('tenant_id', tenantId)
-        .order('created_at', { ascending: false }),
+    return fetchAllPagesKeyset<Transaction>(
+      () =>
+        supabase
+          .from('transactions')
+          .select('*')
+          .eq('tenant_id', tenantId),
+      'created_at',
     );
   };
 
   const fetchCommissions = async () => {
     if (!tenantId) return [];
-    return fetchAllPages<Commission>(() =>
-      supabase
-        .from('commissions')
-        .select('*')
-        .eq('tenant_id', tenantId)
-        .order('created_at', { ascending: false }),
+    return fetchAllPagesKeyset<Commission>(
+      () =>
+        supabase
+          .from('commissions')
+          .select('*')
+          .eq('tenant_id', tenantId),
+      'created_at',
     );
   };
 
