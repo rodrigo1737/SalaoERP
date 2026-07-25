@@ -2154,8 +2154,34 @@ export const DataProvider: React.FC<{ children: ReactNode }> = ({ children }) =>
       toast.error('Existe um caixa pendente de data anterior. Regularize o fechamento antes de receber novas comandas.');
       return null;
     }
-    const existingAppointment = appointments.find(a => a.id === id);
-    if (!existingAppointment) return null;
+    let existingAppointment = appointments.find(a => a.id === id);
+    if (!existingAppointment) {
+      const { data: persistedAppointment, error: appointmentLookupError } = await supabase
+        .from('appointments')
+        .select('*')
+        .eq('id', id)
+        .eq('tenant_id', tenantId)
+        .is('deleted_at', null)
+        .maybeSingle();
+
+      if (appointmentLookupError) {
+        console.error('Erro ao buscar comanda antes da finalização:', appointmentLookupError);
+        toast.error(`Erro ao localizar a comanda: ${appointmentLookupError.message}`);
+        return null;
+      }
+
+      if (!persistedAppointment) {
+        toast.error('A comanda não foi encontrada neste estabelecimento. Recarregue a agenda e tente novamente.');
+        return null;
+      }
+
+      existingAppointment = persistedAppointment as Appointment;
+      setAppointments((previous) => (
+        previous.some((item) => item.id === id)
+          ? previous
+          : [existingAppointment as Appointment, ...previous]
+      ));
+    }
     const appointment = { ...existingAppointment, ...overrides };
 
     const commissionLines: AppointmentServiceLine[] = options?.commissionLines?.length
@@ -2227,7 +2253,11 @@ export const DataProvider: React.FC<{ children: ReactNode }> = ({ children }) =>
       .eq('tenant_id', tenantId)
       .neq('status', 'completed')
       .select('id');
-    if (apptError) { toast.error('Erro ao finalizar atendimento.'); return null; }
+    if (apptError) {
+      console.error('Erro ao atualizar o status da comanda:', apptError);
+      toast.error(`Erro ao finalizar atendimento: ${apptError.message}`);
+      return null;
+    }
 
     let wasCompletedNow = (completedRows?.length ?? 0) > 0;
     if (!wasCompletedNow && existingAppointment.status !== 'completed') {

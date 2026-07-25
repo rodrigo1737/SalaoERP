@@ -1733,10 +1733,13 @@ export function Schedule() {
       setCreditDepositAmount('');
     } catch (error) {
       console.error('Error closing bill:', error);
+      const errorMessage = error instanceof Error
+        ? error.message
+        : 'Falha inesperada durante o fechamento.';
       toast({
         variant: "destructive",
         title: "Erro ao fechar comanda",
-        description: "Não foi possível concluir o fechamento. Verifique se o pagamento já foi registrado antes de tentar novamente."
+        description: `${errorMessage} Verifique se o pagamento já foi registrado antes de tentar novamente.`
       });
     } finally {
       setIsSubmittingBill(false);
