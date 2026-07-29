@@ -1273,8 +1273,12 @@ export const DataProvider: React.FC<{ children: ReactNode }> = ({ children }) =>
         || activeCashRegularization?.cash_session_id === explicitSession.id
       ),
     );
-    const historicalTargetSession = selectedHistoricalCashSession
-      ?? (explicitIsHistorical ? explicitSession : null);
+    // O caixa informado pela cobrança tem precedência sobre uma regularização
+    // histórica aberta em outra tela. Sem isso, uma regularização iniciada por
+    // um administrador desvia também as comandas correntes da recepção.
+    const historicalTargetSession = explicitIsHistorical
+      ? explicitSession
+      : (explicitSession ? null : selectedHistoricalCashSession);
 
     if (historicalTargetSession) {
       if (!canPerformAdvancedFinancialOps) {
