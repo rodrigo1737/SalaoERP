@@ -287,6 +287,23 @@ export function Schedule() {
   const [detailServiceLines, setDetailServiceLines] = useState<Array<{ service_id: string; professional_id: string; start_time?: string | null; end_time?: string | null; value: number }>>([]);
   const [billServiceLines, setBillServiceLines] = useState<Array<{ service_id: string; professional_id: string; value: number }>>([]);
 
+  const getBillOperationStorageKey = (appointmentId: string) =>
+    `salaoerp:bill-operation:${tenantId ?? 'tenant'}:${appointmentId}`;
+
+  const getOrCreateBillOperationId = (appointmentId: string) => {
+    const storageKey = getBillOperationStorageKey(appointmentId);
+    const storedOperationId = window.localStorage.getItem(storageKey);
+    if (storedOperationId) return storedOperationId;
+
+    const operationId = crypto.randomUUID();
+    window.localStorage.setItem(storageKey, operationId);
+    return operationId;
+  };
+
+  const clearBillOperationId = (appointmentId: string) => {
+    window.localStorage.removeItem(getBillOperationStorageKey(appointmentId));
+  };
+
   const openAppointmentDetail = async (appointment: Appointment) => {
     setSelectedAppointment(appointment);
     setDetailServiceLines([]);
@@ -1267,7 +1284,9 @@ export function Schedule() {
     setPaymentLines([]);
     setSimplePaymentAmount('');
     setAllowResidualDebt(false);
-    setBillOperationId(crypto.randomUUID());
+    if (selectedAppointment) {
+      setBillOperationId(getOrCreateBillOperationId(selectedAppointment.id));
+    }
     setCreditDepositAmount('');
     setCreditDepositMethod('cash');
 
@@ -1729,6 +1748,7 @@ export function Schedule() {
       setPaymentLines([]);
       setSimplePaymentAmount('');
       setAllowResidualDebt(false);
+      clearBillOperationId(selectedAppointment.id);
       setBillOperationId(null);
       setCreditDepositAmount('');
     } catch (error) {

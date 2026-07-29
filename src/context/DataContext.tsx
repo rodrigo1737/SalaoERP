@@ -1260,7 +1260,21 @@ export const DataProvider: React.FC<{ children: ReactNode }> = ({ children }) =>
     const explicitSession = options?.cashSessionId
       ? cashSessions.find((session) => session.id === options.cashSessionId)
       : null;
-    const historicalTargetSession = explicitSession ?? selectedHistoricalCashSession;
+    if (options?.cashSessionId && !explicitSession) {
+      toast.error('O caixa selecionado não foi encontrado. Atualize a tela e tente novamente.');
+      return null;
+    }
+
+    const explicitIsHistorical = Boolean(
+      explicitSession
+      && (
+        explicitSession.status === 'closed'
+        || isSessionFromPreviousDay(explicitSession)
+        || activeCashRegularization?.cash_session_id === explicitSession.id
+      ),
+    );
+    const historicalTargetSession = selectedHistoricalCashSession
+      ?? (explicitIsHistorical ? explicitSession : null);
 
     if (historicalTargetSession) {
       if (!canPerformAdvancedFinancialOps) {
@@ -1275,6 +1289,16 @@ export const DataProvider: React.FC<{ children: ReactNode }> = ({ children }) =>
         return null;
       }
       return historicalTargetSession;
+    }
+
+    // A tela de cobrança informa explicitamente o caixa corrente. Isso não
+    // transforma uma sessão aberta de hoje em regularização histórica.
+    if (explicitSession) {
+      if (explicitSession.status !== 'open') {
+        toast.error('O caixa selecionado não está aberto para receber pagamentos.');
+        return null;
+      }
+      return explicitSession;
     }
 
     const sameDayOpenSession = findCashSessionByBusinessDate(
