@@ -94,6 +94,7 @@ interface AppointmentDetailDialogProps {
   canRefundBill?: boolean;
   canOpenBill?: boolean;
   canEditAppointment: boolean;
+  canDeleteAppointment?: boolean;
   onUpdateStatus: (status: Appointment['status']) => void;
   onSave: (data: {
     total_value: number;
@@ -179,6 +180,7 @@ export function AppointmentDetailDialog({
   canRefundBill = false,
   canOpenBill = true,
   canEditAppointment,
+  canDeleteAppointment = false,
   onUpdateStatus,
   onSave,
   onOpenCloseBill,
@@ -780,10 +782,10 @@ export function AppointmentDetailDialog({
               </div>
             </div>
 
-            {/* Admin/Finance Actions */}
-            {(isAdmin || canRefundBill) && (
+            {/* Administrative, financial and schedule actions */}
+            {(isAdmin || canRefundBill || canDeleteAppointment) && (
               <div className="pt-3 border-t border-border space-y-2">
-                <p className="text-xs text-muted-foreground">Ações de Administrador/Financeiro:</p>
+                <p className="text-xs text-muted-foreground">Ações disponíveis:</p>
                 <div className="flex gap-2">
                   {appointment.status === 'completed' && canRefundBill && (
                     <Button
@@ -796,7 +798,7 @@ export function AppointmentDetailDialog({
                       Estornar e Reabrir
                     </Button>
                   )}
-                  {isAdmin && (
+                  {canDeleteAppointment && (
                     <Button
                       size="sm"
                       variant="outline"

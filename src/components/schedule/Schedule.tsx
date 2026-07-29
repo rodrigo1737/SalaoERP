@@ -286,6 +286,17 @@ export function Schedule() {
   const [generateCommissionOnPending, setGenerateCommissionOnPending] = useState(true);
   const [detailServiceLines, setDetailServiceLines] = useState<Array<{ service_id: string; professional_id: string; start_time?: string | null; end_time?: string | null; value: number }>>([]);
   const [billServiceLines, setBillServiceLines] = useState<Array<{ service_id: string; professional_id: string; value: number }>>([]);
+  const selectedAppointmentBelongsToCurrentProfessional = !!selectedAppointment && !!currentProfessional && (
+    selectedAppointment.professional_id === currentProfessional.id
+    || detailServiceLines.some((line) => line.professional_id === currentProfessional.id)
+  );
+  const canManageSelectedAppointment = isAdmin || (
+    canEditSchedule
+    && (
+      !currentProfessional
+      || selectedAppointmentBelongsToCurrentProfessional
+    )
+  );
 
   const getBillOperationStorageKey = (appointmentId: string) =>
     `salaoerp:bill-operation:${tenantId ?? 'tenant'}:${appointmentId}`;
@@ -1185,7 +1196,7 @@ export function Schedule() {
   };
 
   const handleUpdateStatus = async (newStatus: Appointment['status']) => {
-    if (!canEditSchedule) return;
+    if (!canManageSelectedAppointment) return;
     if (!selectedAppointment) return;
     const updated = await updateAppointment(selectedAppointment.id, { status: newStatus, total_value: parseFloat(editValue) || selectedAppointment.total_value });
     if (!updated) return;
@@ -2539,10 +2550,15 @@ export function Schedule() {
         canCloseBill={canCloseBill}
         canRefundBill={canRefundBill}
         canOpenBill={!isCleaningTenant}
-        canEditAppointment={canEditSchedule}
+        canEditAppointment={canManageSelectedAppointment}
+        canDeleteAppointment={
+          canManageSelectedAppointment
+          && selectedAppointment?.status !== 'completed'
+          && selectedAppointment?.status !== 'cancelled'
+        }
         onUpdateStatus={handleUpdateStatus}
         onSave={async (data) => {
-          if (!canEditSchedule) return;
+          if (!canManageSelectedAppointment) return;
           if (!selectedAppointment) return;
 
           // Todas as linhas de serviço (principal + adicionais) do mesmo card.
@@ -2617,6 +2633,7 @@ export function Schedule() {
         }}
         onDelete={async () => {
           if (!selectedAppointment) return;
+          if (!canManageSelectedAppointment) return;
           await deleteAppointment(selectedAppointment.id);
           await fetchScheduleAppointments(currentDate);
           toast({ title: "Agendamento excluído", description: "O agendamento foi removido" });
