@@ -54,7 +54,7 @@ export function ProfessionalStatement() {
   const { userRole, hasPermission, currentProfessional } = useAuth();
 
   const isAdmin = userRole === 'admin';
-  const isProfessionalScopedUser = userRole === 'staff' && !!currentProfessional;
+  const isProfessionalScopedUser = userRole !== 'admin' && !!currentProfessional;
   const canViewAll = isAdmin
     || (userRole === 'staff'
       && !isProfessionalScopedUser

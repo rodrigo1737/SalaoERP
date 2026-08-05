@@ -1,6 +1,6 @@
 import React, { useCallback, useEffect, useMemo, useState } from 'react';
 import { useNavigate, useSearchParams } from 'react-router-dom';
-import { ArrowLeft, Edit, Loader2, Scissors, Shield, ShieldPlus, ShieldMinus, KeyRound, Trash2, UserPlus } from 'lucide-react';
+import { ArrowLeft, Edit, KeyRound, Link2, Loader2, Scissors, Shield, ShieldMinus, ShieldPlus, Trash2, Unlink, UserPlus } from 'lucide-react';
 import { useAuth } from '@/contexts/AuthContext';
 import { supabase } from '@/integrations/supabase/client';
 import { Button } from '@/components/ui/button';
@@ -131,6 +131,8 @@ const isAdminTab = (value: string | null): value is AdminTabId => (
   value === 'accesses' || value === 'service-rules'
 );
 
+const normalizeEmail = (value: string | null | undefined) => value?.trim().toLowerCase() ?? '';
+
 const Admin: React.FC = () => {
   const navigate = useNavigate();
   const [searchParams, setSearchParams] = useSearchParams();
@@ -141,7 +143,11 @@ const Admin: React.FC = () => {
   const [loading, setLoading] = useState(true);
   const [isAddDialogOpen, setIsAddDialogOpen] = useState(false);
   const [isEditDialogOpen, setIsEditDialogOpen] = useState(false);
+  const [isLinkDialogOpen, setIsLinkDialogOpen] = useState(false);
   const [selectedAccess, setSelectedAccess] = useState<InternalAccessRow | null>(null);
+  const [linkTargetAccess, setLinkTargetAccess] = useState<InternalAccessRow | null>(null);
+  const [selectedLinkProfessionalId, setSelectedLinkProfessionalId] = useState('');
+  const [applyProfessionalScope, setApplyProfessionalScope] = useState(false);
   const [isSubmitting, setIsSubmitting] = useState(false);
   const [newAccess, setNewAccess] = useState({
     accessType: 'professional' as NewAccessType,
@@ -155,6 +161,11 @@ const Admin: React.FC = () => {
   const currentTab = useMemo<AdminTabId>(() => (
     isAdminTab(searchParams.get('tab')) ? searchParams.get('tab') as AdminTabId : 'accesses'
   ), [searchParams]);
+  const availableProfessionalLinks = useMemo(() => (
+    internalUsers
+      .filter((row) => Boolean(row.professionalId) && !row.userId && !row.isOwner)
+      .sort((first, second) => first.name.localeCompare(second.name, 'pt-BR'))
+  ), [internalUsers]);
 
   const handleTabChange = (value: string) => {
     if (!isAdminTab(value)) return;
@@ -340,6 +351,92 @@ const Admin: React.FC = () => {
       permissions: [...getPresetPermissions('professional')],
     });
     setIsAddDialogOpen(true);
+  };
+
+  const openProfessionalLinkDialog = (row: InternalAccessRow) => {
+    if (!row.userId || row.isOwner || row.role === 'owner') return;
+
+    const matchingProfessional = availableProfessionalLinks.find((professional) => (
+      normalizeEmail(professional.email) !== ''
+      && normalizeEmail(professional.email) === normalizeEmail(row.email)
+    ));
+
+    setLinkTargetAccess(row);
+    setSelectedLinkProfessionalId(matchingProfessional?.professionalId ?? '');
+    setApplyProfessionalScope(row.role === 'professional');
+    setIsLinkDialogOpen(true);
+  };
+
+  const handleSaveProfessionalLink = async () => {
+    if (!tenantId || !linkTargetAccess?.userId || !selectedLinkProfessionalId) return;
+
+    setIsSubmitting(true);
+    try {
+      const { error } = await supabase.rpc('set_professional_user_link', {
+        _tenant_id: tenantId,
+        _professional_id: selectedLinkProfessionalId,
+        _target_user_id: linkTargetAccess.userId,
+        _apply_professional_scope: applyProfessionalScope,
+      });
+
+      if (error) throw error;
+
+      const linkedProfessional = availableProfessionalLinks.find(
+        (professional) => professional.professionalId === selectedLinkProfessionalId,
+      );
+
+      toast({
+        title: 'Vínculo profissional salvo',
+        description: `${linkTargetAccess.name} agora está vinculado a ${linkedProfessional?.name ?? 'este profissional'}. Os históricos existentes não foram alterados.`,
+      });
+
+      setIsLinkDialogOpen(false);
+      setLinkTargetAccess(null);
+      setSelectedLinkProfessionalId('');
+      setApplyProfessionalScope(false);
+      await fetchInternalUsers();
+    } catch (error: any) {
+      console.error('Error linking internal user to professional:', error);
+      toast({
+        variant: 'destructive',
+        title: 'Erro ao vincular profissional',
+        description: error.message || 'Não foi possível salvar o vínculo.',
+      });
+    } finally {
+      setIsSubmitting(false);
+    }
+  };
+
+  const handleUnlinkProfessional = async (row: InternalAccessRow) => {
+    if (!tenantId || !row.userId || !row.professionalId || row.isOwner || row.role === 'owner') return;
+    if (!confirm(`Desvincular o login de ${row.name}? Os atendimentos, comandas, comissões e movimentos existentes serão preservados.`)) return;
+
+    setIsSubmitting(true);
+    try {
+      const { error } = await supabase.rpc('set_professional_user_link', {
+        _tenant_id: tenantId,
+        _professional_id: row.professionalId,
+        _target_user_id: null,
+        _apply_professional_scope: false,
+      });
+
+      if (error) throw error;
+
+      toast({
+        title: 'Vínculo removido',
+        description: 'O login foi desvinculado. Os históricos operacionais e financeiros foram preservados.',
+      });
+      await fetchInternalUsers();
+    } catch (error: any) {
+      console.error('Error unlinking internal user from professional:', error);
+      toast({
+        variant: 'destructive',
+        title: 'Erro ao desvincular profissional',
+        description: error.message || 'Não foi possível remover o vínculo.',
+      });
+    } finally {
+      setIsSubmitting(false);
+    }
   };
 
   const applyPreset = (presetId: AccessPresetId, mode: 'new' | 'edit') => {
@@ -910,6 +1007,7 @@ const Admin: React.FC = () => {
                         return ordered.map((row) => {
                           const isProtected = row.role === 'owner' || row.role === 'admin' || row.isOwner;
                           const canManage = row.hasAccess && !isProtected && !!row.userId;
+                          const canChangeProfessionalLink = Boolean(row.userId) && !row.isOwner && row.role !== 'owner';
                           const group = groupOf(row);
                           const showHeader = group !== lastGroup;
                           lastGroup = group;
@@ -936,7 +1034,7 @@ const Admin: React.FC = () => {
                                 </TableCell>
                                 <TableCell>
                                   {row.professionalId
-                                    ? `${row.professionalType === 'owner' ? 'Profissional proprietário' : 'Profissional operacional'}`
+                                    ? `Vinculado a ${row.nickname || row.name}`
                                     : 'Sem vínculo com profissional'}
                                 </TableCell>
                                 <TableCell>{row.email || '-'}</TableCell>
@@ -973,6 +1071,32 @@ const Admin: React.FC = () => {
                                 </TableCell>
                                 <TableCell className="text-right">
                                   <div className="flex justify-end gap-2">
+                                    {canChangeProfessionalLink && (
+                                      row.professionalId ? (
+                                        <Button
+                                          variant="ghost"
+                                          size="icon"
+                                          className="text-destructive hover:text-destructive"
+                                          onClick={() => handleUnlinkProfessional(row)}
+                                          title="Desvincular login do profissional"
+                                          disabled={isSubmitting}
+                                        >
+                                          <Unlink className="h-4 w-4" />
+                                        </Button>
+                                      ) : (
+                                        <Button
+                                          variant="ghost"
+                                          size="icon"
+                                          onClick={() => openProfessionalLinkDialog(row)}
+                                          title={availableProfessionalLinks.length > 0
+                                            ? 'Vincular login a um profissional'
+                                            : 'Não há profissional disponível para vínculo'}
+                                          disabled={isSubmitting || availableProfessionalLinks.length === 0}
+                                        >
+                                          <Link2 className="h-4 w-4" />
+                                        </Button>
+                                      )
+                                    )}
                                     {canManage ? (
                                       <>
                                         <Button
@@ -1076,6 +1200,97 @@ const Admin: React.FC = () => {
             </div>
           </TabsContent>
         </Tabs>
+
+        <Dialog
+          open={isLinkDialogOpen}
+          onOpenChange={(open) => {
+            setIsLinkDialogOpen(open);
+            if (!open) {
+              setLinkTargetAccess(null);
+              setSelectedLinkProfessionalId('');
+              setApplyProfessionalScope(false);
+            }
+          }}
+        >
+          <DialogContent className="max-w-lg max-h-[90vh] overflow-hidden p-0 gap-0 flex flex-col">
+            <DialogHeader className="border-b px-6 pt-6 pb-4">
+              <DialogTitle>Vincular login a profissional</DialogTitle>
+              <DialogDescription>
+                Associe {linkTargetAccess?.fullName || linkTargetAccess?.email || 'este usuário'} à identidade profissional correta.
+              </DialogDescription>
+            </DialogHeader>
+
+            <div className="flex-1 overflow-y-auto px-6 py-4 space-y-5">
+              <div className="rounded-lg border border-primary/20 bg-primary/5 p-3 text-sm text-muted-foreground">
+                O vínculo define a agenda e as comissões próprias deste login. Nenhum agendamento, comanda, comissão ou movimento financeiro existente será regravado.
+              </div>
+
+              <div className="space-y-2">
+                <Label htmlFor="professional-link">Profissional</Label>
+                <Select value={selectedLinkProfessionalId} onValueChange={setSelectedLinkProfessionalId}>
+                  <SelectTrigger id="professional-link">
+                    <SelectValue placeholder="Selecione o profissional" />
+                  </SelectTrigger>
+                  <SelectContent>
+                    {availableProfessionalLinks.map((professional) => {
+                      const isEmailMatch = normalizeEmail(professional.email) !== ''
+                        && normalizeEmail(professional.email) === normalizeEmail(linkTargetAccess?.email);
+                      return (
+                        <SelectItem key={professional.professionalId} value={professional.professionalId!}>
+                          {professional.nickname || professional.name}
+                          {isEmailMatch ? ' - sugerido pelo e-mail' : ''}
+                        </SelectItem>
+                      );
+                    })}
+                  </SelectContent>
+                </Select>
+                {availableProfessionalLinks.length === 0 && (
+                  <p className="text-xs text-muted-foreground">
+                    Não há profissional ativo sem vínculo disponível neste cliente B2B.
+                  </p>
+                )}
+              </div>
+
+              {linkTargetAccess?.role !== 'admin' && (
+                <div className="flex items-start gap-3 rounded-lg border p-3">
+                  <Checkbox
+                    id="apply-professional-scope"
+                    checked={applyProfessionalScope}
+                    onCheckedChange={(checked) => setApplyProfessionalScope(checked === true)}
+                  />
+                  <div className="space-y-1">
+                    <Label htmlFor="apply-professional-scope" className="cursor-pointer">
+                      Aplicar escopo próprio de agenda e comissões
+                    </Label>
+                    <p className="text-xs text-muted-foreground">
+                      Mantém a agenda e as comissões próprias e remove apenas permissões amplas de agenda da equipe. As demais permissões permanecem inalteradas.
+                    </p>
+                  </div>
+                </div>
+              )}
+            </div>
+
+            <div className="border-t px-6 py-4">
+              <Button
+                onClick={handleSaveProfessionalLink}
+                className="w-full"
+                disabled={isSubmitting || !selectedLinkProfessionalId}
+              >
+                {isSubmitting ? (
+                  <>
+                    <Loader2 className="mr-2 h-4 w-4 animate-spin" />
+                    Salvando vínculo...
+                  </>
+                ) : (
+                  <>
+                    <Link2 className="mr-2 h-4 w-4" />
+                    Salvar vínculo
+                  </>
+                )}
+              </Button>
+            </div>
+          </DialogContent>
+        </Dialog>
 
         <Dialog open={isEditDialogOpen} onOpenChange={setIsEditDialogOpen}>
           <DialogContent className="max-w-lg max-h-[90vh] overflow-hidden p-0 gap-0 flex flex-col">

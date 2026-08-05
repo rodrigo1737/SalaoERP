@@ -6,6 +6,8 @@ const allowedPermissions = new Set([
   "view_schedule",
   "view_all_schedule",
   "edit_schedule",
+  "manage_schedule_blocks",
+  "manage_all_schedule_blocks",
   "view_clients",
   "close_bill",
   "refund_bill",
@@ -45,6 +47,27 @@ Deno.serve(async (req) => {
     const selectedPermissions = Array.isArray(permissions)
       ? permissions.filter((permission) => allowedPermissions.has(permission))
       : [];
+
+    if (professionalId) {
+      const { data: professional, error: professionalLookupError } = await supabaseAdmin
+        .from("professionals")
+        .select("id, user_id, is_active, deleted_at")
+        .eq("tenant_id", tenantId)
+        .eq("id", professionalId)
+        .maybeSingle();
+
+      if (professionalLookupError) {
+        return jsonResponse({ error: professionalLookupError.message }, 400);
+      }
+
+      if (!professional || !professional.is_active || professional.deleted_at) {
+        return jsonResponse({ error: "Profissional ativo não encontrado neste cliente B2B." }, 400);
+      }
+
+      if (professional.user_id) {
+        return jsonResponse({ error: "Este profissional já possui um login vinculado." }, 409);
+      }
+    }
 
     const { data: created, error: createError } = await supabaseAdmin.auth.admin.createUser({
       email: normalizedEmail,
@@ -98,21 +121,26 @@ Deno.serve(async (req) => {
     }
 
     if (professionalId) {
-      const { error: professionalError } = await supabaseAdmin
+      const { data: linkedProfessional, error: professionalError } = await supabaseAdmin
         .from("professionals")
         .update({
           user_id: userId,
           email: normalizedEmail,
         })
         .eq("tenant_id", tenantId)
-        .eq("id", professionalId);
+        .eq("id", professionalId)
+        .is("user_id", null)
+        .select("id")
+        .maybeSingle();
 
-      if (professionalError) {
+      if (professionalError || !linkedProfessional) {
         await supabaseAdmin.from("user_permissions").delete().eq("tenant_id", tenantId).eq("user_id", userId);
         await supabaseAdmin.from("user_roles").delete().eq("tenant_id", tenantId).eq("user_id", userId);
         await supabaseAdmin.from("profiles").delete().eq("id", userId);
         await supabaseAdmin.auth.admin.deleteUser(userId);
-        return jsonResponse({ error: professionalError.message }, 400);
+        return jsonResponse({
+          error: professionalError?.message ?? "Este profissional foi vinculado a outro login durante a criação do acesso.",
+        }, 409);
       }
     }
 

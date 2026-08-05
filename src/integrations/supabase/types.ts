@@ -1521,6 +1521,15 @@ export type Database = {
         Args: { _tenant_id: string }
         Returns: boolean
       }
+      set_professional_user_link: {
+        Args: {
+          _apply_professional_scope?: boolean
+          _professional_id: string
+          _target_user_id: string | null
+          _tenant_id: string
+        }
+        Returns: undefined
+      }
     }
     Enums: {
       app_role: "admin" | "professional" | "staff"

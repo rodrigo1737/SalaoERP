@@ -148,7 +148,7 @@ export function Commissions() {
   }, [refreshData]);
 
   const isAdmin = userRole === 'admin';
-  const isProfessionalScopedUser = userRole === 'staff' && !!currentProfessional;
+  const isProfessionalScopedUser = userRole !== 'admin' && !!currentProfessional;
   const canViewAllCommissions = isAdmin || (userRole === 'staff' && !isProfessionalScopedUser && hasPermission('view_commissions'));
   const canSettleCommissions = isAdmin || hasPermission('reverse_financial_entries');
   const canReprocessCommissions = isAdmin || hasPermission('reverse_financial_entries');
