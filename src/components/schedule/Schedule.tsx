@@ -52,7 +52,7 @@ import { Combobox } from '@/components/ui/combobox';
 import { Checkbox } from '@/components/ui/checkbox';
 import { Textarea } from '@/components/ui/textarea';
 import { useToast } from '@/hooks/use-toast';
-import { useData, Appointment, ClientLedgerEntry, ServiceProfessional, BillPaymentLine, BillPaymentMethod, Professional } from '@/context/DataContext';
+import { useData, Appointment, AppointmentServiceRow, ClientLedgerEntry, ServiceProfessional, BillPaymentLine, BillPaymentMethod, Professional } from '@/context/DataContext';
 import { useStock } from '@/context/StockContext';
 import { useAuth } from '@/contexts/AuthContext';
 import { useTenantSettings } from '@/contexts/TenantSettingsContext';
@@ -192,6 +192,15 @@ type AppointmentLayout = {
   widthPercent: number;
 };
 
+type ScheduleGridAppointment = Appointment & {
+  scheduleKey: string;
+  sourceAppointmentId: string;
+  serviceLineId?: string;
+};
+
+const getScheduleAppointmentKey = (appointment: Appointment) =>
+  (appointment as ScheduleGridAppointment).scheduleKey ?? appointment.id;
+
 export function Schedule() {
   const {
     clients,
@@ -315,21 +324,9 @@ export function Schedule() {
     window.localStorage.removeItem(getBillOperationStorageKey(appointmentId));
   };
 
-  const openAppointmentDetail = async (appointment: Appointment) => {
-    setSelectedAppointment(appointment);
-    setDetailServiceLines([]);
-    setIsAppointmentDetailOpen(true);
-    const lines = await fetchAppointmentServices(appointment.id);
-    setDetailServiceLines(lines.map((line) => ({
-      service_id: line.service_id,
-      professional_id: line.professional_id,
-      start_time: line.start_time,
-      end_time: line.end_time,
-      value: Number(line.value),
-    })));
-  };
   const [scheduleLoading, setScheduleLoading] = useState(false);
   const [scheduleAppointmentsRaw, setScheduleAppointmentsRaw] = useState<Appointment[]>([]);
+  const [scheduleAppointmentServices, setScheduleAppointmentServices] = useState<AppointmentServiceRow[]>([]);
   const [scheduleBlocks, setScheduleBlocks] = useState<Array<{ id: string; professional_id: string; starts_at: string; ends_at: string; reason: string }>>([]);
   const [isBlockDialogOpen, setIsBlockDialogOpen] = useState(false);
   const [blockProfessionalId, setBlockProfessionalId] = useState('');
@@ -398,7 +395,7 @@ export function Schedule() {
     [services],
   );
 
-  const scheduleAppointments = useMemo(
+  const canonicalScheduleAppointments = useMemo(
     () => scheduleAppointmentsRaw.map((appointment) => ({
       ...appointment,
       client: appointment.client_id ? clientsById.get(appointment.client_id) : undefined,
@@ -407,6 +404,67 @@ export function Schedule() {
     })),
     [scheduleAppointmentsRaw, clientsById, professionalsById, servicesById],
   );
+
+  const scheduleAppointments = useMemo(() => {
+    const linesByAppointment = new Map<string, AppointmentServiceRow[]>();
+    scheduleAppointmentServices.forEach((line) => {
+      const current = linesByAppointment.get(line.appointment_id);
+      if (current) {
+        current.push(line);
+      } else {
+        linesByAppointment.set(line.appointment_id, [line]);
+      }
+    });
+
+    const projected = canonicalScheduleAppointments.flatMap((appointment): ScheduleGridAppointment[] => {
+      const lines = [...(linesByAppointment.get(appointment.id) ?? [])]
+        .sort((first, second) => first.position - second.position);
+
+      if (lines.length === 0) {
+        return [{
+          ...appointment,
+          scheduleKey: `appointment:${appointment.id}`,
+          sourceAppointmentId: appointment.id,
+        }];
+      }
+
+      return lines.map((line) => ({
+        ...appointment,
+        scheduleKey: `service:${line.id}`,
+        sourceAppointmentId: appointment.id,
+        serviceLineId: line.id,
+        professional_id: line.professional_id,
+        service_id: line.service_id,
+        start_time: line.start_time ?? appointment.start_time,
+        end_time: line.end_time ?? appointment.end_time,
+        total_value: Number(line.value),
+        professional: professionalsById.get(line.professional_id),
+        service: servicesById.get(line.service_id),
+      }));
+    });
+
+    if (restrictToOwnProfessional && currentProfessional) {
+      return projected.filter((appointment) => appointment.professional_id === currentProfessional.id);
+    }
+
+    return projected;
+  }, [canonicalScheduleAppointments, currentProfessional, professionalsById, restrictToOwnProfessional, scheduleAppointmentServices, servicesById]);
+
+  const openAppointmentDetail = async (appointment: Appointment) => {
+    const canonicalAppointment = canonicalScheduleAppointments.find((candidate) => candidate.id === appointment.id)
+      ?? appointment;
+    setSelectedAppointment(canonicalAppointment);
+    setDetailServiceLines([]);
+    setIsAppointmentDetailOpen(true);
+    const lines = await fetchAppointmentServices(canonicalAppointment.id);
+    setDetailServiceLines(lines.map((line) => ({
+      service_id: line.service_id,
+      professional_id: line.professional_id,
+      start_time: line.start_time,
+      end_time: line.end_time,
+      value: Number(line.value),
+    })));
+  };
 
   const baseVisibleProfessionals = useMemo(() => (
     canViewAllSchedules && effectiveScope === 'all'
@@ -486,6 +544,7 @@ export function Schedule() {
   const fetchScheduleAppointments = useCallback(async (referenceDate = currentDate) => {
     if (!tenantId || isCleaningTenant) {
       setScheduleAppointmentsRaw([]);
+      setScheduleAppointmentServices([]);
       return;
     }
 
@@ -494,7 +553,7 @@ export function Schedule() {
       const weekStart = startOfWeekMonday(referenceDate);
       const weekEnd = endOfWeekExclusive(referenceDate);
 
-      let query = supabase
+      let appointmentQuery = supabase
         .from('appointments')
         .select('*')
         .eq('tenant_id', tenantId)
@@ -505,13 +564,76 @@ export function Schedule() {
       // Restringe na origem: profissional sem permissão de ver todas só carrega
       // os próprios agendamentos (não recebe dados de outros no cliente).
       if (restrictToOwnProfessional && currentProfessional) {
-        query = query.eq('professional_id', currentProfessional.id);
+        appointmentQuery = appointmentQuery.eq('professional_id', currentProfessional.id);
       }
 
-      const { data, error } = await query.order('start_time', { ascending: true });
+      const { data: appointmentData, error: appointmentError } = await appointmentQuery
+        .order('start_time', { ascending: true });
 
-      if (error) throw error;
-      setScheduleAppointmentsRaw((data as Appointment[]) ?? []);
+      if (appointmentError) throw appointmentError;
+
+      const parentAppointments = (appointmentData as Appointment[]) ?? [];
+      const parentIds = parentAppointments.map((appointment) => appointment.id);
+      const serviceLinesById = new Map<string, AppointmentServiceRow>();
+
+      if (parentIds.length > 0) {
+        let parentServiceQuery = supabase
+          .from('appointment_services')
+          .select('*')
+          .eq('tenant_id', tenantId)
+          .in('appointment_id', parentIds);
+
+        if (restrictToOwnProfessional && currentProfessional) {
+          parentServiceQuery = parentServiceQuery.eq('professional_id', currentProfessional.id);
+        }
+
+        const { data: parentServiceData, error: parentServiceError } = await parentServiceQuery;
+        if (parentServiceError) throw parentServiceError;
+        ((parentServiceData as AppointmentServiceRow[]) ?? []).forEach((line) => serviceLinesById.set(line.id, line));
+      }
+
+      // Um agendamento com vários profissionais possui um único registro-pai.
+      // Para o profissional secundário, buscamos suas linhas da semana e depois
+      // carregamos o pai correspondente sem expor agendas de outros usuários.
+      if (restrictToOwnProfessional && currentProfessional) {
+        const { data: ownServiceData, error: ownServiceError } = await supabase
+          .from('appointment_services')
+          .select('*')
+          .eq('tenant_id', tenantId)
+          .eq('professional_id', currentProfessional.id)
+          .gte('start_time', weekStart.toISOString())
+          .lt('start_time', weekEnd.toISOString());
+
+        if (ownServiceError) throw ownServiceError;
+        ((ownServiceData as AppointmentServiceRow[]) ?? []).forEach((line) => serviceLinesById.set(line.id, line));
+      }
+
+      const serviceLines = Array.from(serviceLinesById.values());
+      const loadedParentIds = new Set(parentIds);
+      const missingParentIds = Array.from(new Set(
+        serviceLines
+          .map((line) => line.appointment_id)
+          .filter((appointmentId) => !loadedParentIds.has(appointmentId)),
+      ));
+
+      let missingParents: Appointment[] = [];
+      if (missingParentIds.length > 0) {
+        const { data: missingParentData, error: missingParentError } = await supabase
+          .from('appointments')
+          .select('*')
+          .eq('tenant_id', tenantId)
+          .is('deleted_at', null)
+          .in('id', missingParentIds);
+
+        if (missingParentError) throw missingParentError;
+        missingParents = (missingParentData as Appointment[]) ?? [];
+      }
+
+      const appointmentsById = new Map<string, Appointment>();
+      [...parentAppointments, ...missingParents].forEach((appointment) => appointmentsById.set(appointment.id, appointment));
+      setScheduleAppointmentsRaw(Array.from(appointmentsById.values()).sort((first, second) =>
+        new Date(first.start_time).getTime() - new Date(second.start_time).getTime()));
+      setScheduleAppointmentServices(serviceLines);
 
       const dayStart = new Date(referenceDate);
       dayStart.setHours(0, 0, 0, 0);
@@ -726,7 +848,7 @@ export function Schedule() {
           const lane = reusableLane >= 0 ? reusableLane : laneEndTimes.length;
 
           laneEndTimes[lane] = end;
-          laneByAppointment.set(appointment.id, lane);
+          laneByAppointment.set(getScheduleAppointmentKey(appointment), lane);
         });
 
         const laneCount = Math.max(1, laneEndTimes.length);
@@ -761,7 +883,7 @@ export function Schedule() {
   };
 
   const getAppointmentLayout = (appointment: Appointment): AppointmentLayout => {
-    return appointmentLayouts.get(appointment.id) ?? {
+    return appointmentLayouts.get(getScheduleAppointmentKey(appointment)) ?? {
       lane: 0,
       laneCount: 1,
       leftPercent: 0,
@@ -1263,7 +1385,7 @@ export function Schedule() {
     // Comanda unificada: outros agendamentos em aberto do mesmo cliente no
     // mesmo dia entram na mesma tela de cobrança (pré-selecionados).
     const extras = selectedAppointment?.client_id
-      ? scheduleAppointments.filter((appointment) =>
+      ? canonicalScheduleAppointments.filter((appointment) =>
           appointment.id !== selectedAppointment.id
           && appointment.client_id === selectedAppointment.client_id
           && isSameCalendarDay(new Date(appointment.start_time), new Date(selectedAppointment.start_time))
@@ -2163,7 +2285,7 @@ export function Schedule() {
 
                                       return (
                                         <motion.div
-                                          key={appointment.id}
+                                          key={getScheduleAppointmentKey(appointment)}
                                           initial={{ opacity: 0, scale: 0.95 }}
                                           animate={{ opacity: 1, scale: 1 }}
                                           transition={{ duration: 0.18, ease: 'easeOut' }}
