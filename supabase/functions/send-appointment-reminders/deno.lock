@@ -1,0 +1,28 @@
+{
+  "version": "4",
+  "specifiers": {
+    "npm:@block65/webcrypto-web-push@2.0.0": "2.0.0"
+  },
+  "npm": {
+    "@block65/webcrypto-web-push@2.0.0": {
+      "integrity": "sha512-BMrw8hABq5krABWPy3zFJvBC73HeRkyT/GTZ2AD7wqzo9hd9vO56MstBqjGMIxIw3e4lbRUbYxgihCcfhoTI2g==",
+      "dependencies": [
+        "uint8array-extras"
+      ]
+    },
+    "uint8array-extras@1.5.0": {
+      "integrity": "sha512-rvKSBiC5zqCCiDZ9kAOszZcDvdAHwwIKJG33Ykj43OKcWsnmcBRL09YTU4nOeHZ8Y2a7l1MgTd08SBe9A8Qj6A=="
+    }
+  },
+  "redirects": {
+    "https://esm.sh/@supabase/supabase-js@2": "https://esm.sh/@supabase/supabase-js@2.116.0"
+  },
+  "remote": {
+    "https://esm.sh/@supabase/supabase-js@2.116.0": "a38014743786a06c7dbf095a99e9ef3b38c0ec16bff076fc7cd403991192b34e"
+  },
+  "workspace": {
+    "dependencies": [
+      "npm:@block65/webcrypto-web-push@2.0.0"
+    ]
+  }
+}

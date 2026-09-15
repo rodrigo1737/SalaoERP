@@ -9,6 +9,9 @@ verify_jwt = true
 [functions.reset-internal-user-password]
 verify_jwt = true
 
+[functions.send-appointment-reminders]
+verify_jwt = false
+
 [functions.manage-tenant-admins]
 verify_jwt = true
 

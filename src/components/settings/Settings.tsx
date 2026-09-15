@@ -12,6 +12,7 @@ import { useEffect, useState } from 'react';
 import { supabase } from '@/integrations/supabase/client';
 import { useTenantSettings } from '@/contexts/TenantSettingsContext';
 import { toast } from 'sonner';
+import { NotificationSettings } from './NotificationSettings';
 
 export function Settings() {
   const { userRole, isSuperAdmin, tenantId } = useAuth();
@@ -150,20 +151,7 @@ export function Settings() {
         </TabsContent>
 
         <TabsContent value="notifications">
-          <Card>
-            <CardHeader>
-              <CardTitle className="flex items-center gap-2">
-                <Bell className="w-5 h-5" />
-                Notificações
-              </CardTitle>
-              <CardDescription>Configure suas preferências de notificação</CardDescription>
-            </CardHeader>
-            <CardContent>
-              <p className="text-muted-foreground">
-                Em breve: Configurações de notificação por email e push.
-              </p>
-            </CardContent>
-          </Card>
+          <NotificationSettings />
         </TabsContent>
       </Tabs>
     </div>
