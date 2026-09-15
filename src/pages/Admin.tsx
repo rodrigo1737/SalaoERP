@@ -1,6 +1,6 @@
 import React, { useCallback, useEffect, useMemo, useState } from 'react';
 import { useNavigate, useSearchParams } from 'react-router-dom';
-import { ArrowLeft, Edit, KeyRound, Link2, Loader2, Scissors, Shield, ShieldMinus, ShieldPlus, Trash2, Unlink, UserPlus } from 'lucide-react';
+import { ArrowLeft, Edit, Eye, EyeOff, KeyRound, Link2, Loader2, Scissors, Shield, ShieldMinus, ShieldPlus, Trash2, Unlink, UserPlus } from 'lucide-react';
 import { useAuth } from '@/contexts/AuthContext';
 import { supabase } from '@/integrations/supabase/client';
 import { Button } from '@/components/ui/button';
@@ -144,10 +144,15 @@ const Admin: React.FC = () => {
   const [isAddDialogOpen, setIsAddDialogOpen] = useState(false);
   const [isEditDialogOpen, setIsEditDialogOpen] = useState(false);
   const [isLinkDialogOpen, setIsLinkDialogOpen] = useState(false);
+  const [isPasswordDialogOpen, setIsPasswordDialogOpen] = useState(false);
   const [selectedAccess, setSelectedAccess] = useState<InternalAccessRow | null>(null);
   const [linkTargetAccess, setLinkTargetAccess] = useState<InternalAccessRow | null>(null);
+  const [passwordTargetAccess, setPasswordTargetAccess] = useState<InternalAccessRow | null>(null);
   const [selectedLinkProfessionalId, setSelectedLinkProfessionalId] = useState('');
   const [applyProfessionalScope, setApplyProfessionalScope] = useState(false);
+  const [newPassword, setNewPassword] = useState('');
+  const [confirmPassword, setConfirmPassword] = useState('');
+  const [showNewPassword, setShowNewPassword] = useState(false);
   const [isSubmitting, setIsSubmitting] = useState(false);
   const [newAccess, setNewAccess] = useState({
     accessType: 'professional' as NewAccessType,
@@ -739,6 +744,79 @@ const Admin: React.FC = () => {
     }
   };
 
+  const resetPasswordDialog = () => {
+    setIsPasswordDialogOpen(false);
+    setPasswordTargetAccess(null);
+    setNewPassword('');
+    setConfirmPassword('');
+    setShowNewPassword(false);
+  };
+
+  const openPasswordDialog = (row: InternalAccessRow) => {
+    if (!row.userId || row.isOwner || row.role === 'owner') return;
+    setPasswordTargetAccess(row);
+    setNewPassword('');
+    setConfirmPassword('');
+    setShowNewPassword(false);
+    setIsPasswordDialogOpen(true);
+  };
+
+  const handleChangeInternalUserPassword = async () => {
+    if (!tenantId || !passwordTargetAccess?.userId) return;
+
+    if (newPassword !== confirmPassword) {
+      toast({
+        variant: 'destructive',
+        title: 'As senhas não coincidem',
+        description: 'Digite a mesma senha nos dois campos.',
+      });
+      return;
+    }
+
+    const passwordValidation = validatePassword(newPassword);
+    if (!passwordValidation.valid) {
+      toast({
+        variant: 'destructive',
+        title: 'Senha fraca',
+        description: `Requisitos: ${passwordValidation.errors.join(', ')}`,
+      });
+      return;
+    }
+
+    setIsSubmitting(true);
+    try {
+      const { data, error } = await supabase.functions.invoke('reset-internal-user-password', {
+        body: {
+          tenantId,
+          userId: passwordTargetAccess.userId,
+          newPassword,
+        },
+      });
+
+      if (error || data?.error) {
+        throw new Error(await getSupabaseErrorMessage(error, data, 'Não foi possível alterar a senha'));
+      }
+
+      toast({
+        variant: data?.auditRecorded === false ? 'destructive' : 'default',
+        title: data?.auditRecorded === false ? 'Senha alterada com ressalva' : 'Senha alterada',
+        description: data?.auditRecorded === false
+          ? 'A senha foi alterada, mas a conclusão da auditoria não foi registrada. Avise o suporte antes de repetir a operação.'
+          : `A senha de ${passwordTargetAccess.name} foi alterada com sucesso.`,
+      });
+      resetPasswordDialog();
+    } catch (error: any) {
+      console.error('Error changing internal user password:', error);
+      toast({
+        variant: 'destructive',
+        title: 'Erro ao alterar senha',
+        description: error.message || 'Não foi possível alterar a senha.',
+      });
+    } finally {
+      setIsSubmitting(false);
+    }
+  };
+
   if (authLoading || loading) {
     return (
       <div className="min-h-screen flex items-center justify-center bg-background">
@@ -1121,11 +1199,12 @@ const Admin: React.FC = () => {
                                 </Button>
                                 <Button
                                   variant="ghost"
-                                  size="icon"
-                                  onClick={() => handleResetPassword(row)}
-                                  title="Enviar link de redefinição de senha"
+                                  size="sm"
+                                  onClick={() => openPasswordDialog(row)}
+                                  title="Alterar senha"
                                 >
-                                  <KeyRound className="h-4 w-4" />
+                                  <KeyRound className="mr-2 h-4 w-4" />
+                                  Alterar senha
                                 </Button>
                                 <Button
                                   variant="ghost"
@@ -1288,6 +1367,89 @@ const Admin: React.FC = () => {
                   </>
                 )}
               </Button>
+            </div>
+          </DialogContent>
+        </Dialog>
+
+        <Dialog
+          open={isPasswordDialogOpen}
+          onOpenChange={(open) => {
+            if (!open) resetPasswordDialog();
+          }}
+        >
+          <DialogContent className="max-w-md">
+            <DialogHeader>
+              <DialogTitle>Alterar senha</DialogTitle>
+              <DialogDescription>
+                Defina uma nova senha para {passwordTargetAccess?.name || 'este usuário interno'}.
+              </DialogDescription>
+            </DialogHeader>
+
+            <div className="space-y-4">
+              <div className="rounded-lg border bg-muted/30 p-3 text-sm">
+                <p className="font-medium">{passwordTargetAccess?.name}</p>
+                <p className="text-muted-foreground">{passwordTargetAccess?.email}</p>
+              </div>
+
+              <div className="space-y-2">
+                <Label htmlFor="new-internal-password">Nova senha</Label>
+                <div className="relative">
+                  <Input
+                    id="new-internal-password"
+                    type={showNewPassword ? 'text' : 'password'}
+                    value={newPassword}
+                    onChange={(event) => setNewPassword(event.target.value)}
+                    autoComplete="new-password"
+                    maxLength={128}
+                    className="pr-10"
+                  />
+                  <Button
+                    type="button"
+                    variant="ghost"
+                    size="icon"
+                    className="absolute right-0 top-0 h-full"
+                    onClick={() => setShowNewPassword((visible) => !visible)}
+                    aria-label={showNewPassword ? 'Ocultar senha' : 'Mostrar senha'}
+                  >
+                    {showNewPassword ? <EyeOff className="h-4 w-4" /> : <Eye className="h-4 w-4" />}
+                  </Button>
+                </div>
+              </div>
+
+              <div className="space-y-2">
+                <Label htmlFor="confirm-internal-password">Confirmar nova senha</Label>
+                <Input
+                  id="confirm-internal-password"
+                  type={showNewPassword ? 'text' : 'password'}
+                  value={confirmPassword}
+                  onChange={(event) => setConfirmPassword(event.target.value)}
+                  autoComplete="new-password"
+                  maxLength={128}
+                />
+              </div>
+
+              <p className="text-xs text-muted-foreground">
+                {getPasswordRequirementsMessage()}. A senha anterior deixará de funcionar.
+              </p>
+
+              <div className="flex justify-end gap-3">
+                <Button variant="outline" onClick={resetPasswordDialog} disabled={isSubmitting}>
+                  Cancelar
+                </Button>
+                <Button
+                  onClick={handleChangeInternalUserPassword}
+                  disabled={isSubmitting || !newPassword || !confirmPassword}
+                >
+                  {isSubmitting ? (
+                    <>
+                      <Loader2 className="mr-2 h-4 w-4 animate-spin" />
+                      Alterando...
+                    </>
+                  ) : (
+                    'Alterar senha'
+                  )}
+                </Button>
+              </div>
             </div>
           </DialogContent>
         </Dialog>

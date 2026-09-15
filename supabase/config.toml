@@ -6,6 +6,9 @@ verify_jwt = true
 [functions.create-professional-access]
 verify_jwt = true
 
+[functions.reset-internal-user-password]
+verify_jwt = true
+
 [functions.manage-tenant-admins]
 verify_jwt = true
 
