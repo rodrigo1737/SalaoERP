@@ -28,10 +28,17 @@ self.addEventListener('push', (event) => {
   const clientName = payload.clientName || 'Cliente não identificado';
   const procedureName = payload.procedureName || 'Procedimento não informado';
   const reminderMinutes = Number(payload.reminderMinutes) || 10;
+  const isNewAppointment = payload.type === 'new_appointment';
+  const notificationTitle = payload.title || (isNewAppointment ? 'Novo agendamento incluso' : `Agenda em ${reminderMinutes} minutos`);
+  const notificationBody = payload.body || (
+    isNewAppointment
+      ? `${clientName}\n${procedureName}\n${payload.appointmentDateTime || `${startTime ? startTime.toLocaleDateString('pt-BR') + ' às ' : ''}${formattedTime}`}`
+      : `${clientName} • ${formattedTime} • ${procedureName}`
+  );
 
   event.waitUntil(
-    self.registration.showNotification(payload.type === 'new_appointment' ? 'Novo agendamento' : `Agenda em ${reminderMinutes} minutos`, {
-      body: `${clientName} • ${payload.type === 'new_appointment' && startTime ? startTime.toLocaleDateString('pt-BR') + ' às ' : ''}${formattedTime} • ${procedureName}`,
+    self.registration.showNotification(notificationTitle, {
+      body: notificationBody,
       icon: '/app-icon.svg',
       badge: '/app-icon.svg',
       tag: payload.tag || `appointment-${payload.appointmentId || 'reminder'}`,

@@ -1,7 +1,6 @@
 import React, { createContext, useContext, useEffect, useState, useCallback } from 'react';
 import { User, Session } from '@supabase/supabase-js';
 import { supabase } from '@/integrations/supabase/client';
-import { getCurrentPushSubscription } from '@/lib/pushNotifications';
 
 type UserRole = 'admin' | 'professional' | 'staff' | null;
 type TenantPackageType = 'salon' | 'aesthetic_clinic' | 'cleaning_control' | 'business_erp';
@@ -262,22 +261,6 @@ export const AuthProvider: React.FC<{ children: React.ReactNode }> = ({ children
   };
 
   const signOut = async () => {
-    try {
-      const pushSubscription = await getCurrentPushSubscription().catch(() => null);
-      if (pushSubscription && user && tenantId) {
-        const { error: revokeError } = await supabase
-          .from('push_subscriptions')
-          .update({ revoked_at: new Date().toISOString(), updated_at: new Date().toISOString() })
-          .eq('tenant_id', tenantId)
-          .eq('user_id', user.id)
-          .eq('endpoint', pushSubscription.endpoint);
-        if (revokeError) console.warn('Error revoking push subscription during sign out:', revokeError);
-        await pushSubscription.unsubscribe();
-      }
-    } catch (error) {
-      console.warn('Error disabling push notifications during sign out:', error);
-    }
-
     try {
       await supabase.auth.signOut();
     } catch (error) {

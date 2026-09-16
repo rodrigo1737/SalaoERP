@@ -29,8 +29,16 @@ const WEEKDAYS = [
   { value: 7, label: 'Dom' },
 ] as const;
 
+type NotificationProfessional = {
+  id: string;
+  name: string;
+  nickname: string;
+  has_schedule: boolean;
+};
+
 export function NotificationSettings() {
-  const { user, tenantId, currentProfessional } = useAuth();
+  const { user, tenantId, currentProfessional, loading: authLoading } = useAuth();
+  const [fallbackProfessional, setFallbackProfessional] = useState<NotificationProfessional | null>(null);
   const [reminderMinutes, setReminderMinutes] = useState(10);
   const [enabled, setEnabled] = useState(true);
   const [newAppointmentEnabled, setNewAppointmentEnabled] = useState(false);
@@ -43,6 +51,43 @@ export function NotificationSettings() {
   const pushSupported = supportsWebPush();
   const requiresIosInstall = isIosDevice() && !isStandaloneWebApp();
   const vapidPublicKey = import.meta.env.VITE_VAPID_PUBLIC_KEY?.trim() ?? '';
+  const notificationProfessional = currentProfessional ?? fallbackProfessional;
+
+  useEffect(() => {
+    if (currentProfessional || !user || !tenantId || authLoading) {
+      setFallbackProfessional(null);
+      return;
+    }
+
+    let isMounted = true;
+
+    const loadFallbackProfessional = async () => {
+      try {
+        const { data, error } = await supabase
+          .from('professionals')
+          .select('id, name, nickname, has_schedule')
+          .eq('tenant_id', tenantId)
+          .eq('user_id', user.id)
+          .is('deleted_at', null)
+          .eq('is_active', true)
+          .order('created_at', { ascending: false })
+          .limit(1)
+          .maybeSingle();
+
+        if (error) throw error;
+        if (isMounted) setFallbackProfessional(data ?? null);
+      } catch (error) {
+        console.error('Error loading linked professional for notifications:', error);
+        if (isMounted) setFallbackProfessional(null);
+      }
+    };
+
+    void loadFallbackProfessional();
+
+    return () => {
+      isMounted = false;
+    };
+  }, [authLoading, currentProfessional, tenantId, user]);
 
   const loadSettings = useCallback(async () => {
     if (!user || !tenantId) return;
@@ -255,7 +300,18 @@ export function NotificationSettings() {
     }
   };
 
-  if (!currentProfessional) {
+  if (authLoading) {
+    return (
+      <Card>
+        <CardHeader>
+          <CardTitle className="flex items-center gap-2"><Bell className="h-5 w-5" /> Notificações</CardTitle>
+          <CardDescription>Carregando preferências de notificação...</CardDescription>
+        </CardHeader>
+      </Card>
+    );
+  }
+
+  if (!notificationProfessional) {
     return (
       <Card>
         <CardHeader>

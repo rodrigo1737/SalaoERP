@@ -81,6 +81,24 @@ const formatAppointmentTime = (value: string, requestedTimezone: string) => {
   }).format(new Date(value));
 };
 
+const formatAppointmentDateTime = (value: string, requestedTimezone: string) => {
+  let timezone = requestedTimezone;
+  try {
+    new Intl.DateTimeFormat("pt-BR", { timeZone: timezone }).format(new Date(value));
+  } catch {
+    timezone = "America/Sao_Paulo";
+  }
+  return new Intl.DateTimeFormat("pt-BR", {
+    timeZone: timezone,
+    day: "2-digit",
+    month: "2-digit",
+    year: "numeric",
+    hour: "2-digit",
+    minute: "2-digit",
+    hourCycle: "h23",
+  }).format(new Date(value));
+};
+
 const sendPush = async (subscription: PushSubscriptionRow, message: Record<string, unknown>, vapid: VapidConfig, ttl: number) => {
   const pushRequest = await buildPushPayload(
     { data: JSON.stringify(message), options: { ttl } },
@@ -241,10 +259,17 @@ const processAppointmentReminders = async (supabaseAdmin: AdminClient, now: Date
         deliveryId = data.id;
       }
       try {
+        const clientName = client?.tenant_id === appointment.tenant_id ? client.name : "Cliente não identificado";
+        const procedureName = procedureNames.join(", ") || "Procedimento não informado";
+        const appointmentDateTime = formatAppointmentDateTime(appointment.start_time, "America/Sao_Paulo");
+        const title = isNew ? "Novo agendamento incluso" : `Agenda em ${reminderMinutes} minutos`;
+        const body = isNew
+          ? `${clientName}\n${procedureName}\n${appointmentDateTime}`
+          : `${clientName} • ${formatAppointmentTime(appointment.start_time, "America/Sao_Paulo")} • ${procedureName}`;
+
         await sendPush(subscription, {
           type: isNew ? "new_appointment" : "appointment_reminder", appointmentId: appointment.id,
-          clientName: client?.tenant_id === appointment.tenant_id ? client.name : "Cliente não identificado",
-          procedureName: procedureNames.join(", ") || "Procedimento não informado", startTime: appointment.start_time,
+          title, body, clientName, procedureName, appointmentDateTime, startTime: appointment.start_time,
           reminderMinutes, url: "/app/agenda", tag: `${isNew ? "new" : "reminder"}-appointment-${appointment.id}-${appointment.start_time}`,
         }, vapid, 300);
         await supabaseAdmin.from(deliveryTable).update({
