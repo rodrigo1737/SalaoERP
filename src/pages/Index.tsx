@@ -136,7 +136,7 @@ const Index = () => {
       case 'professional-statement': return <Navigate to="/app/financial-management?tab=professional-statement" replace />;
       case 'reports':          return <Reports />;
       case 'cashier':          return <Navigate to="/app/financial-management?tab=cashier" replace />;
-      case 'financial-management': return <FinancialWorkspace initialTab="financial-history" />;
+      case 'financial-management': return <FinancialWorkspace initialTab="overview" />;
       case 'settings':         return <Settings />;
       default:
         return (
