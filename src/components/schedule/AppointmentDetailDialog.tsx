@@ -268,7 +268,8 @@ export function AppointmentDetailDialog({
   const calculateEndTime = (startTime: string, duration: string): string => {
     if (startTime && duration) {
       const [hours, minutes] = startTime.split(':').map(Number);
-      const totalMinutes = hours * 60 + minutes + parseInt(duration);
+      const parsedDuration = Number.parseInt(duration, 10);
+      const totalMinutes = hours * 60 + minutes + (Number.isFinite(parsedDuration) ? Math.max(parsedDuration, 1) : 30);
       const endHours = Math.floor(totalMinutes / 60);
       const endMins = totalMinutes % 60;
       return `${endHours.toString().padStart(2, '0')}:${endMins.toString().padStart(2, '0')}`;
@@ -277,7 +278,8 @@ export function AppointmentDetailDialog({
   };
 
   const updateServiceRow = (rowId: string, field: keyof ServiceRow, value: string) => {
-    setServiceRows(prev => prev.map(row => {
+    setServiceRows(prev => {
+      const updatedRows = prev.map(row => {
       if (row.id !== rowId) return row;
       
       const updatedRow = { ...row, [field]: value };
@@ -332,7 +334,28 @@ export function AppointmentDetailDialog({
       }
       
       return updatedRow;
-    }));
+      });
+
+      // Os serviços da mesma comanda são sequenciais. Quando uma linha muda,
+      // deslocamos todas as linhas seguintes para o fim da linha anterior,
+      // preservando a duração individual de cada serviço.
+      const changedIndex = updatedRows.findIndex((row) => row.id === rowId);
+      if (changedIndex < 0) return updatedRows;
+
+      const cascadedRows = [...updatedRows];
+      for (let index = changedIndex + 1; index < cascadedRows.length; index += 1) {
+        const previousRow = cascadedRows[index - 1];
+        const currentRow = cascadedRows[index];
+        const nextStartTime = previousRow.endTime;
+        cascadedRows[index] = {
+          ...currentRow,
+          startTime: nextStartTime,
+          endTime: calculateEndTime(nextStartTime, currentRow.duration),
+        };
+      }
+
+      return cascadedRows;
+    });
   };
 
   const addServiceRow = () => {
