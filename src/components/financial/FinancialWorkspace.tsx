@@ -1,10 +1,12 @@
-import { useEffect, useMemo } from 'react';
+import { useEffect, useMemo, useState } from 'react';
 import { useSearchParams } from 'react-router-dom';
 import { BarChart3, DollarSign, ReceiptText, RefreshCw, Wallet, ArrowDownRight, ArrowUpRight, Clock3 } from 'lucide-react';
 import { Tabs, TabsContent, TabsList, TabsTrigger } from '@/components/ui/tabs';
 import { useAuth } from '@/contexts/AuthContext';
 import { useData } from '@/context/DataContext';
 import { Card, CardContent } from '@/components/ui/card';
+import { Label } from '@/components/ui/label';
+import { Input } from '@/components/ui/input';
 import { Cashier } from '@/components/cashier/Cashier';
 import { CashHistory } from '@/components/cashier/CashHistory';
 import { Commissions } from '@/components/commissions/Commissions';
@@ -54,6 +56,11 @@ const isFinancialTab = (value: string | null): value is FinancialTabId => (
 export function FinancialWorkspace({ initialTab = 'financial-history' }: FinancialWorkspaceProps) {
   const { userRole, hasPermission } = useAuth();
   const { currentCashSession, pendingCashSession, transactions, commissions } = useData();
+  const [periodFrom, setPeriodFrom] = useState(() => {
+    const date = new Date();
+    return new Date(date.getFullYear(), date.getMonth(), 1).toISOString().slice(0, 10);
+  });
+  const [periodTo, setPeriodTo] = useState(() => new Date().toISOString().slice(0, 10));
   const [searchParams, setSearchParams] = useSearchParams();
 
   const isAdmin = userRole === 'admin';
@@ -79,19 +86,18 @@ export function FinancialWorkspace({ initialTab = 'financial-history' }: Financi
   }, [canManageCashFlow, canReprocessCommissions, canViewCommissions, canViewFinancialHistory]);
 
   const overview = useMemo(() => {
-    const today = new Date();
-    const isToday = (value: string) => {
+    const from = new Date(`${periodFrom}T00:00:00`);
+    const to = new Date(`${periodTo}T23:59:59.999`);
+    const inPeriod = (value: string) => {
       const date = new Date(value);
-      return date.getFullYear() === today.getFullYear()
-        && date.getMonth() === today.getMonth()
-        && date.getDate() === today.getDate();
+      return date >= from && date <= to;
     };
-    const todayTransactions = transactions.filter((transaction) => isToday(transaction.created_at) && !transaction.reversed_at);
-    const income = todayTransactions.filter((transaction) => transaction.type === 'income').reduce((sum, item) => sum + Number(item.amount), 0);
-    const expense = todayTransactions.filter((transaction) => transaction.type === 'expense').reduce((sum, item) => sum + Number(item.amount), 0);
-    const pendingCommissions = commissions.filter((commission) => commission.status === 'pending').reduce((sum, item) => sum + Math.max(0, Number(item.commission_value) - Number(item.settled_amount ?? 0)), 0);
+    const periodTransactions = transactions.filter((transaction) => inPeriod(transaction.created_at) && !transaction.reversed_at);
+    const income = periodTransactions.filter((transaction) => transaction.type === 'income').reduce((sum, item) => sum + Number(item.amount), 0);
+    const expense = periodTransactions.filter((transaction) => transaction.type === 'expense').reduce((sum, item) => sum + Number(item.amount), 0);
+    const pendingCommissions = commissions.filter((commission) => commission.status === 'pending' && inPeriod(commission.created_at)).reduce((sum, item) => sum + Math.max(0, Number(item.commission_value) - Number(item.settled_amount ?? 0)), 0);
     return { income, expense, balance: Number(currentCashSession?.opening_balance ?? pendingCashSession?.opening_balance ?? 0) + income - expense, pendingCommissions };
-  }, [commissions, currentCashSession, pendingCashSession, transactions]);
+  }, [commissions, currentCashSession, pendingCashSession, periodFrom, periodTo, transactions]);
 
   const requestedTab = searchParams.get('tab');
   const currentTab = useMemo<FinancialTabId>(() => {
@@ -166,9 +172,9 @@ export function FinancialWorkspace({ initialTab = 'financial-history' }: Financi
           <div className="grid gap-4 sm:grid-cols-2 xl:grid-cols-4">
             {[
               { label: 'Saldo do caixa', value: overview.balance, icon: Wallet, tone: 'text-primary', bg: 'bg-primary-soft/60' },
-              { label: 'Entradas hoje', value: overview.income, icon: ArrowUpRight, tone: 'text-success', bg: 'bg-success-soft/70' },
-              { label: 'Saídas hoje', value: overview.expense, icon: ArrowDownRight, tone: 'text-destructive', bg: 'bg-destructive-soft/70' },
-              { label: 'Comissões pendentes', value: overview.pendingCommissions, icon: Clock3, tone: 'text-warning', bg: 'bg-warning-soft/70' },
+              { label: 'Entradas no período', value: overview.income, icon: ArrowUpRight, tone: 'text-success', bg: 'bg-success-soft/70' },
+              { label: 'Saídas no período', value: overview.expense, icon: ArrowDownRight, tone: 'text-destructive', bg: 'bg-destructive-soft/70' },
+              { label: 'Comissões pendentes no período', value: overview.pendingCommissions, icon: Clock3, tone: 'text-warning', bg: 'bg-warning-soft/70' },
             ].map(({ label, value, icon: Icon, tone, bg }) => (
               <Card key={label} className="border-border/60 shadow-sm">
                 <CardContent className="flex items-center justify-between p-5">
@@ -178,6 +184,18 @@ export function FinancialWorkspace({ initialTab = 'financial-history' }: Financi
               </Card>
             ))}
           </div>
+          <Card className="border-border/60 shadow-sm">
+            <CardContent className="flex flex-col gap-4 p-5 sm:flex-row sm:items-end sm:justify-between">
+              <div>
+                <p className="text-sm font-medium text-foreground">Período de análise</p>
+                <p className="text-xs text-muted-foreground">Altere as datas para consultar outros períodos.</p>
+              </div>
+              <div className="grid w-full gap-3 sm:w-auto sm:grid-cols-2">
+                <div className="space-y-1.5"><Label htmlFor="financial-period-from" className="text-xs">Data de</Label><Input id="financial-period-from" type="date" value={periodFrom} max={periodTo} onChange={(event) => setPeriodFrom(event.target.value)} /></div>
+                <div className="space-y-1.5"><Label htmlFor="financial-period-to" className="text-xs">Data até</Label><Input id="financial-period-to" type="date" value={periodTo} min={periodFrom} onChange={(event) => setPeriodTo(event.target.value)} /></div>
+              </div>
+            </CardContent>
+          </Card>
           <Card className="border-border/60 bg-muted/20 shadow-sm"><CardContent className="p-5 text-sm text-muted-foreground">Resumo calculado com os lançamentos já carregados para este usuário e tenant.</CardContent></Card>
         </TabsContent>
 
