@@ -1,12 +1,14 @@
 import { useCallback, useEffect, useState } from 'react';
-import { Bell, BellOff, CheckCircle2, Download, Loader2, Smartphone } from 'lucide-react';
+import { Bell, BellOff, CalendarDays, CheckCircle2, Clock3, Download, Loader2, Smartphone } from 'lucide-react';
 import { toast } from 'sonner';
 import { useAuth } from '@/contexts/AuthContext';
 import { supabase } from '@/integrations/supabase/client';
 import { Button } from '@/components/ui/button';
 import { Card, CardContent, CardDescription, CardHeader, CardTitle } from '@/components/ui/card';
+import { Input } from '@/components/ui/input';
 import { Label } from '@/components/ui/label';
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from '@/components/ui/select';
+import { Switch } from '@/components/ui/switch';
 import {
   createPushSubscription,
   getCurrentPushSubscription,
@@ -17,11 +19,24 @@ import {
 } from '@/lib/pushNotifications';
 
 const REMINDER_OPTIONS = [5, 10, 15, 20, 25, 30] as const;
+const WEEKDAYS = [
+  { value: 1, label: 'Seg' },
+  { value: 2, label: 'Ter' },
+  { value: 3, label: 'Qua' },
+  { value: 4, label: 'Qui' },
+  { value: 5, label: 'Sex' },
+  { value: 6, label: 'Sáb' },
+  { value: 7, label: 'Dom' },
+] as const;
 
 export function NotificationSettings() {
   const { user, tenantId, currentProfessional } = useAuth();
   const [reminderMinutes, setReminderMinutes] = useState(10);
   const [enabled, setEnabled] = useState(true);
+  const [newAppointmentEnabled, setNewAppointmentEnabled] = useState(false);
+  const [dailySummaryEnabled, setDailySummaryEnabled] = useState(false);
+  const [dailySummaryTime, setDailySummaryTime] = useState('07:00');
+  const [dailySummaryWeekdays, setDailySummaryWeekdays] = useState<number[]>([1, 2, 3, 4, 5]);
   const [deviceEnabled, setDeviceEnabled] = useState(false);
   const [loading, setLoading] = useState(true);
   const [saving, setSaving] = useState(false);
@@ -37,7 +52,7 @@ export function NotificationSettings() {
       const [{ data: preference, error: preferenceError }, subscription] = await Promise.all([
         supabase
           .from('user_notification_preferences')
-          .select('appointment_reminders_enabled, appointment_reminder_minutes')
+          .select('appointment_reminders_enabled, appointment_reminder_minutes, daily_summary_enabled, daily_summary_time, daily_summary_weekdays, new_appointment_push_enabled')
           .eq('tenant_id', tenantId)
           .eq('user_id', user.id)
           .maybeSingle(),
@@ -47,7 +62,11 @@ export function NotificationSettings() {
       if (preferenceError) throw preferenceError;
       if (preference) {
         setEnabled(preference.appointment_reminders_enabled);
+        setNewAppointmentEnabled(preference.new_appointment_push_enabled);
         setReminderMinutes(preference.appointment_reminder_minutes);
+        setDailySummaryEnabled(preference.daily_summary_enabled);
+        setDailySummaryTime(preference.daily_summary_time.slice(0, 5));
+        setDailySummaryWeekdays(preference.daily_summary_weekdays);
       }
 
       if (subscription) {
@@ -76,7 +95,7 @@ export function NotificationSettings() {
     void loadSettings();
   }, [loadSettings]);
 
-  const savePreference = async (minutes: number, remindersEnabled = enabled) => {
+  const saveAppointmentPreference = async (minutes: number, remindersEnabled = enabled) => {
     if (!user || !tenantId) return;
     const { error } = await supabase
       .from('user_notification_preferences')
@@ -95,7 +114,7 @@ export function NotificationSettings() {
     setReminderMinutes(minutes);
     setSaving(true);
     try {
-      await savePreference(minutes);
+      await saveAppointmentPreference(minutes);
       toast.success(`Aviso configurado para ${minutes} minutos antes.`);
     } catch (error) {
       console.error('Error saving reminder interval:', error);
@@ -126,13 +145,84 @@ export function NotificationSettings() {
       }, { onConflict: 'endpoint' });
       if (error) throw error;
 
-      await savePreference(reminderMinutes, true);
+      await saveAppointmentPreference(reminderMinutes, true);
       setEnabled(true);
       setDeviceEnabled(true);
       toast.success('Notificações ativadas neste aparelho.');
     } catch (error) {
       console.error('Error enabling push notifications:', error);
       toast.error(error instanceof Error ? error.message : 'Não foi possível ativar as notificações.');
+    } finally {
+      setSaving(false);
+    }
+  };
+
+  const handleWeekdayToggle = (weekday: number) => {
+    if (dailySummaryWeekdays.length === 1 && dailySummaryWeekdays.includes(weekday)) {
+      toast.error('Escolha pelo menos um dia da semana.');
+      return;
+    }
+    setDailySummaryWeekdays((current) => (
+      current.includes(weekday)
+        ? current.filter((value) => value !== weekday)
+        : [...current, weekday].sort((a, b) => a - b)
+    ));
+  };
+
+  const handleNewAppointmentChange = async (checked: boolean) => {
+    if (!user || !tenantId) return;
+    setSaving(true);
+    try {
+      const { error } = await supabase.from('user_notification_preferences').upsert({
+        tenant_id: tenantId,
+        user_id: user.id,
+        new_appointment_push_enabled: checked,
+        updated_at: new Date().toISOString(),
+      }, { onConflict: 'tenant_id,user_id' });
+      if (error) throw error;
+      setNewAppointmentEnabled(checked);
+      toast.success(checked ? 'Avisos de novos agendamentos ativados.' : 'Avisos de novos agendamentos desativados.');
+    } catch {
+      toast.error('Não foi possível salvar a preferência.');
+    } finally {
+      setSaving(false);
+    }
+  };
+
+  const handleSaveDailySummary = async () => {
+    if (!user || !tenantId) return;
+    if (dailySummaryEnabled && dailySummaryWeekdays.length === 0) {
+      toast.error('Escolha pelo menos um dia da semana.');
+      return;
+    }
+    if (!/^([01]\d|2[0-3]):[0-5]\d$/.test(dailySummaryTime)) {
+      toast.error('Informe um horário válido para o resumo.');
+      return;
+    }
+
+    setSaving(true);
+    try {
+      const timezone = Intl.DateTimeFormat().resolvedOptions().timeZone || 'America/Sao_Paulo';
+      const { error } = await supabase
+        .from('user_notification_preferences')
+        .upsert({
+          tenant_id: tenantId,
+          user_id: user.id,
+          daily_summary_enabled: dailySummaryEnabled,
+          daily_summary_time: dailySummaryTime,
+          daily_summary_weekdays: dailySummaryWeekdays,
+          notification_timezone: timezone,
+          updated_at: new Date().toISOString(),
+        }, { onConflict: 'tenant_id,user_id' });
+      if (error) throw error;
+
+      toast.success(dailySummaryEnabled
+        ? `Resumo diário configurado para ${dailySummaryTime}.`
+        : 'Resumo diário desativado.');
+    } catch (error) {
+      console.error('Error saving daily summary settings:', error);
+      toast.error('Não foi possível salvar o resumo diário.');
+      await loadSettings();
     } finally {
       setSaving(false);
     }
@@ -223,6 +313,14 @@ export function NotificationSettings() {
           </Button>
         </div>
 
+        <div className="flex items-start justify-between gap-4 rounded-lg border p-4">
+          <div>
+            <Label htmlFor="new-appointment-push">Receber aviso de novo agendamento</Label>
+            <p className="mt-1 text-sm text-muted-foreground">Receba o cliente, a data, o horário e os procedimentos quando incluírem um atendimento na sua agenda.</p>
+          </div>
+          <Switch id="new-appointment-push" checked={newAppointmentEnabled} onCheckedChange={handleNewAppointmentChange} disabled={loading || saving} />
+        </div>
+
         <div className="space-y-2">
           <Label htmlFor="appointment-reminder-minutes">Avisar antes do atendimento</Label>
           <Select value={String(reminderMinutes)} onValueChange={handleMinutesChange} disabled={loading || saving}>
@@ -236,6 +334,70 @@ export function NotificationSettings() {
             </SelectContent>
           </Select>
           <p className="text-sm text-muted-foreground">A preferência vale para todos os aparelhos autorizados deste usuário.</p>
+        </div>
+
+        <div className="space-y-4 rounded-lg border p-4">
+          <div className="flex items-start justify-between gap-4">
+            <div className="flex items-start gap-3">
+              <CalendarDays className="mt-0.5 h-5 w-5 text-primary" />
+              <div>
+                <Label htmlFor="daily-schedule-summary" className="text-base">Resumo da agenda do dia</Label>
+                <p className="mt-1 text-sm text-muted-foreground">
+                  Receba uma lista com os horários e nomes dos clientes previstos para o dia.
+                </p>
+              </div>
+            </div>
+            <Switch
+              id="daily-schedule-summary"
+              checked={dailySummaryEnabled}
+              onCheckedChange={setDailySummaryEnabled}
+              disabled={loading || saving}
+            />
+          </div>
+
+          <div className="space-y-2">
+            <Label>Dias de envio</Label>
+            <div className="flex flex-wrap gap-2">
+              {WEEKDAYS.map((weekday) => {
+                const selected = dailySummaryWeekdays.includes(weekday.value);
+                return (
+                  <Button
+                    key={weekday.value}
+                    type="button"
+                    size="sm"
+                    variant={selected ? 'default' : 'outline'}
+                    aria-pressed={selected}
+                    onClick={() => handleWeekdayToggle(weekday.value)}
+                    disabled={loading || saving || !dailySummaryEnabled}
+                  >
+                    {weekday.label}
+                  </Button>
+                );
+              })}
+            </div>
+          </div>
+
+          <div className="space-y-2">
+            <Label htmlFor="daily-summary-time" className="flex items-center gap-2">
+              <Clock3 className="h-4 w-4" /> Horário do resumo
+            </Label>
+            <Input
+              id="daily-summary-time"
+              type="time"
+              value={dailySummaryTime}
+              onChange={(event) => setDailySummaryTime(event.target.value)}
+              className="w-full sm:w-48"
+              disabled={loading || saving || !dailySummaryEnabled}
+            />
+          </div>
+
+          <Button type="button" onClick={handleSaveDailySummary} disabled={loading || saving}>
+            {saving && <Loader2 className="mr-2 h-4 w-4 animate-spin" />}
+            Salvar resumo diário
+          </Button>
+          <p className="text-sm text-muted-foreground">
+            O horário considera o fuso deste aparelho. Se não houver atendimentos, você também receberá essa informação.
+          </p>
         </div>
       </CardContent>
     </Card>

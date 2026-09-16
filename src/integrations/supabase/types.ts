@@ -137,6 +137,69 @@ export type Database = {
           },
         ]
       }
+      daily_schedule_summary_deliveries: {
+        Row: {
+          attempted_at: string
+          attempts: number
+          created_at: string
+          error_code: string | null
+          error_message: string | null
+          id: string
+          sent_at: string | null
+          status: string
+          subscription_id: string
+          summary_date: string
+          tenant_id: string
+          updated_at: string
+          user_id: string
+        }
+        Insert: {
+          attempted_at?: string
+          attempts?: number
+          created_at?: string
+          error_code?: string | null
+          error_message?: string | null
+          id?: string
+          sent_at?: string | null
+          status?: string
+          subscription_id: string
+          summary_date: string
+          tenant_id: string
+          updated_at?: string
+          user_id: string
+        }
+        Update: {
+          attempted_at?: string
+          attempts?: number
+          created_at?: string
+          error_code?: string | null
+          error_message?: string | null
+          id?: string
+          sent_at?: string | null
+          status?: string
+          subscription_id?: string
+          summary_date?: string
+          tenant_id?: string
+          updated_at?: string
+          user_id?: string
+        }
+        Relationships: [
+          {
+            foreignKeyName: "daily_schedule_summary_deliveries_subscription_id_fkey"
+            columns: ["subscription_id"]
+            isOneToOne: false
+            referencedRelation: "push_subscriptions"
+            referencedColumns: ["id"]
+          },
+          {
+            foreignKeyName: "daily_schedule_summary_deliveries_tenant_id_fkey"
+            columns: ["tenant_id"]
+            isOneToOne: false
+            referencedRelation: "tenants"
+            referencedColumns: ["id"]
+          },
+        ]
+      }
       appointments: {
         Row: {
           booking_source: string
@@ -965,25 +1028,40 @@ export type Database = {
       }
       user_notification_preferences: {
         Row: {
+          new_appointment_push_enabled: boolean
           appointment_reminder_minutes: number
           appointment_reminders_enabled: boolean
           created_at: string
+          daily_summary_enabled: boolean
+          daily_summary_time: string
+          daily_summary_weekdays: number[]
+          notification_timezone: string
           tenant_id: string
           updated_at: string
           user_id: string
         }
         Insert: {
+          new_appointment_push_enabled?: boolean
           appointment_reminder_minutes?: number
           appointment_reminders_enabled?: boolean
           created_at?: string
+          daily_summary_enabled?: boolean
+          daily_summary_time?: string
+          daily_summary_weekdays?: number[]
+          notification_timezone?: string
           tenant_id: string
           updated_at?: string
           user_id: string
         }
         Update: {
+          new_appointment_push_enabled?: boolean
           appointment_reminder_minutes?: number
           appointment_reminders_enabled?: boolean
           created_at?: string
+          daily_summary_enabled?: boolean
+          daily_summary_time?: string
+          daily_summary_weekdays?: number[]
+          notification_timezone?: string
           tenant_id?: string
           updated_at?: string
           user_id?: string
