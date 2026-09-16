@@ -2060,7 +2060,7 @@ function WeeklyCleaningAgenda({
       </CardHeader>
       <CardContent className="p-0">
         <div className="overflow-x-auto">
-          <div className="grid min-w-[980px] grid-cols-[88px_repeat(5,minmax(170px,1fr))]">
+          <div className="grid min-w-[720px] sm:min-w-[860px] lg:min-w-[980px] grid-cols-[64px_repeat(5,minmax(140px,1fr))]">
             <div className="border-r bg-muted/20" />
             {weekDays.map((day) => {
               const isSelected = selectedDate === toDayIso(day);

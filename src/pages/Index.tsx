@@ -153,7 +153,7 @@ const Index = () => {
   const appShell = (
     <div className="flex min-h-screen w-full bg-background">
       <Sidebar currentPage={currentPage} onNavigate={handleNavigate} />
-      <main className="flex-1 min-h-screen overflow-x-hidden pl-4">
+      <main className="min-w-0 flex-1 min-h-screen overflow-x-hidden px-3 sm:px-4 lg:px-6">
         <TenantStatusBanner />
         {renderPage()}
       </main>
