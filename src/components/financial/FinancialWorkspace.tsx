@@ -151,6 +151,16 @@ export function FinancialWorkspace({ initialTab = 'financial-history' }: Financi
         </div>
       </div>
 
+      <Card className="border-border/60 shadow-sm">
+        <CardContent className="flex flex-col gap-4 p-4 sm:flex-row sm:items-end sm:justify-between sm:p-5">
+          <div><p className="text-sm font-medium text-foreground">Período de análise</p><p className="text-xs text-muted-foreground">Use o mesmo período em todas as consultas financeiras.</p></div>
+          <div className="grid w-full gap-3 sm:w-auto sm:grid-cols-2">
+            <div className="space-y-1.5"><Label htmlFor="financial-period-from-header" className="text-xs">Data de</Label><Input id="financial-period-from-header" type="date" value={periodFrom} max={periodTo} onChange={(event) => setPeriodFrom(event.target.value)} /></div>
+            <div className="space-y-1.5"><Label htmlFor="financial-period-to-header" className="text-xs">Data até</Label><Input id="financial-period-to-header" type="date" value={periodTo} min={periodFrom} onChange={(event) => setPeriodTo(event.target.value)} /></div>
+          </div>
+        </CardContent>
+      </Card>
+
       <Tabs value={currentTab} onValueChange={handleTabChange} className="space-y-6">
         <TabsList aria-label="Áreas financeiras" className="h-auto w-full flex-wrap justify-start gap-1 rounded-xl border border-border/70 bg-card/95 p-1.5 shadow-sm">
           {visibleTabs.map((tabId) => {
@@ -184,18 +194,6 @@ export function FinancialWorkspace({ initialTab = 'financial-history' }: Financi
               </Card>
             ))}
           </div>
-          <Card className="border-border/60 shadow-sm">
-            <CardContent className="flex flex-col gap-4 p-5 sm:flex-row sm:items-end sm:justify-between">
-              <div>
-                <p className="text-sm font-medium text-foreground">Período de análise</p>
-                <p className="text-xs text-muted-foreground">Altere as datas para consultar outros períodos.</p>
-              </div>
-              <div className="grid w-full gap-3 sm:w-auto sm:grid-cols-2">
-                <div className="space-y-1.5"><Label htmlFor="financial-period-from" className="text-xs">Data de</Label><Input id="financial-period-from" type="date" value={periodFrom} max={periodTo} onChange={(event) => setPeriodFrom(event.target.value)} /></div>
-                <div className="space-y-1.5"><Label htmlFor="financial-period-to" className="text-xs">Data até</Label><Input id="financial-period-to" type="date" value={periodTo} min={periodFrom} onChange={(event) => setPeriodTo(event.target.value)} /></div>
-              </div>
-            </CardContent>
-          </Card>
           <Card className="border-border/60 bg-muted/20 shadow-sm"><CardContent className="p-5 text-sm text-muted-foreground">Resumo calculado com os lançamentos já carregados para este usuário e tenant.</CardContent></Card>
         </TabsContent>
 
@@ -207,7 +205,7 @@ export function FinancialWorkspace({ initialTab = 'financial-history' }: Financi
 
         {visibleTabs.includes('financial-history') && (
           <TabsContent value="financial-history" className="mt-0">
-            <CashHistory />
+            <CashHistory periodFrom={periodFrom} periodTo={periodTo} />
           </TabsContent>
         )}
 

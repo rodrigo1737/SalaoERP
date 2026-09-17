@@ -43,6 +43,9 @@ import {
 
 interface CashHistoryProps {
   onBack?: () => void;
+  periodFrom?: string;
+  periodTo?: string;
+  onPeriodChange?: (from: string, to: string) => void;
 }
 
 interface AppointmentProvisionRow {
@@ -165,7 +168,7 @@ const PROVISION_STATUSES = new Set([
 
 const PROVISION_PENDING_COMMISSION_STATUSES = new Set(['pending'] as const);
 
-export function CashHistory({ onBack }: CashHistoryProps) {
+export function CashHistory({ onBack, periodFrom: sharedPeriodFrom, periodTo: sharedPeriodTo }: CashHistoryProps) {
   const {
     appointments,
     cashSessions,
@@ -194,8 +197,10 @@ export function CashHistory({ onBack }: CashHistoryProps) {
   const canReopenCurrentCash = userRole === 'admin' || hasPermission('manage_cash_flow');
 
   const [tab, setTab] = useState('sessions');
-  const [dateFrom, setDateFrom] = useState(() => currentMonthRange().from);
-  const [dateTo, setDateTo] = useState(() => currentMonthRange().to);
+  const [localDateFrom, setLocalDateFrom] = useState(() => currentMonthRange().from);
+  const [localDateTo, setLocalDateTo] = useState(() => currentMonthRange().to);
+  const dateFrom = sharedPeriodFrom ?? localDateFrom;
+  const dateTo = sharedPeriodTo ?? localDateTo;
   const [search, setSearch] = useState('');
   const [appointmentProvisionRows, setAppointmentProvisionRows] = useState<AppointmentProvisionRow[]>([]);
   const [serviceProvisionMappings, setServiceProvisionMappings] = useState<ServiceProfessionalProvisionRow[]>([]);
@@ -812,8 +817,8 @@ export function CashHistory({ onBack }: CashHistoryProps) {
               className="pl-9"
             />
           </div>
-          <Input type="date" value={dateFrom} onChange={(event) => setDateFrom(event.target.value)} />
-          <Input type="date" value={dateTo} onChange={(event) => setDateTo(event.target.value)} />
+          <Input type="date" value={dateFrom} onChange={(event) => setLocalDateFrom(event.target.value)} disabled={Boolean(sharedPeriodFrom)} />
+          <Input type="date" value={dateTo} onChange={(event) => setLocalDateTo(event.target.value)} disabled={Boolean(sharedPeriodTo)} />
         </div>
       </Card>
 
