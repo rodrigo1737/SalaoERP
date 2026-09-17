@@ -2152,11 +2152,10 @@ export function Schedule() {
               <p className="text-muted-foreground">Selecione pelo menos um profissional para visualizar a agenda.</p>
             </Card>
           ) : (
-            <>
-            <Card className="hidden md:block border-0 shadow-lg overflow-hidden">
+            <Card className="border-0 shadow-lg overflow-hidden">
               <div className="overflow-x-auto">
-                <div className="min-w-[560px] sm:min-w-[700px] lg:min-w-[800px]">
-                  <div className="grid border-b border-border" style={{ gridTemplateColumns: `56px repeat(${visibleProfessionals.length}, minmax(120px, 1fr))` }}>
+                <div className="min-w-[800px]">
+                  <div className="grid border-b border-border" style={{ gridTemplateColumns: `64px repeat(${visibleProfessionals.length}, minmax(150px, 1fr))` }}>
                     <div className="p-3 bg-secondary/50 flex items-center justify-center"><Clock className="w-4 h-4 text-muted-foreground" /></div>
                     {visibleProfessionals.map((professional, index) => (
                       <div
@@ -2183,7 +2182,7 @@ export function Schedule() {
                   <div className="max-h-[600px] overflow-y-auto scrollbar-thin">
                     {timeSlots.map((time) => {
                       return (
-                        <div key={time} className="grid border-b border-border/50 last:border-0" style={{ gridTemplateColumns: `56px repeat(${visibleProfessionals.length}, minmax(120px, 1fr))` }}>
+                        <div key={time} className="grid border-b border-border/50 last:border-0" style={{ gridTemplateColumns: `64px repeat(${visibleProfessionals.length}, minmax(150px, 1fr))` }}>
                           <div className="p-3 flex items-center justify-center bg-muted/30">
                             <span className="text-sm font-medium text-muted-foreground">{time}</span>
                           </div>
@@ -2358,38 +2357,6 @@ export function Schedule() {
                 </div>
               </div>
             </Card>
-            <div className="md:hidden space-y-3">
-              {[...dayAppointments]
-                .filter((appointment) => appointmentMatchesSearch(appointment))
-                .sort((first, second) => new Date(first.start_time).getTime() - new Date(second.start_time).getTime())
-                .map((appointment) => (
-                  <button
-                    type="button"
-                    key={getScheduleAppointmentKey(appointment)}
-                    onClick={() => void openAppointmentDetail(appointment)}
-                    className="w-full rounded-xl border border-border bg-card p-4 text-left shadow-sm active:scale-[0.99]"
-                  >
-                    <div className="flex items-start justify-between gap-3">
-                      <div className="min-w-0">
-                        <p className="truncate font-semibold text-foreground">{appointment.client?.name || 'Cliente'}</p>
-                        <p className="truncate text-sm text-muted-foreground">{appointment.service?.name || 'Serviço não informado'}</p>
-                      </div>
-                      <span className="shrink-0 text-sm font-semibold text-primary">
-                        {getTimeFromISO(appointment.start_time)}–{getTimeFromISO(appointment.end_time)}
-                      </span>
-                    </div>
-                    <div className="mt-3 flex flex-wrap items-center gap-2 text-xs text-muted-foreground">
-                      <span>{appointment.professional?.nickname || appointment.professional?.name || 'Profissional'}</span>
-                      {appointment.is_fit_in && <Badge variant="outline">Encaixe</Badge>}
-                      <Badge variant={appointment.status as any}>{appointmentStatusLabels[appointment.status]}</Badge>
-                    </div>
-                  </button>
-                ))}
-              {dayAppointments.length === 0 && (
-                <Card className="p-6 text-center"><p className="text-sm text-muted-foreground">Nenhum atendimento para este dia.</p></Card>
-              )}
-            </div>
-            </>
           )}
         </div>
       </div>
