@@ -1808,7 +1808,7 @@ export function Schedule() {
           );
           if (extra.service_id) {
             try {
-              await registerServiceConsumption(extra.service_id, extra.id);
+              await registerServiceConsumption(extra.service_id, extra.id, billOperationId || undefined);
             } catch (error) {
               console.error('Error registering service consumption for included appointment:', error);
             }
@@ -1829,7 +1829,13 @@ export function Schedule() {
       for (const item of productItems) {
         if (!item.productId) continue;
         try {
-          await registerSale(item.productId, item.quantity, item.unitPrice, transactionId || undefined);
+          await registerSale(
+            item.productId,
+            item.quantity,
+            item.unitPrice,
+            transactionId || undefined,
+            billOperationId || undefined,
+          );
         } catch (error) {
           console.error('Error registering sale item:', error);
           toast({
@@ -1842,7 +1848,11 @@ export function Schedule() {
 
       if (selectedAppointment.service_id) {
         try {
-          await registerServiceConsumption(selectedAppointment.service_id, selectedAppointment.id);
+          await registerServiceConsumption(
+            selectedAppointment.service_id,
+            selectedAppointment.id,
+            billOperationId || undefined,
+          );
         } catch (error) {
           console.error('Error registering service consumption:', error);
           toast({

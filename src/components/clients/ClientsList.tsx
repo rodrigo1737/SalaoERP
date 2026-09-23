@@ -83,7 +83,8 @@ const formatDateOnly = (value?: string) => {
 
 export function ClientsList() {
   const { addClient, updateClient, deleteClient, refreshData } = useStableData();
-  const { tenantId } = useAuth();
+  const { tenantId, userRole, hasPermission } = useAuth();
+  const canManageClients = userRole === 'admin' || hasPermission('edit_schedule');
   const { toast } = useToast();
   const [searchQuery, setSearchQuery] = useState('');
   const [debouncedSearchQuery, setDebouncedSearchQuery] = useState('');
@@ -283,10 +284,12 @@ export function ClientsList() {
             {totalClients} cliente{totalClients !== 1 ? 's' : ''} encontrado{totalClients !== 1 ? 's' : ''}
           </p>
         </div>
-        <Button onClick={openNewClient}>
-          <Plus className="w-4 h-4 mr-2" />
-          Novo Cliente
-        </Button>
+        {canManageClients && (
+          <Button onClick={openNewClient}>
+            <Plus className="w-4 h-4 mr-2" />
+            Novo Cliente
+          </Button>
+        )}
       </div>
 
       {/* Search */}
@@ -319,7 +322,7 @@ export function ClientsList() {
       ) : totalClients === 0 ? (
         <div className="text-center py-12 text-muted-foreground">
           <p>Nenhum cliente cadastrado</p>
-          <p className="text-sm">Clique em "Novo Cliente" para adicionar</p>
+          {canManageClients && <p className="text-sm">Clique em "Novo Cliente" para adicionar</p>}
         </div>
       ) : viewMode === 'cards' ? (
         <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 gap-4">
@@ -357,18 +360,22 @@ export function ClientsList() {
                         <Eye className="w-4 h-4 mr-2" />
                         Visualizar
                       </DropdownMenuItem>
-                      <DropdownMenuItem onClick={() => openEditClient(client)}>
-                        <Edit2 className="w-4 h-4 mr-2" />
-                        Editar
-                      </DropdownMenuItem>
-                      <DropdownMenuSeparator />
-                      <DropdownMenuItem
-                        className="text-destructive focus:text-destructive"
-                        onClick={() => setDeletingClient(client)}
-                      >
-                        <Trash2 className="w-4 h-4 mr-2" />
-                        Excluir
-                      </DropdownMenuItem>
+                      {canManageClients && (
+                        <>
+                          <DropdownMenuItem onClick={() => openEditClient(client)}>
+                            <Edit2 className="w-4 h-4 mr-2" />
+                            Editar
+                          </DropdownMenuItem>
+                          <DropdownMenuSeparator />
+                          <DropdownMenuItem
+                            className="text-destructive focus:text-destructive"
+                            onClick={() => setDeletingClient(client)}
+                          >
+                            <Trash2 className="w-4 h-4 mr-2" />
+                            Excluir
+                          </DropdownMenuItem>
+                        </>
+                      )}
                     </DropdownMenuContent>
                   </DropdownMenu>
                 </div>
@@ -450,18 +457,22 @@ export function ClientsList() {
                       <Button variant="ghost" size="icon" onClick={() => setViewingClient(client)} title="Visualizar cliente">
                         <Eye className="h-4 w-4" />
                       </Button>
-                      <Button variant="ghost" size="icon" onClick={() => openEditClient(client)} title="Editar cliente">
-                        <Edit2 className="h-4 w-4" />
-                      </Button>
-                      <Button
-                        variant="ghost"
-                        size="icon"
-                        className="text-destructive hover:bg-destructive/10 hover:text-destructive"
-                        onClick={() => setDeletingClient(client)}
-                        title="Excluir cliente"
-                      >
-                        <Trash2 className="h-4 w-4" />
-                      </Button>
+                      {canManageClients && (
+                        <>
+                          <Button variant="ghost" size="icon" onClick={() => openEditClient(client)} title="Editar cliente">
+                            <Edit2 className="h-4 w-4" />
+                          </Button>
+                          <Button
+                            variant="ghost"
+                            size="icon"
+                            className="text-destructive hover:bg-destructive/10 hover:text-destructive"
+                            onClick={() => setDeletingClient(client)}
+                            title="Excluir cliente"
+                          >
+                            <Trash2 className="h-4 w-4" />
+                          </Button>
+                        </>
+                      )}
                     </div>
                   </TableCell>
                 </TableRow>

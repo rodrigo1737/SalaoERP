@@ -17,13 +17,30 @@ Deno.serve(async (req) => {
 
     await requireTenantAdmin(req, supabaseAdmin, tenantId);
 
+    const { data: targetAccess, error: targetAccessError } = await supabaseAdmin
+      .from("user_roles")
+      .select("id")
+      .eq("tenant_id", tenantId)
+      .eq("user_id", userId)
+      .eq("role", targetRole)
+      .maybeSingle();
+
+    if (targetAccessError) return jsonResponse({ error: targetAccessError.message }, 400);
+    if (!targetAccess) {
+      return jsonResponse({ error: "Acesso não encontrado neste cliente B2B." }, 404);
+    }
+
     const { data: profile, error: profileError } = await supabaseAdmin
       .from("profiles")
       .select("is_owner")
       .eq("id", userId)
+      .eq("tenant_id", tenantId)
       .maybeSingle();
 
     if (profileError) return jsonResponse({ error: profileError.message }, 400);
+    if (!profile) {
+      return jsonResponse({ error: "Perfil não encontrado neste cliente B2B." }, 404);
+    }
     if (profile?.is_owner) {
       return jsonResponse({ error: "O acesso do owner não pode ser removido." }, 403);
     }

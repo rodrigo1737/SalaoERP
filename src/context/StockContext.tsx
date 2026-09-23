@@ -90,9 +90,9 @@ interface StockContextType {
   
   // Stock movements
   registerPurchase: (data: PurchaseData) => Promise<void>;
-  registerSale: (productId: string, quantity: number, unitPrice: number, transactionId?: string) => Promise<void>;
+  registerSale: (productId: string, quantity: number, unitPrice: number, transactionId?: string, idempotencyKey?: string) => Promise<void>;
   adjustStock: (productId: string, quantity: number, reason: string, type: 'adjustment' | 'loss') => Promise<void>;
-  registerServiceConsumption: (serviceId: string, appointmentId: string) => Promise<void>;
+  registerServiceConsumption: (serviceId: string, appointmentId: string, idempotencyKey?: string) => Promise<void>;
   
   // Service products (insumos por serviço)
   getServiceProducts: (serviceId: string) => ServiceProduct[];
@@ -260,7 +260,13 @@ export const StockProvider: React.FC<{ children: ReactNode }> = ({ children }) =
     await refreshData();
   };
 
-  const registerSale = async (productId: string, quantity: number, unitPrice: number, transactionId?: string) => {
+  const registerSale = async (
+    productId: string,
+    quantity: number,
+    unitPrice: number,
+    transactionId?: string,
+    idempotencyKey?: string,
+  ) => {
     if (!canModify()) {
       toast.error('Operação bloqueada. Sua conta está com restrições.');
       return;
@@ -276,32 +282,17 @@ export const StockProvider: React.FC<{ children: ReactNode }> = ({ children }) =
       return;
     }
 
-    if (product.stock_quantity < quantity) {
-      toast.error('Estoque insuficiente');
-      return;
-    }
-
-    const previousStock = product.stock_quantity;
-    const newStock = previousStock - quantity;
-
-    // Create stock movement
-    await supabase.from('stock_movements').insert({
-      tenant_id: tenantId,
-      product_id: productId,
-      movement_type: 'sale',
-      quantity: -quantity,
-      unit_price: unitPrice,
-      total_value: quantity * unitPrice,
-      previous_stock: previousStock,
-      new_stock: newStock,
-      transaction_id: transactionId,
-      created_by: user?.id,
+    const { error } = await supabase.rpc('register_operational_stock_movement', {
+      _product_id: productId,
+      _movement_type: 'sale',
+      _quantity: quantity,
+      _unit_price: unitPrice,
+      _transaction_id: transactionId ?? null,
+      _appointment_id: null,
+      _idempotency_key: idempotencyKey ?? null,
     });
 
-    // Update product stock
-    await supabase.from('products').update({
-      stock_quantity: newStock,
-    }).eq('id', productId).eq('tenant_id', tenantId);
+    if (error) throw error;
 
     await refreshStock();
     await refreshData();
@@ -391,7 +382,11 @@ export const StockProvider: React.FC<{ children: ReactNode }> = ({ children }) =
   };
 
   // Register service consumption (baixa de insumos ao finalizar serviço)
-  const registerServiceConsumption = async (serviceId: string, appointmentId: string) => {
+  const registerServiceConsumption = async (
+    serviceId: string,
+    appointmentId: string,
+    idempotencyKey?: string,
+  ) => {
     if (!canModify()) return;
     if (!tenantId) return;
 
@@ -408,26 +403,17 @@ export const StockProvider: React.FC<{ children: ReactNode }> = ({ children }) =
       const quantity = Number(item.quantity);
       if (quantity <= 0) continue;
 
-      const previousStock = product.stock_quantity;
-      const newStock = Math.max(0, previousStock - quantity);
-
-      // Create stock movement for service consumption
-      await supabase.from('stock_movements').insert({
-        tenant_id: tenantId,
-        product_id: item.product_id,
-        movement_type: 'service_consumption',
-        quantity: -quantity,
-        previous_stock: previousStock,
-        new_stock: newStock,
-        appointment_id: appointmentId,
-        notes: `Consumo automático - Serviço`,
-        created_by: user?.id,
+      const { error } = await supabase.rpc('register_operational_stock_movement', {
+        _product_id: item.product_id,
+        _movement_type: 'service_consumption',
+        _quantity: quantity,
+        _unit_price: null,
+        _transaction_id: null,
+        _appointment_id: appointmentId,
+        _idempotency_key: idempotencyKey ?? null,
       });
 
-      // Update product stock
-      await supabase.from('products').update({
-        stock_quantity: newStock,
-      }).eq('id', item.product_id).eq('tenant_id', tenantId);
+      if (error) throw error;
     }
 
     await refreshStock();

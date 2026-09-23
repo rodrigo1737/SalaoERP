@@ -1262,6 +1262,7 @@ export type Database = {
           created_by: string | null
           expiry_date: string | null
           id: string
+          idempotency_key: string | null
           invoice_date: string | null
           invoice_number: string | null
           movement_type: string
@@ -1284,6 +1285,7 @@ export type Database = {
           created_by?: string | null
           expiry_date?: string | null
           id?: string
+          idempotency_key?: string | null
           invoice_date?: string | null
           invoice_number?: string | null
           movement_type: string
@@ -1306,6 +1308,7 @@ export type Database = {
           created_by?: string | null
           expiry_date?: string | null
           id?: string
+          idempotency_key?: string | null
           invoice_date?: string | null
           invoice_number?: string | null
           movement_type?: string
@@ -1696,6 +1699,18 @@ export type Database = {
     }
     Functions: {
       can_tenant_modify: { Args: { _tenant_id: string }; Returns: boolean }
+      register_operational_stock_movement: {
+        Args: {
+          _appointment_id?: string | null
+          _idempotency_key?: string | null
+          _movement_type: string
+          _product_id: string
+          _quantity: number
+          _transaction_id?: string | null
+          _unit_price?: number | null
+        }
+        Returns: Json
+      }
       get_public_booking_professionals: {
         Args: { _slug: string }
         Returns: {
