@@ -14,6 +14,11 @@
 /* MultiSoluction ERP Design System */
 @layer base {
   :root {
+    --safe-area-top: env(safe-area-inset-top, 0px);
+    --safe-area-right: env(safe-area-inset-right, 0px);
+    --safe-area-bottom: env(safe-area-inset-bottom, 0px);
+    --safe-area-left: env(safe-area-inset-left, 0px);
+
     /* Core Brand Colors - Elegant Blue & Gold */
     --background: 210 25% 98%;
     --foreground: 215 20% 15%;
@@ -152,10 +157,19 @@
 
   html {
     scroll-behavior: smooth;
+    min-height: 100%;
   }
 
   body {
     @apply bg-background text-foreground font-body antialiased;
+    min-height: 100vh;
+    min-height: 100dvh;
+    overscroll-behavior-y: none;
+  }
+
+  #root {
+    min-height: 100vh;
+    min-height: 100dvh;
   }
 
   h1, h2, h3, h4, h5, h6 {
@@ -199,6 +213,49 @@
 }
 
 @layer utilities {
+  .app-runtime-shell {
+    box-sizing: border-box;
+    min-height: 100vh;
+    min-height: 100dvh;
+    padding-top: var(--safe-area-top);
+    padding-right: var(--safe-area-right);
+    padding-bottom: var(--safe-area-bottom);
+    padding-left: var(--safe-area-left);
+  }
+
+  .connectivity-banner {
+    padding-right: max(1rem, var(--safe-area-right));
+    padding-bottom: max(0.5rem, var(--safe-area-bottom));
+    padding-left: max(1rem, var(--safe-area-left));
+  }
+
+  .safe-area-top {
+    padding-top: var(--safe-area-top);
+  }
+
+  .safe-area-bottom {
+    padding-bottom: var(--safe-area-bottom);
+  }
+
+  .mobile-menu-trigger {
+    top: calc(1rem + var(--safe-area-top));
+  }
+
+  .mobile-sidebar {
+    padding-top: var(--safe-area-top);
+    padding-bottom: var(--safe-area-bottom);
+  }
+
+  @supports (height: 100dvh) {
+    .min-h-screen {
+      min-height: 100dvh;
+    }
+
+    .h-screen {
+      height: 100dvh;
+    }
+  }
+
   .animate-fade-in {
     animation: fadeIn 0.3s ease-out;
   }

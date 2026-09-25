@@ -23,17 +23,20 @@ import ClientBooking from "./pages/booking/ClientBooking";
 import ClientAppointments from "./pages/booking/ClientAppointments";
 import TermsPage from "./pages/booking/TermsPage";
 import PrivacyPage from "./pages/booking/PrivacyPage";
+import { ConnectivityBanner } from "./components/layout/ConnectivityBanner";
 
 const queryClient = new QueryClient();
 
 const App = () => (
-  <QueryClientProvider client={queryClient}>
-    <TooltipProvider>
-      <Toaster />
-      <Sonner />
-      <BrowserRouter>
-        <AuthProvider>
-          <Routes>
+  <div className="app-runtime-shell">
+    <ConnectivityBanner />
+    <QueryClientProvider client={queryClient}>
+      <TooltipProvider>
+        <Toaster />
+        <Sonner />
+        <BrowserRouter>
+          <AuthProvider>
+            <Routes>
             <Route path="/auth" element={<Auth />} />
 
             {/* Redireciona raiz para /app */}
@@ -83,11 +86,12 @@ const App = () => (
             </Route>
 
             <Route path="*" element={<NotFound />} />
-          </Routes>
-        </AuthProvider>
-      </BrowserRouter>
-    </TooltipProvider>
-  </QueryClientProvider>
+            </Routes>
+          </AuthProvider>
+        </BrowserRouter>
+      </TooltipProvider>
+    </QueryClientProvider>
+  </div>
 );
 
 export default App;

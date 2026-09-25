@@ -1,6 +1,7 @@
 import React, { createContext, useContext, useEffect, useState, useCallback } from 'react';
 import { User, Session } from '@supabase/supabase-js';
 import { supabase } from '@/integrations/supabase/client';
+import { getAuthRedirectUrl } from '@/platform/authRedirects';
 
 type UserRole = 'admin' | 'professional' | 'staff' | null;
 type TenantPackageType = 'salon' | 'aesthetic_clinic' | 'cleaning_control' | 'business_erp';
@@ -245,7 +246,7 @@ export const AuthProvider: React.FC<{ children: React.ReactNode }> = ({ children
   };
 
   const signUp = async (email: string, password: string, fullName: string) => {
-    const redirectUrl = `${window.location.origin}/`;
+    const redirectUrl = getAuthRedirectUrl('/');
     
     const { error } = await supabase.auth.signUp({
       email,

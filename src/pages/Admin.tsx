@@ -3,6 +3,7 @@ import { useNavigate, useSearchParams } from 'react-router-dom';
 import { ArrowLeft, Edit, Eye, EyeOff, KeyRound, Link2, Loader2, Scissors, Shield, ShieldMinus, ShieldPlus, Trash2, Unlink, UserPlus } from 'lucide-react';
 import { useAuth } from '@/contexts/AuthContext';
 import { supabase } from '@/integrations/supabase/client';
+import { getAuthRedirectUrl } from '@/platform/authRedirects';
 import { Button } from '@/components/ui/button';
 import { Card, CardContent, CardDescription, CardHeader, CardTitle } from '@/components/ui/card';
 import { Checkbox } from '@/components/ui/checkbox';
@@ -735,7 +736,7 @@ const Admin: React.FC = () => {
     if (!confirm(`Enviar link de redefinição de senha para ${row.email}?`)) return;
     try {
       const { error } = await supabase.auth.resetPasswordForEmail(row.email, {
-        redirectTo: `${window.location.origin}/auth`,
+        redirectTo: getAuthRedirectUrl('/auth'),
       });
       if (error) throw error;
       toast({ title: 'Link enviado', description: `Um link de redefinição foi enviado para ${row.email}.` });

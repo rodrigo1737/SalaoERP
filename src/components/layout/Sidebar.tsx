@@ -368,7 +368,7 @@ export function Sidebar({ currentPage, onNavigate }: SidebarProps) {
       <Button
         variant="ghost"
         size="icon"
-        className="fixed top-4 left-4 z-50 lg:hidden"
+        className="mobile-menu-trigger fixed left-4 z-50 lg:hidden"
         onClick={() => setMobileOpen(!mobileOpen)}
       >
         {mobileOpen ? <X className="w-5 h-5" /> : <Menu className="w-5 h-5" />}
@@ -393,7 +393,7 @@ export function Sidebar({ currentPage, onNavigate }: SidebarProps) {
             animate={{ x: 0 }}
             exit={{ x: -280 }}
             transition={{ type: 'spring', damping: 25, stiffness: 200 }}
-            className="fixed left-0 top-0 bottom-0 w-[280px] bg-sidebar z-50 lg:hidden shadow-xl"
+            className="mobile-sidebar fixed left-0 top-0 bottom-0 w-[280px] bg-sidebar z-50 lg:hidden shadow-xl"
             style={{ background: 'var(--gradient-sidebar)' }}
           >
             <NavContent />

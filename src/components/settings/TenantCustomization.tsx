@@ -8,6 +8,9 @@ import { Button } from '@/components/ui/button';
 import { Input } from '@/components/ui/input';
 import { Label } from '@/components/ui/label';
 import { Loader2, Upload, X, Palette, Building2, Image as ImageIcon, Link2, Copy, ExternalLink, Globe } from 'lucide-react';
+import { buildPublicAppUrl } from '@/platform/authRedirects';
+import { copyText } from '@/platform/clipboard';
+import { openExternalUrl } from '@/platform/externalLinks';
 
 interface TenantSettingsLocal {
   id?: string;
@@ -47,6 +50,7 @@ export function TenantCustomization() {
   const fileInputRef = useRef<HTMLInputElement>(null);
 
   const canEdit = userRole === 'admin' || isSuperAdmin;
+  const bookingUrl = bookingSlug ? buildPublicAppUrl(`/b/${bookingSlug}`) : '';
 
   useEffect(() => {
     if (tenantId) {
@@ -377,29 +381,28 @@ export function TenantCustomization() {
           <CardContent className="space-y-4">
             <div className="flex flex-col sm:flex-row gap-2">
               <Input
-                value={`${window.location.origin}/b/${bookingSlug}`}
+                value={bookingUrl}
                 readOnly
                 className="font-mono text-sm bg-background"
               />
               <div className="flex gap-2">
                 <Button
                   variant="outline"
-                  onClick={() => {
-                    navigator.clipboard.writeText(`${window.location.origin}/b/${bookingSlug}`);
-                    toast.success('Link copiado!');
+                  onClick={async () => {
+                    try {
+                      await copyText(bookingUrl);
+                      toast.success('Link copiado!');
+                    } catch (error) {
+                      toast.error(error instanceof Error ? error.message : 'Não foi possível copiar o link.');
+                    }
                   }}
                 >
                   <Copy className="w-4 h-4 mr-2" />
                   Copiar
                 </Button>
-                <Button
-                  variant="outline"
-                  asChild
-                >
-                  <a href={`/b/${bookingSlug}`} target="_blank" rel="noopener noreferrer">
-                    <ExternalLink className="w-4 h-4 mr-2" />
-                    Abrir
-                  </a>
+                <Button variant="outline" onClick={() => openExternalUrl(bookingUrl)}>
+                  <ExternalLink className="w-4 h-4 mr-2" />
+                  Abrir
                 </Button>
               </div>
             </div>

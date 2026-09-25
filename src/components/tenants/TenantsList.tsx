@@ -34,6 +34,9 @@ import { TenantAdminsDialog } from './TenantAdminsDialog';
 import { format } from 'date-fns';
 import { ptBR } from 'date-fns/locale';
 import { getSupabaseErrorMessage } from '@/lib/supabaseErrors';
+import { buildPublicAppUrl } from '@/platform/authRedirects';
+import { copyText } from '@/platform/clipboard';
+import { openExternalUrl } from '@/platform/externalLinks';
 
 interface Tenant {
   id: string;
@@ -146,12 +149,16 @@ export function TenantsList() {
   };
 
   const getBookingUrl = (slug: string) => {
-    return `${window.location.origin}/b/${slug}`;
+    return buildPublicAppUrl(`/b/${slug}`);
   };
 
-  const copyBookingLink = (slug: string) => {
-    navigator.clipboard.writeText(getBookingUrl(slug));
-    toast.success('Link copiado!');
+  const copyBookingLink = async (slug: string) => {
+    try {
+      await copyText(getBookingUrl(slug));
+      toast.success('Link copiado!');
+    } catch (error) {
+      toast.error(error instanceof Error ? error.message : 'Não foi possível copiar o link.');
+    }
   };
 
   const fetchTenants = async () => {
@@ -649,7 +656,7 @@ export function TenantsList() {
                           type="button"
                           variant="outline"
                           size="icon"
-                          onClick={() => window.open(getBookingUrl(formData.booking_slug), '_blank', 'noopener,noreferrer')}
+                          onClick={() => openExternalUrl(getBookingUrl(formData.booking_slug))}
                           title="Abrir link"
                         >
                           <ExternalLink className="w-4 h-4" />
@@ -797,7 +804,7 @@ export function TenantsList() {
                                 variant="ghost"
                                 size="sm"
                                 className="h-7 w-7 p-0"
-                                onClick={() => window.open(getBookingUrl(tenant.booking_slug!), '_blank', 'noopener,noreferrer')}
+                                onClick={() => openExternalUrl(getBookingUrl(tenant.booking_slug!))}
                                 title="Abrir link"
                               >
                                 <ExternalLink className="w-3 h-3" />
@@ -1046,9 +1053,13 @@ export function TenantsList() {
                     <Button
                       variant="outline"
                       size="sm"
-                      onClick={() => {
-                        navigator.clipboard.writeText(createdAdminInfo.email);
-                        toast.success('Email copiado!');
+                      onClick={async () => {
+                        try {
+                          await copyText(createdAdminInfo.email);
+                          toast.success('Email copiado!');
+                        } catch (error) {
+                          toast.error(error instanceof Error ? error.message : 'Não foi possível copiar o email.');
+                        }
                       }}
                     >
                       Copiar
@@ -1064,9 +1075,13 @@ export function TenantsList() {
                     <Button
                       variant="outline"
                       size="sm"
-                      onClick={() => {
-                        navigator.clipboard.writeText(createdAdminInfo.password);
-                        toast.success('Senha copiada!');
+                      onClick={async () => {
+                        try {
+                          await copyText(createdAdminInfo.password);
+                          toast.success('Senha copiada!');
+                        } catch (error) {
+                          toast.error(error instanceof Error ? error.message : 'Não foi possível copiar a senha.');
+                        }
                       }}
                     >
                       Copiar

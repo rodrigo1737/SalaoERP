@@ -50,6 +50,7 @@ import {
 import { ClientHistoryDialog } from './ClientHistoryDialog';
 import { getAvailableServicesForProfessional, getServiceDurationForProfessional, isServiceAvailableForProfessional } from '@/lib/serviceProfessionalAvailability';
 import { toast } from 'sonner';
+import { openExternalUrl } from '@/platform/externalLinks';
 
 interface Professional {
   id: string;
@@ -529,7 +530,7 @@ export function AppointmentDetailDialog({
     if (phoneValue) {
       const phone = phoneValue.replace(/\D/g, '');
       const formattedPhone = phone.startsWith('55') ? phone : `55${phone}`;
-      window.open(`https://wa.me/${formattedPhone}`, '_blank', 'noopener,noreferrer');
+      openExternalUrl(`https://wa.me/${formattedPhone}`);
     }
   };
 

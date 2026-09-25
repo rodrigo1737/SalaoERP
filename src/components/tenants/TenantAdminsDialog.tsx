@@ -23,6 +23,7 @@ import { format } from 'date-fns';
 import { ptBR } from 'date-fns/locale';
 import { getSupabaseErrorMessage } from '@/lib/supabaseErrors';
 import { validatePassword } from '@/lib/passwordValidation';
+import { copyText } from '@/platform/clipboard';
 
 interface Tenant {
   id: string;
@@ -191,9 +192,13 @@ export function TenantAdminsDialog({ tenant, open, onOpenChange }: TenantAdminsD
                     <Button
                       variant="outline"
                       size="sm"
-                      onClick={() => {
-                        navigator.clipboard.writeText(newPassword);
-                        toast.success('Senha copiada!');
+                      onClick={async () => {
+                        try {
+                          await copyText(newPassword);
+                          toast.success('Senha copiada!');
+                        } catch (error) {
+                          toast.error(error instanceof Error ? error.message : 'Não foi possível copiar a senha.');
+                        }
                       }}
                     >
                       Copiar

@@ -6,7 +6,7 @@
 - **Plataformas:** Android e iOS
 - **Distribuicao:** Google Play e Apple App Store
 - **Estrategia recomendada:** aplicativo unico, multi-tenant, construido com Capacitor sobre a aplicacao React/Vite existente
-- **Status:** auditoria inicial e projeto tecnico; Capacitor ainda nao instalado
+- **Status:** Fase 1 implementada e pronta para homologacao web; Capacitor ainda nao instalado
 - **Identificador sugerido:** `br.com.multisoluction.erp`, sujeito a confirmacao antes da criacao dos aplicativos nas lojas
 
 ## Decisao Arquitetural
@@ -360,9 +360,9 @@ Executar os testes com owner, administrador, profissional e equipe interna, incl
 
 ## Proximo Passo Executavel
 
-Depois da aprovacao deste projeto, executar a Fase 1 sem instalar dependencias nativas: criar a camada de plataforma, corrigir os redirects, introduzir safe areas e estado de conectividade, e gerar uma lista objetiva de telas que ainda falham em celular/tablet.
+A Fase 1 foi implementada sem dependencias nativas: camada de plataforma, redirects, safe areas, altura dinamica, estado de conectividade e matriz de homologacao para celular/tablet.
 
-Somente apos essa preparacao e a confirmacao do nome e do identificador definitivo deve-se instalar o Capacitor e gerar os projetos Android/iOS.
+O proximo passo e homologar essa base na versao web publicada e confirmar o nome e os identificadores definitivos. Depois dessas confirmacoes, instalar o Capacitor e gerar os projetos Android/iOS.
 
 ## Referencias Oficiais
 
